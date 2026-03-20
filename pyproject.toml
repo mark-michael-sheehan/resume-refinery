@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "resume-refinery"
+version = "0.1.0"
+description = "Local AI-powered resume, cover letter, and interview focus tailoring"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic>=0.52.0",
+  "pydantic>=2.0.0",
+  "python-docx>=1.1.0",
+  "python-dotenv>=1.0.0",
+  "rich>=13.0.0",
+  "typer>=0.12.0",
+  "fastapi>=0.116.0",
+  "uvicorn>=0.34.0",
+  "python-multipart>=0.0.12",
+]
+
+[project.scripts]
+resume-refinery = "resume_refinery.cli:main"
+resume-refinery-web = "resume_refinery.webapp:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
