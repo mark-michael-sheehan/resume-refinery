@@ -83,8 +83,9 @@ This will:
 1. Create a new session with a unique ID (e.g. `acme-cloud_staff-engineer_2026-03-20`)
 2. Generate all three documents (streaming to terminal as they're written)
 3. Export DOCX files to `~/.resume_refinery/sessions/<session_id>/v1/`
-4. Run voice-match and AI-detection reviews automatically
-5. Print a summary of truthfulness + review results
+4. Run strict truthfulness verification and targeted repair passes
+5. Run voice-match and AI-detection reviews automatically
+6. Print a summary of truthfulness + review results
 
 Skip voice/AI style reviews with `--skip-review`.
 
@@ -120,7 +121,7 @@ resume-refinery review acme-cloud_staff-engineer_2026-03-20
 resume-refinery review acme-cloud_staff-engineer_2026-03-20 --version 1
 ```
 
-Runs both the voice-match and AI-detection reviewers on the current (or specified) version.
+Runs strict truthfulness, voice-match, and AI-detection reviewers on the current (or specified) version.
 
 ---
 
@@ -166,26 +167,19 @@ For each version, the following files are created:
 ## Using as a Library
 
 ```python
-from resume_refinery.agent import ResumeRefineryAgent
+from resume_refinery.orchestrator import ResumeRefineryOrchestrator
 from resume_refinery.parsers import load_career_profile, load_job_description, load_voice_profile
-from resume_refinery.reviewers import DocumentReviewer
 from resume_refinery.session import SessionStore
 
 career = load_career_profile("career_profile.md")
 voice = load_voice_profile("voice_profile.md")
 job = load_job_description("job_description.md")
 
-store = SessionStore()
-session = store.create(job, career, voice)
+orchestrator = ResumeRefineryOrchestrator(store=SessionStore())
+result = orchestrator.create_session_run(career, voice, job)
 
-agent = ResumeRefineryAgent()
-docs = agent.generate_all(career, voice, job)
-session = store.save_documents(session, docs)
-
-reviewer = DocumentReviewer()
-reviews = reviewer.review_all(docs, voice)
-session = store.save_reviews(session, reviews)
-
-print(reviews.voice.overall_match)     # "strong" / "moderate" / "weak"
-print(reviews.ai_detection.risk_level) # "low" / "medium" / "high"
+print(result.session.session_id)
+print(result.reviews.truthfulness.all_supported)
+print(result.reviews.voice.overall_match)      # "strong" / "moderate" / "weak"
+print(result.reviews.ai_detection.risk_level)  # "low" / "medium" / "high"
 ```

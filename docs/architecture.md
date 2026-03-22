@@ -2,77 +2,49 @@
 
 ## Overview
 
-Resume Refinery is a multi-step, session-aware pipeline. A session is created for each
-job application and stores all versions of the generated documents, review results, and
-the original input files.
+Resume Refinery uses a deterministic orchestrator with bounded specialist agents.
+A session is created for each job application and stores all versions of generated
+documents, review outputs, and source inputs.
 
 ## Pipeline
 
 ```
 voice_profile.md + career_profile.md + job_description.md
-          │
-          ▼
-     parsers.py ── extract metadata for session naming
-          │
-          ▼
-    SessionStore.create()
-          │
-          ▼
-  (CLI or local web app)
             │
             ▼
-  ResumeRefineryAgent.generate_all()
-  ┌──────────────────────────────────┐
-  │  generate cover_letter           │  Each doc is a separate
-  │  generate resume                 │  Claude API call (streaming,
-  │  generate interview_guide        │  adaptive thinking)
-  └──────────────────────────────────┘
-          │
-          ▼
-    SessionStore.save_documents() → v1/ (Markdown + DOCX)
-          │
-          ▼
-  DocumentReviewer.review_truthfulness()
-  ┌──────────────────────────────────┐
-  │ strict claim-evidence verification │
-  │ optional rewrite pass for unsupported claims │
-  └──────────────────────────────────┘
+     parsers.py
             │
             ▼
-  DocumentReviewer.review_all()
-  ┌──────────────────────────────────┐
-  │  review_voice()    → VoiceReviewResult    │
-  │  review_ai_detection() → AIDetectionResult │
-  └──────────────────────────────────┘
-          │
-          ▼
-    SessionStore.save_reviews() → v1/voice_review.json, ai_review.json
-          │
-          ▼
-  User reviews results → gives feedback
-          │
-          ▼
-  ResumeRefineryAgent.generate_document("cover_letter", feedback=...)
-          │
-          ▼
-    SessionStore.save_documents() → v2/
-          │
-          ▼
-  DocumentReviewer.review_all() → v2/reviews
+  ResumeRefineryOrchestrator
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ EvidenceAgent      -> EvidencePack (requirements + matched evidence) │
+  │ VoiceAgent         -> VoiceStyleGuide                                │
+  │ DraftingAgent      -> DocumentSet                                    │
+  │ VerificationAgent  -> Truth/Voice/AI review bundle                  │
+  │ RepairAgent        -> targeted rewrites for unsupported claims      │
+  └──────────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+    SessionStore.save_documents() + save_reviews() + DOCX export
+            │
+            ▼
+        Session versions (v1, v2, ...)
 ```
 
 ## Modules
 
 | Module | Responsibility |
 |---|---|
-| `models.py` | All Pydantic data models |
+| `models.py` | Domain models + intermediate orchestration artifacts |
 | `parsers.py` | Read markdown files → models |
-| `agent.py` | Generate documents via Claude |
-| `reviewers.py` | Voice-match and AI-detection review |
+| `agent.py` | Low-level Claude document generation client |
+| `specialist_agents.py` | Evidence, voice, drafting, verification, and repair agents |
+| `orchestrator.py` | Deterministic coordinator over specialist agents |
+| `reviewers.py` | LLM review client implementations |
 | `webapp.py` | Local FastAPI browser app |
 | `session.py` | Session CRUD, versioning, disk I/O |
 | `exporters.py` | Markdown → DOCX via python-docx |
-| `cli.py` | CLI commands (Typer + Rich) |
+| `cli.py` | CLI commands calling orchestrator |
 
 ## Session Storage
 
@@ -102,17 +74,22 @@ Override with `RESUME_REFINERY_SESSIONS_DIR` env var.
 
 ## Design Decisions
 
-**Per-document generation:** Each document (cover letter, resume, interview guide) is a
-separate Claude API call. This makes targeted refinement cheap — regenerating just the
-cover letter only costs one call — and allows streaming per document.
+**Bounded agentic design:** Specialist agents are role-constrained and never control
+the global workflow. The orchestrator owns step order, retries, and persistence.
+
+**Intermediate artifacts for explainability:** `EvidencePack` and `VoiceStyleGuide`
+are explicit artifacts that can be inspected in the UI and reasoned about in reviews.
+
+**Per-document generation:** Each document remains a separate Claude API call, which keeps
+targeted refinement cheap and traceable.
 
 **Adaptive thinking enabled:** All Claude calls use `thinking: {type: "adaptive"}`. This
 is especially valuable for the review passes, where the model needs to reason carefully
 about voice match and AI-detection signals before producing a JSON result.
 
-**Two-stage review:** Voice review and AI-detection are separate agents with distinct
-system prompts. Running them as one combined call risks the model conflating the two
-concerns. Separate calls allow each reviewer to focus on its specific criteria.
+**Verification gates:** Truthfulness, voice match, and AI-detection are treated as
+separate verification concerns. Truth checks run before final acceptance, and repair
+passes target only failing documents.
 
 **Raw content over structured parsing:** Input files are passed to Claude as raw text.
 This is intentional — flexible, user-friendly input formats are more important than

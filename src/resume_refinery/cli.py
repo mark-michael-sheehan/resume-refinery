@@ -9,15 +9,12 @@ from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
-from .agent import ResumeRefineryAgent
-from .exporters import export_document_set
 from .models import DocumentKey
+from .orchestrator import ResumeRefineryOrchestrator
 from .parsers import load_career_profile, load_job_description, load_voice_profile
-from .reviewers import DocumentReviewer
 from .session import SessionStore
 
 app = typer.Typer(
@@ -26,6 +23,7 @@ app = typer.Typer(
 )
 console = Console()
 store = SessionStore()
+orchestrator = ResumeRefineryOrchestrator(store=store)
 
 
 # ---------------------------------------------------------------------------
@@ -50,32 +48,20 @@ def new(
     voice = load_voice_profile(voice_profile)
     job = load_job_description(job_description)
 
-    session = store.create(job, career, voice)
-    console.print(f"\n[bold green]Session created:[/bold green] {session.session_id}")
-
-    agent = ResumeRefineryAgent()
-    from .models import DocumentSet
-    docs = DocumentSet()
-
-    _generate_with_progress(agent, career, voice, job, docs)
-
-    truth = _enforce_truth(agent, docs, career, voice, job)
-
-    session = store.save_documents(session, docs)
-
-    if truth and not truth.all_supported and not allow_unverified:
-        from .models import ReviewBundle
-        store.save_reviews(session, ReviewBundle(truthfulness=truth))
-        _print_truth_summary(truth)
+    result = orchestrator.create_session_run(
+        career,
+        voice,
+        job,
+        skip_review=skip_review,
+        allow_unverified=allow_unverified,
+        progress=_progress,
+    )
+    _report_result(result, show_quality_reviews=not skip_review)
+    if result.strict_truth_failed:
         console.print(
             "\n[red]Strict truth check failed. Re-run with --allow-unverified if you want to keep this version anyway.[/red]"
         )
         raise typer.Exit(2)
-
-    _export_and_report(session, docs)
-
-    if not skip_review:
-        _run_reviews(session, docs, career, voice, truth)
 
 
 # ---------------------------------------------------------------------------
@@ -99,54 +85,25 @@ def refine(
     ),
 ):
     """Regenerate one or all documents in a session with feedback."""
-    session = store.get(session_id)
-    career, voice = store.load_inputs(session)
-    job = session.job_description
-    agent = ResumeRefineryAgent()
-
-    # Load existing documents to keep whichever ones aren't being regenerated
-    current_docs = store.load_documents(session)
-
-    keys_to_regen: list[DocumentKey]
     if doc:
         if doc not in ("cover_letter", "resume", "interview_guide"):
             console.print(f"[red]Unknown document: {doc}[/red]")
             raise typer.Exit(1)
-        keys_to_regen = [doc]  # type: ignore[list-item]
-    else:
-        keys_to_regen = ["cover_letter", "resume", "interview_guide"]
-
-    for key in keys_to_regen:
-        console.print(f"\n[bold]Regenerating {key.replace('_', ' ')}...[/bold]")
-        previous = current_docs.get(key)
-        chunks = []
-        for chunk in agent.stream_document(key, career, voice, job, feedback=feedback, previous_version=previous):
-            console.print(chunk, end="")
-            chunks.append(chunk)
-        current_docs.set(key, "".join(chunks).strip())
-
-    truth = _enforce_truth(agent, current_docs, career, voice, job, feedback=feedback)
-
-    session = store.save_documents(
-        session,
-        current_docs,
-        feedback=feedback,
-        docs_regenerated=keys_to_regen,
+    key = doc if doc else None
+    result = orchestrator.refine_session_run(
+        session_id,
+        feedback,
+        doc=key,  # type: ignore[arg-type]
+        skip_review=skip_review,
+        allow_unverified=allow_unverified,
+        progress=_progress,
     )
-
-    if truth and not truth.all_supported and not allow_unverified:
-        from .models import ReviewBundle
-        store.save_reviews(session, ReviewBundle(truthfulness=truth))
-        _print_truth_summary(truth)
+    _report_result(result, show_quality_reviews=not skip_review)
+    if result.strict_truth_failed:
         console.print(
             "\n[red]Strict truth check failed. Re-run with --allow-unverified if you want to keep this version anyway.[/red]"
         )
         raise typer.Exit(2)
-
-    _export_and_report(session, current_docs)
-
-    if not skip_review:
-        _run_reviews(session, current_docs, career, voice, truth)
 
 
 # ---------------------------------------------------------------------------
@@ -160,11 +117,8 @@ def review(
     version: Annotated[Optional[int], typer.Option("--version", "-v")] = None,
 ):
     """Re-run voice-match and AI-detection reviews on a session's documents."""
-    session = store.get(session_id)
-    career, voice = store.load_inputs(session)
-    docs = store.load_documents(session, version=version)
-
-    _run_reviews(session, docs, career, voice)
+    result = orchestrator.review_session_run(session_id, version=version, progress=_progress)
+    _print_review_summary(result.reviews, show_quality_reviews=True)
 
 
 # ---------------------------------------------------------------------------
@@ -248,112 +202,22 @@ def show(
 # ---------------------------------------------------------------------------
 
 
-def _generate_with_progress(agent, career, voice, job, docs) -> None:
-    doc_labels = {
-        "cover_letter": "Cover Letter",
-        "resume": "Resume",
-        "interview_guide": "Interview Guide",
-    }
-    for key, label in doc_labels.items():
-        console.print(f"\n[bold cyan]Generating {label}...[/bold cyan]")
-        chunks = []
-        for chunk in agent.stream_document(key, career, voice, job):
-            console.print(chunk, end="")
-            chunks.append(chunk)
-        docs.set(key, "".join(chunks))
-        console.print()
+def _progress(message: str) -> None:
+    console.print(f"\n[bold cyan]{message}[/bold cyan]")
 
 
-def _export_and_report(session, docs) -> None:
-    v = session.current_version
-    version_dir = store.session_dir(session.session_id) / f"v{v}"
-    exported = export_document_set(docs, version_dir)
-    console.print(f"\n[bold green]v{v} saved:[/bold green] {version_dir}")
-    for key, path in exported.items():
-        console.print(f"  {path.name}")
+def _report_result(result, show_quality_reviews: bool) -> None:
+    console.print(f"\n[bold green]v{result.session.current_version} saved:[/bold green] {store.session_dir(result.session.session_id) / f'v{result.session.current_version}'}")
+    for path in result.exported_paths.values():
+        console.print(f"  {Path(path).name}")
+    _print_review_summary(result.reviews, show_quality_reviews=show_quality_reviews)
 
 
-def _run_reviews(session, docs, career, voice, truth=None) -> None:
-    reviewer = DocumentReviewer()
-
-    if truth is None:
-        console.print("\n[bold cyan]Running strict truthfulness review...[/bold cyan]")
-        with console.status(""):
-            truth = reviewer.review_truthfulness(docs, career)
-
-    console.print("\n[bold cyan]Running voice-match review...[/bold cyan]")
-    with console.status(""):
-        voice_result = reviewer.review_voice(docs, voice)
-
-    console.print("[bold cyan]Running AI-detection review...[/bold cyan]")
-    with console.status(""):
-        ai_result = reviewer.review_ai_detection(docs)
-
-    from .models import ReviewBundle
-    reviews = ReviewBundle(voice=voice_result, ai_detection=ai_result, truthfulness=truth)
-    store.save_reviews(session, reviews)
-    _print_review_summary(reviews)
-
-
-def _enforce_truth(agent, docs, career, voice, job, feedback: str | None = None, max_passes: int = 2):
-    reviewer = DocumentReviewer()
-    truth = None
-    for _ in range(max_passes):
-        console.print("\n[bold cyan]Running strict truthfulness review...[/bold cyan]")
-        with console.status(""):
-            truth = reviewer.review_truthfulness(docs, career)
-
-        if truth.all_supported:
-            _print_truth_summary(truth)
-            return truth
-
-        _print_truth_summary(truth)
-        docs_to_fix = []
-        if not truth.cover_letter.pass_strict:
-            docs_to_fix.append("cover_letter")
-        if not truth.resume.pass_strict:
-            docs_to_fix.append("resume")
-        if not truth.interview_guide.pass_strict:
-            docs_to_fix.append("interview_guide")
-
-        for key in docs_to_fix:
-            claim_feedback = _claim_feedback_for_doc(key, truth)
-            combined_feedback = "\n\n".join(
-                p for p in [feedback, claim_feedback, "Rewrite strictly using only evidence from the career profile."] if p
-            )
-            previous = docs.get(key)
-            regenerated = agent.generate_document(
-                key,
-                career,
-                voice,
-                job,
-                feedback=combined_feedback,
-                previous_version=previous,
-            )
-            docs.set(key, regenerated)
-
-    return truth
-
-
-def _claim_feedback_for_doc(key, truth) -> str:
-    if key == "cover_letter":
-        claims = truth.cover_letter.unsupported_claims
-    elif key == "resume":
-        claims = truth.resume.unsupported_claims
-    else:
-        claims = truth.interview_guide.unsupported_claims
-
-    if not claims:
-        return ""
-    bullets = "\n".join(f"- Remove or evidence this claim: {c}" for c in claims[:8])
-    return f"Unsupported claims to fix for {key}:\n{bullets}"
-
-
-def _print_review_summary(reviews) -> None:
+def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
     if reviews.truthfulness:
         _print_truth_summary(reviews.truthfulness)
 
-    if reviews.voice:
+    if show_quality_reviews and reviews.voice:
         r = reviews.voice
         match_color = {"strong": "green", "moderate": "yellow", "weak": "red"}[r.overall_match]
         console.print(
@@ -365,7 +229,7 @@ def _print_review_summary(reviews) -> None:
             )
         )
 
-    if reviews.ai_detection:
+    if show_quality_reviews and reviews.ai_detection:
         r = reviews.ai_detection
         risk_color = {"low": "green", "medium": "yellow", "high": "red"}[r.risk_level]
         all_flags = r.cover_letter_flags + r.resume_flags + r.interview_guide_flags

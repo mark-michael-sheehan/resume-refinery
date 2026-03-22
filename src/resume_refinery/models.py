@@ -61,6 +61,39 @@ class JobDescription(BaseModel):
     company: Optional[str] = None
 
 
+class JobRequirement(BaseModel):
+    requirement: str
+    category: Literal["skill", "experience", "leadership", "domain", "other"] = "other"
+    source_excerpt: Optional[str] = None
+
+
+class EvidenceItem(BaseModel):
+    requirement: str
+    evidence: str
+    source_excerpt: str
+    relevance_score: int = Field(default=3, ge=1, le=5)
+
+
+class EvidencePack(BaseModel):
+    job_requirements: list[JobRequirement] = Field(default_factory=list)
+    matched_evidence: list[EvidenceItem] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    source_summary: list[str] = Field(default_factory=list)
+
+
+class VoiceStyleGuide(BaseModel):
+    core_adjectives: list[str] = Field(default_factory=list)
+    style_rules: list[str] = Field(default_factory=list)
+    preferred_phrases: list[str] = Field(default_factory=list)
+    phrases_to_avoid: list[str] = Field(default_factory=list)
+    writing_samples: list[str] = Field(default_factory=list)
+
+
+class DraftingContext(BaseModel):
+    evidence_pack: EvidencePack
+    voice_style_guide: VoiceStyleGuide
+
+
 # ---------------------------------------------------------------------------
 # Output models
 # ---------------------------------------------------------------------------
@@ -129,6 +162,21 @@ class ReviewBundle(BaseModel):
     voice: Optional[VoiceReviewResult] = None
     ai_detection: Optional[AIDetectionResult] = None
     truthfulness: Optional[TruthfulnessResult] = None
+
+
+class VerificationReport(BaseModel):
+    reviews: ReviewBundle
+    passed_strict_truth: bool = False
+
+
+class OrchestrationResult(BaseModel):
+    session: Session
+    documents: DocumentSet
+    reviews: ReviewBundle = Field(default_factory=ReviewBundle)
+    evidence_pack: Optional[EvidencePack] = None
+    voice_style_guide: Optional[VoiceStyleGuide] = None
+    exported_paths: dict[str, str] = Field(default_factory=dict)
+    strict_truth_failed: bool = False
 
 
 # ---------------------------------------------------------------------------

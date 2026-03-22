@@ -2,9 +2,9 @@
 
 An LLM-powered career document generation tool. Provide your career history, writing
 voice, and a job description — get a tailored cover letter, resume, and interview guide,
-with automatic voice-match and AI-detection review built in.
+with strict truth verification, voice-match review, and AI-detection review.
 
-Powered by **Claude Opus 4.6** with adaptive thinking.
+Built as a deterministic workflow orchestrator with bounded specialist agents.
 
 ---
 
@@ -112,14 +112,17 @@ pytest --cov=resume_refinery --cov-report=term-missing  # with coverage
 resume_refinery/
 ├── src/
 │   └── resume_refinery/
-│       ├── agent.py         ← Document generation (Claude API, streaming)
-│       ├── reviewers.py     ← Voice-match + AI-detection review agents
+│       ├── orchestrator.py  ← Deterministic workflow coordinator
+│       ├── specialist_agents.py ← Evidence/voice/drafting/verification/repair agents
+│       ├── agent.py         ← Low-level Claude document generation client
+│       ├── reviewers.py     ← Voice-match + AI-detection + truth review clients
 │       ├── session.py       ← Session CRUD and versioning
 │       ├── exporters.py     ← Markdown → DOCX conversion
 │       ├── parsers.py       ← Read markdown files → models
-│       ├── models.py        ← Pydantic data models
+│       ├── models.py        ← Domain + intermediate artifact models
 │       ├── prompts.py       ← All system/generation/review prompts
-│       └── cli.py           ← CLI (Typer + Rich)
+│       ├── cli.py           ← CLI (Typer + Rich)
+│       └── webapp.py        ← Local FastAPI web app
 ├── tests/
 │   ├── conftest.py
 │   ├── test_models.py
@@ -146,4 +149,4 @@ resume_refinery/
 ## Documentation
 
 - [Usage Guide](docs/usage.md) — commands and input file formats
-- [Architecture](docs/architecture.md) — design decisions and data flow
+- [Architecture](docs/architecture.md) — orchestrator, specialist agents, and data flow

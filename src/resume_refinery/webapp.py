@@ -3,26 +3,24 @@
 from __future__ import annotations
 
 import html
-from pathlib import Path
 from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .agent import ResumeRefineryAgent
-from .exporters import export_document_set
-from .models import DocumentSet, ReviewBundle
+from .models import OrchestrationResult
+from .orchestrator import ResumeRefineryOrchestrator
 from .parsers import (
     parse_career_profile_content,
     parse_job_description_content,
     parse_voice_profile_content,
 )
-from .reviewers import DocumentReviewer
 from .session import SessionStore
 
 app = FastAPI(title="Resume Refinery", version="0.1.0")
 store = SessionStore()
+orchestrator = ResumeRefineryOrchestrator(store=store)
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -95,53 +93,35 @@ def _truth_summary(truth) -> str:
     )
 
 
-def _claim_feedback_for_doc(key: str, truth) -> str:
-    if key == "cover_letter":
-        claims = truth.cover_letter.unsupported_claims
-    elif key == "resume":
-        claims = truth.resume.unsupported_claims
-    else:
-        claims = truth.interview_guide.unsupported_claims
+def _artifact_summary(result: OrchestrationResult) -> str:
+    evidence = result.evidence_pack
+    style = result.voice_style_guide
+    if not evidence and not style:
+        return "<p class='muted'>No orchestration artifacts available.</p>"
 
-    if not claims:
-        return ""
-    bullets = "\n".join(f"- Remove or evidence this claim: {c}" for c in claims[:8])
-    return f"Unsupported claims to fix for {key}:\n{bullets}"
-
-
-def _enforce_truth(agent, docs, career, voice, job, feedback: str | None = None, max_passes: int = 2):
-    reviewer = DocumentReviewer()
-    truth = None
-    for _ in range(max_passes):
-        truth = reviewer.review_truthfulness(docs, career)
-        if truth.all_supported:
-            return truth
-
-        docs_to_fix = []
-        if not truth.cover_letter.pass_strict:
-            docs_to_fix.append("cover_letter")
-        if not truth.resume.pass_strict:
-            docs_to_fix.append("resume")
-        if not truth.interview_guide.pass_strict:
-            docs_to_fix.append("interview_guide")
-
-        for key in docs_to_fix:
-            claim_feedback = _claim_feedback_for_doc(key, truth)
-            combined_feedback = "\n\n".join(
-                p for p in [feedback, claim_feedback, "Rewrite strictly using only evidence from the career profile."] if p
-            )
-            previous = docs.get(key)
-            regenerated = agent.generate_document(
-                key,
-                career,
-                voice,
-                job,
-                feedback=combined_feedback,
-                previous_version=previous,
-            )
-            docs.set(key, regenerated)
-
-    return truth
+    parts = ["<div class='grid'>"]
+    if evidence:
+        evidence_items = "".join(
+            f"<li>{html.escape(item.requirement)} -> {html.escape(item.evidence)}</li>"
+            for item in evidence.matched_evidence[:6]
+        ) or "<li>No matched evidence extracted.</li>"
+        gap_items = "".join(f"<li>{html.escape(gap)}</li>" for gap in evidence.gaps[:5]) or "<li>No obvious gaps.</li>"
+        parts.append(
+            "<div class='card'><h2>Evidence Pack</h2>"
+            f"<p>Requirements: {len(evidence.job_requirements)} | Matches: {len(evidence.matched_evidence)}</p>"
+            f"<h3>Top Matches</h3><ul>{evidence_items}</ul>"
+            f"<h3>Potential Gaps</h3><ul>{gap_items}</ul></div>"
+        )
+    if style:
+        style_items = "".join(f"<li>{html.escape(item)}</li>" for item in style.style_rules[:6]) or "<li>No style rules extracted.</li>"
+        adjective_items = "".join(f"<li>{html.escape(item)}</li>" for item in style.core_adjectives[:6]) or "<li>No adjectives extracted.</li>"
+        parts.append(
+            "<div class='card'><h2>Voice Style Guide</h2>"
+            f"<h3>Core Adjectives</h3><ul>{adjective_items}</ul>"
+            f"<h3>Style Rules</h3><ul>{style_items}</ul></div>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -193,28 +173,15 @@ async def create_session(
     voice = parse_voice_profile_content(voice_text)
     job = parse_job_description_content(job_text)
 
-    session = store.create(job, career, voice)
-    agent = ResumeRefineryAgent()
+    result = orchestrator.create_session_run(
+        career,
+        voice,
+        job,
+        skip_review=bool(skip_review),
+        allow_unverified=bool(allow_unverified),
+    )
 
-    docs = agent.generate_all(career, voice, job)
-    truth = _enforce_truth(agent, docs, career, voice, job)
-
-    session = store.save_documents(session, docs)
-    version_dir = store.session_dir(session.session_id) / f"v{session.current_version}"
-    export_document_set(docs, version_dir)
-
-    reviewer = DocumentReviewer()
-    if skip_review:
-        store.save_reviews(session, ReviewBundle(truthfulness=truth))
-    else:
-        reviews = ReviewBundle(
-            truthfulness=truth,
-            voice=reviewer.review_voice(docs, voice),
-            ai_detection=reviewer.review_ai_detection(docs),
-        )
-        store.save_reviews(session, reviews)
-
-    strict_failed = _truth_failed(truth) and not allow_unverified
+    strict_failed = result.strict_truth_failed
     body = """
 <div class=\"card\">
   <h1>Generation Complete</h1>
@@ -222,7 +189,12 @@ async def create_session(
   {truth_summary}
   <p><a href=\"/sessions\">Back to sessions</a></p>
 </div>
-""".format(sid=html.escape(session.session_id), truth_summary=_truth_summary(truth))
+{artifact_summary}
+""".format(
+        sid=html.escape(result.session.session_id),
+        truth_summary=_truth_summary(result.reviews.truthfulness),
+        artifact_summary=_artifact_summary(result),
+    )
 
     if strict_failed:
         body += """
@@ -257,9 +229,10 @@ def list_sessions() -> HTMLResponse:
 
 @app.get("/sessions/{session_id}", response_class=HTMLResponse)
 def show_session(session_id: str) -> HTMLResponse:
-    session = store.get(session_id)
-    docs = store.load_documents(session)
-    reviews = store.load_reviews(session)
+    result = orchestrator.review_session_run(session_id)
+    session = result.session
+    docs = result.documents
+    reviews = result.reviews
 
     def esc(text: str | None) -> str:
         return html.escape(text or "")
@@ -271,6 +244,7 @@ def show_session(session_id: str) -> HTMLResponse:
   {_truth_summary(reviews.truthfulness)}
   <p><a href=\"/sessions\">Back to sessions</a></p>
 </div>
+{_artifact_summary(result)}
 <div class=\"card\">
   <h2>Refine</h2>
   <form method=\"post\" action=\"/sessions/{html.escape(session.session_id)}/refine\">
@@ -305,58 +279,32 @@ def refine_session(
     skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
 ):
-    session = store.get(session_id)
-    career, voice = store.load_inputs(session)
-    job = session.job_description
-    agent = ResumeRefineryAgent()
-    docs = store.load_documents(session)
+    if doc and doc not in ("cover_letter", "resume", "interview_guide"):
+        raise HTTPException(status_code=400, detail=f"Unknown document: {doc}")
 
-    keys_to_regen = ["cover_letter", "resume", "interview_guide"] if not doc else [doc]
-    for key in keys_to_regen:
-        if key not in ("cover_letter", "resume", "interview_guide"):
-            raise HTTPException(status_code=400, detail=f"Unknown document: {key}")
-        previous = docs.get(key)
-        regenerated = agent.generate_document(
-            key, career, voice, job, feedback=feedback, previous_version=previous
-        )
-        docs.set(key, regenerated)
-
-    truth = _enforce_truth(agent, docs, career, voice, job, feedback=feedback)
-
-    session = store.save_documents(
-        session,
-        docs,
-        feedback=feedback,
-        docs_regenerated=keys_to_regen,
+    result = orchestrator.refine_session_run(
+        session_id,
+        feedback,
+        doc=doc or None,
+        skip_review=bool(skip_review),
+        allow_unverified=bool(allow_unverified),
     )
-    version_dir = store.session_dir(session.session_id) / f"v{session.current_version}"
-    export_document_set(docs, version_dir)
 
-    reviewer = DocumentReviewer()
-    if skip_review:
-        store.save_reviews(session, ReviewBundle(truthfulness=truth))
-    else:
-        reviews = ReviewBundle(
-            truthfulness=truth,
-            voice=reviewer.review_voice(docs, voice),
-            ai_detection=reviewer.review_ai_detection(docs),
-        )
-        store.save_reviews(session, reviews)
-
-    if _truth_failed(truth) and not allow_unverified:
+    if result.strict_truth_failed:
         return _page(
             "Strict truth check failed",
             f"""
 <div class=\"card\">
   <h1>Strict truth check failed</h1>
-  {_truth_summary(truth)}
-  <p>Version v{session.current_version} was saved for review. Unsupported claims remain.</p>
-  <p><a href=\"/sessions/{html.escape(session.session_id)}\">Back to session</a></p>
+  {_truth_summary(result.reviews.truthfulness)}
+  <p>Version v{result.session.current_version} was saved for review. Unsupported claims remain.</p>
+  <p><a href=\"/sessions/{html.escape(result.session.session_id)}\">Back to session</a></p>
 </div>
+{_artifact_summary(result)}
 """,
         )
 
-    return RedirectResponse(url=f"/sessions/{session.session_id}", status_code=303)
+    return RedirectResponse(url=f"/sessions/{result.session.session_id}", status_code=303)
 
 
 def main() -> None:
