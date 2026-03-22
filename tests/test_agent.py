@@ -37,38 +37,48 @@ def test_generation_user_message_with_feedback(career_profile, voice_profile, jo
     assert "Previous Version" in msg
 
 
-def _make_mock_stream(text: str):
-    mock_text_block = MagicMock()
-    mock_text_block.type = "text"
-    mock_text_block.text = text
+def _make_mock_response(text: str):
+    """Build a non-streaming ChatCompletion mock."""
+    mock_message = MagicMock()
+    mock_message.content = text
 
-    mock_final = MagicMock()
-    mock_final.content = [mock_text_block]
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
 
-    mock_stream = MagicMock()
-    mock_stream.__enter__ = MagicMock(return_value=mock_stream)
-    mock_stream.__exit__ = MagicMock(return_value=False)
-    mock_stream.get_final_message.return_value = mock_final
-    mock_stream.text_stream = iter([text])
-    return mock_stream
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    return mock_response
 
 
-@patch("resume_refinery.agent.anthropic.Anthropic")
-def test_generate_document_returns_string(mock_anthropic, career_profile, voice_profile, job_description):
+def _make_mock_stream_response(text: str):
+    """Build an iterable of streaming chunks."""
+    mock_delta = MagicMock()
+    mock_delta.content = text
+
+    mock_chunk_choice = MagicMock()
+    mock_chunk_choice.delta = mock_delta
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [mock_chunk_choice]
+    return iter([mock_chunk])
+
+
+@patch("resume_refinery.agent.openai.OpenAI")
+def test_generate_document_returns_string(mock_openai, career_profile, voice_profile, job_description):
     mock_client = MagicMock()
-    mock_client.messages.stream.return_value = _make_mock_stream("# Jordan Lee\n\nCover letter text.")
-    mock_anthropic.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _make_mock_response("# Jordan Lee\n\nCover letter text.")
+    mock_openai.return_value = mock_client
 
     agent = ResumeRefineryAgent(api_key="test-key")
     result = agent.generate_document("cover_letter", career_profile, voice_profile, job_description)
     assert "Jordan Lee" in result
 
 
-@patch("resume_refinery.agent.anthropic.Anthropic")
-def test_generate_all_returns_document_set(mock_anthropic, career_profile, voice_profile, job_description):
+@patch("resume_refinery.agent.openai.OpenAI")
+def test_generate_all_returns_document_set(mock_openai, career_profile, voice_profile, job_description):
     mock_client = MagicMock()
-    mock_client.messages.stream.return_value = _make_mock_stream("Generated content.")
-    mock_anthropic.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _make_mock_response("Generated content.")
+    mock_openai.return_value = mock_client
 
     agent = ResumeRefineryAgent(api_key="test-key")
     docs = agent.generate_all(career_profile, voice_profile, job_description)
@@ -78,11 +88,11 @@ def test_generate_all_returns_document_set(mock_anthropic, career_profile, voice
     assert docs.interview_guide == "Generated content."
 
 
-@patch("resume_refinery.agent.anthropic.Anthropic")
-def test_stream_document_yields_chunks(mock_anthropic, career_profile, voice_profile, job_description):
+@patch("resume_refinery.agent.openai.OpenAI")
+def test_stream_document_yields_chunks(mock_openai, career_profile, voice_profile, job_description):
     mock_client = MagicMock()
-    mock_client.messages.stream.return_value = _make_mock_stream("chunk1")
-    mock_anthropic.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _make_mock_stream_response("chunk1")
+    mock_openai.return_value = mock_client
 
     agent = ResumeRefineryAgent(api_key="test-key")
     chunks = list(agent.stream_document("resume", career_profile, voice_profile, job_description))

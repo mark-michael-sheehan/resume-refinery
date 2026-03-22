@@ -1,11 +1,11 @@
-"""Core agent — generates individual career documents using Claude."""
+"""Core agent — generates individual career documents using an OpenAI-compatible API (Ollama)."""
 
 from __future__ import annotations
 
 import os
 from typing import Iterator
 
-import anthropic
+import openai
 from dotenv import load_dotenv
 
 from .models import CareerProfile, DocumentKey, DocumentSet, JobDescription, VoiceProfile
@@ -19,7 +19,8 @@ from .prompts import (
 
 load_dotenv()
 
-MODEL = os.environ.get("RESUME_REFINERY_MODEL", "claude-3-5-haiku-latest")
+BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "4096"))
 
 _DOC_PROMPTS: dict[DocumentKey, str] = {
@@ -30,11 +31,12 @@ _DOC_PROMPTS: dict[DocumentKey, str] = {
 
 
 class ResumeRefineryAgent:
-    """Generates and refines career documents using Claude."""
+    """Generates and refines career documents using an OpenAI-compatible API (Ollama)."""
 
     def __init__(self, api_key: str | None = None) -> None:
-        self.client = anthropic.Anthropic(
-            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self.client = openai.OpenAI(
+            api_key=api_key or os.environ.get("OPENAI_API_KEY", "ollama"),
+            base_url=BASE_URL,
         )
 
     # ------------------------------------------------------------------
@@ -83,14 +85,20 @@ class ResumeRefineryAgent:
             feedback=feedback,
             previous_version=previous_version,
         )
-        with self.client.messages.stream(
+        stream = self.client.chat.completions.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            thinking={"type": "adaptive"},
-            system=GENERATION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
-        ) as stream:
-            yield from stream.text_stream
+            stream=True,
+            messages=[
+                {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            extra_body={"think": False},
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
 
     # ------------------------------------------------------------------
     # Internal
@@ -113,14 +121,13 @@ class ResumeRefineryAgent:
             feedback=feedback,
             previous_version=previous_version,
         )
-        with self.client.messages.stream(
+        response = self.client.chat.completions.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            thinking={"type": "adaptive"},
-            system=GENERATION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
-        ) as stream:
-            final = stream.get_final_message()
-
-        text_block = next(b for b in final.content if b.type == "text")
-        return text_block.text.strip()
+            messages=[
+                {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            extra_body={"think": False},
+        )
+        return response.choices[0].message.content.strip()

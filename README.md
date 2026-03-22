@@ -40,18 +40,18 @@ pip install -r requirements.txt
 pip install -e .
 
 cp .env.example .env
-# Edit .env: ANTHROPIC_API_KEY=sk-ant-...
+# Edit .env if Ollama runs on a non-default URL (default: http://localhost:11434/v1)
 ```
 
-Optional low-cost model settings:
+Optional model/token settings:
 
 ```bash
-# generation defaults to claude-3-5-haiku-latest
-RESUME_REFINERY_MODEL=claude-3-5-haiku-latest
+# generation defaults to qwen3.5:9b  (lighter: qwen3.5:4b)
+RESUME_REFINERY_MODEL=qwen3.5:9b
 RESUME_REFINERY_MAX_TOKENS=4096
 
-# review defaults to claude-3-5-haiku-latest
-RESUME_REFINERY_REVIEW_MODEL=claude-3-5-haiku-latest
+# review defaults to qwen3.5:9b
+RESUME_REFINERY_REVIEW_MODEL=qwen3.5:9b
 RESUME_REFINERY_REVIEW_MAX_TOKENS=4096
 ```
 
@@ -114,7 +114,7 @@ resume_refinery/
 │   └── resume_refinery/
 │       ├── orchestrator.py  ← Deterministic workflow coordinator
 │       ├── specialist_agents.py ← Evidence/voice/drafting/verification/repair agents
-│       ├── agent.py         ← Low-level Claude document generation client
+│       ├── agent.py         ← Low-level Ollama document generation client
 │       ├── reviewers.py     ← Voice-match + AI-detection + truth review clients
 │       ├── session.py       ← Session CRUD and versioning
 │       ├── exporters.py     ← Markdown → DOCX conversion

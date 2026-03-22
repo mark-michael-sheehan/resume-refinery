@@ -9,7 +9,7 @@ description = "Local AI-powered resume, cover letter, and interview focus tailor
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "anthropic>=0.52.0",
+  "openai>=1.0.0",
   "pydantic>=2.0.0",
   "python-docx>=1.1.0",
   "python-dotenv>=1.0.0",

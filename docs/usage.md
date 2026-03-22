@@ -11,13 +11,13 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 pip install -e .
 
-# 3. Set your API key
+# 3. Configure Ollama endpoint
 cp .env.example .env
-# Edit .env and add: ANTHROPIC_API_KEY=sk-ant-...
+# Edit .env if Ollama runs on a non-default URL (default: http://localhost:11434/v1)
 
-# Optional low-cost defaults
-# RESUME_REFINERY_MODEL=claude-3-5-haiku-latest
-# RESUME_REFINERY_REVIEW_MODEL=claude-3-5-haiku-latest
+# Optional: choose a lighter model
+# RESUME_REFINERY_MODEL=qwen3.5:4b
+# RESUME_REFINERY_REVIEW_MODEL=qwen3.5:4b
 ```
 
 ---

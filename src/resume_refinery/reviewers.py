@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 
-import anthropic
+import openai
 from dotenv import load_dotenv
 
 from .models import (
@@ -28,7 +28,8 @@ from .prompts import (
 
 load_dotenv()
 
-MODEL = os.environ.get("RESUME_REFINERY_REVIEW_MODEL", "claude-3-5-haiku-latest")
+BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+MODEL = os.environ.get("RESUME_REFINERY_REVIEW_MODEL", "qwen3.5:9b")
 MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_REVIEW_MAX_TOKENS", "4096"))
 
 
@@ -36,8 +37,9 @@ class DocumentReviewer:
     """Runs voice-match and AI-detection reviews on a DocumentSet."""
 
     def __init__(self, api_key: str | None = None) -> None:
-        self.client = anthropic.Anthropic(
-            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self.client = openai.OpenAI(
+            api_key=api_key or os.environ.get("OPENAI_API_KEY", "ollama"),
+            base_url=BASE_URL,
         )
 
     def review_all(self, docs: DocumentSet, voice: VoiceProfile) -> ReviewBundle:
@@ -80,20 +82,20 @@ class DocumentReviewer:
         return AIDetectionResult(**json.loads(raw))
 
     def _call(self, system: str, user_msg: str) -> str:
-        """Make a Claude API call and return the text response."""
-        with self.client.messages.stream(
+        """Make an Ollama API call and return the text response."""
+        response = self.client.chat.completions.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            thinking={"type": "adaptive"},
-            system=system,
-            messages=[{"role": "user", "content": user_msg}],
-        ) as stream:
-            final = stream.get_final_message()
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+            extra_body={"think": False},
+        )
+        raw = response.choices[0].message.content.strip()
 
-        text_block = next(b for b in final.content if b.type == "text")
-        raw = text_block.text.strip()
-
-        # Strip markdown fences if present
+        # Strip markdown fences if present (defensive fallback)
         if raw.startswith("```"):
             raw = raw.split("```", 2)[1]
             if raw.startswith("json"):
