@@ -9,11 +9,15 @@ from resume_refinery.parsers import (
     _extract_company,
     _extract_email,
     _extract_job_title,
+    _extract_location,
     _extract_name,
     _extract_phone,
     load_career_profile,
     load_job_description,
     load_voice_profile,
+    parse_career_profile_content,
+    parse_job_description_content,
+    parse_voice_profile_content,
 )
 
 
@@ -68,3 +72,88 @@ def test_load_job_description(tmp_path):
     assert jd.title == "ML Engineer"
     assert jd.company == "BigCo"
     assert "great engineer" in jd.raw_content
+
+
+# ---------------------------------------------------------------------------
+# Location extraction
+# ---------------------------------------------------------------------------
+
+
+def test_extract_location():
+    assert _extract_location("San Francisco, CA") == "San Francisco, CA"
+
+
+def test_extract_location_none():
+    assert _extract_location("no location info 12345") is None
+
+
+# ---------------------------------------------------------------------------
+# Phone edge case
+# ---------------------------------------------------------------------------
+
+
+def test_extract_phone_none():
+    assert _extract_phone("no phone number here") is None
+
+
+# ---------------------------------------------------------------------------
+# Name extraction edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_extract_name_non_name_heading():
+    """A heading with special characters shouldn't be treated as a name."""
+    assert _extract_name("# Features & Benefits (v2)") is None
+
+
+def test_extract_name_too_long():
+    assert _extract_name("# This Is A Very Long Name That Exceeds Five Words Definitely") is None
+
+
+# ---------------------------------------------------------------------------
+# Job title edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_extract_job_title_no_match():
+    assert _extract_job_title("Some plain text with no headings or labels.") is None
+
+
+def test_extract_job_title_role_label():
+    assert _extract_job_title("Role: Platform Engineer") == "Platform Engineer"
+
+
+# ---------------------------------------------------------------------------
+# Content-based parse functions (no file I/O)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_voice_profile_content():
+    vp = parse_voice_profile_content("Direct and concise writing style.")
+    assert "Direct" in vp.raw_content
+
+
+def test_parse_career_profile_content():
+    cp = parse_career_profile_content("# Alice Smith\nalice@test.com\n415-555-0099\nNew York, NY")
+    assert cp.name == "Alice Smith"
+    assert cp.email == "alice@test.com"
+    assert cp.phone is not None
+    assert cp.location is not None
+
+
+def test_parse_career_profile_content_empty():
+    cp = parse_career_profile_content("Nothing useful here.")
+    assert cp.name is None
+    assert cp.email is None
+
+
+def test_parse_job_description_content():
+    jd = parse_job_description_content("# Data Engineer\nCompany: WidgetCo\n\nBuild data pipelines.")
+    assert jd.title == "Data Engineer"
+    assert jd.company == "WidgetCo"
+
+
+def test_parse_job_description_content_no_fields():
+    jd = parse_job_description_content("We need someone great with no structure.")
+    assert jd.title is None
+    assert jd.company is None

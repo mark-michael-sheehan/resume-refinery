@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 
-import openai
+import ollama
 from dotenv import load_dotenv
 
 from .models import (
     AIDetectionResult,
     DocumentSet,
+    DocumentTruthResult,
     ReviewBundle,
     TruthfulnessResult,
     CareerProfile,
@@ -18,29 +21,58 @@ from .models import (
     VoiceReviewResult,
 )
 from .prompts import (
+    AI_DETECTION_DOC_USER_TEMPLATE,
     AI_DETECTION_SYSTEM_PROMPT,
-    AI_DETECTION_USER_TEMPLATE,
+    TRUTHFULNESS_DOC_USER_TEMPLATE,
     TRUTHFULNESS_SYSTEM_PROMPT,
-    TRUTHFULNESS_USER_TEMPLATE,
+    VOICE_REVIEW_DOC_USER_TEMPLATE,
     VOICE_REVIEW_SYSTEM_PROMPT,
-    VOICE_REVIEW_USER_TEMPLATE,
 )
 
 load_dotenv()
 
-BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 MODEL = os.environ.get("RESUME_REFINERY_REVIEW_MODEL", "qwen3.5:9b")
 MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_REVIEW_MAX_TOKENS", "4096"))
+NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
+
+_MATCH_RANK = {"strong": 3, "moderate": 2, "weak": 1}
+_RISK_RANK = {"low": 1, "medium": 2, "high": 3}
+
+
+def _normalize_llm_json(raw: str) -> str:
+    """Return *raw* as valid JSON, repairing common LLM mistakes.
+
+    Handles: unescaped quotes inside strings, Python-style ``None`` / ``True``
+    / ``False``, trailing commas, single-quoted strings, etc.  Falls back to
+    the ``json_repair`` library which is purpose-built for LLM output.
+    """
+    try:
+        json.loads(raw)
+        return raw
+    except json.JSONDecodeError:
+        pass
+    # json_repair handles unescaped inner quotes, trailing commas, etc.
+    from json_repair import repair_json
+    repaired = repair_json(raw, return_objects=False)
+    try:
+        json.loads(repaired)
+        return repaired
+    except json.JSONDecodeError:
+        pass
+    # Last resort: Python literal syntax (None/True/False → null/true/false)
+    try:
+        import ast as _ast
+        return json.dumps(_ast.literal_eval(raw))
+    except Exception:
+        return raw  # let the caller surface the original error
 
 
 class DocumentReviewer:
     """Runs voice-match and AI-detection reviews on a DocumentSet."""
 
     def __init__(self, api_key: str | None = None) -> None:
-        self.client = openai.OpenAI(
-            api_key=api_key or os.environ.get("OPENAI_API_KEY", "ollama"),
-            base_url=BASE_URL,
-        )
+        self.client = ollama.Client(host=BASE_URL)
 
     def review_all(self, docs: DocumentSet, voice: VoiceProfile) -> ReviewBundle:
         """Run both review passes and return a ReviewBundle."""
@@ -50,50 +82,171 @@ class DocumentReviewer:
         )
 
     def review_truthfulness(self, docs: DocumentSet, career: CareerProfile) -> TruthfulnessResult:
-        """Verify that document claims are explicitly supported by career-profile evidence."""
-        user_msg = TRUTHFULNESS_USER_TEMPLATE.format(
-            career_profile=career.raw_content,
-            cover_letter=docs.cover_letter or "(not generated)",
-            resume=docs.resume or "(not generated)",
-            interview_guide=docs.interview_guide or "(not generated)",
+        """Verify document claims are explicitly supported by the career profile.
+
+        Each document is reviewed in its own call so the context window is never
+        filled with all three documents at once.
+        """
+        doc_map = [
+            ("Cover Letter", docs.cover_letter),
+            ("Resume", docs.resume),
+            ("Interview Guide", docs.interview_guide),
+        ]
+
+        results: dict[str, DocumentTruthResult] = {}
+        all_suggestions: list[str] = []
+
+        for doc_type, content in doc_map:
+            if not content:
+                results[doc_type] = DocumentTruthResult(pass_strict=True)
+                continue
+            user_msg = TRUTHFULNESS_DOC_USER_TEMPLATE.format(
+                career_profile=career.raw_content,
+                doc_type=doc_type,
+                doc_content=content,
+            )
+            raw = self._call(TRUTHFULNESS_SYSTEM_PROMPT, user_msg)
+            data = json.loads(raw)
+            results[doc_type] = DocumentTruthResult(
+                pass_strict=data.get("pass_strict", True),
+                unsupported_claims=data.get("unsupported_claims", []),
+                evidence_examples=data.get("evidence_examples", []),
+            )
+            all_suggestions.extend(data.get("suggestions", []))
+
+        cl = results["Cover Letter"]
+        resume = results["Resume"]
+        ig = results["Interview Guide"]
+
+        return TruthfulnessResult(
+            all_supported=cl.pass_strict and resume.pass_strict and ig.pass_strict,
+            cover_letter=cl,
+            resume=resume,
+            interview_guide=ig,
+            suggestions=all_suggestions,
         )
-        raw = self._call(TRUTHFULNESS_SYSTEM_PROMPT, user_msg)
-        return TruthfulnessResult(**json.loads(raw))
 
     def review_voice(self, docs: DocumentSet, voice: VoiceProfile) -> VoiceReviewResult:
-        """Check how well the documents match the user's voice profile."""
-        user_msg = VOICE_REVIEW_USER_TEMPLATE.format(
-            voice_profile=voice.raw_content,
-            cover_letter=docs.cover_letter or "(not generated)",
-            resume=docs.resume or "(not generated)",
-            interview_guide=docs.interview_guide or "(not generated)",
+        """Check how well each document matches the user's voice profile.
+
+        Each document is reviewed in its own call to stay within context limits.
+        """
+        doc_map = [
+            ("Cover Letter", docs.cover_letter),
+            ("Resume", docs.resume),
+            ("Interview Guide", docs.interview_guide),
+        ]
+
+        assessments: dict[str, str] = {}
+        all_issues: list[str] = []
+        all_suggestions: list[str] = []
+        match_scores: list[str] = []
+
+        for doc_type, content in doc_map:
+            if not content:
+                assessments[doc_type] = "(not generated)"
+                continue
+            user_msg = VOICE_REVIEW_DOC_USER_TEMPLATE.format(
+                voice_profile=voice.raw_content,
+                doc_type=doc_type,
+                doc_content=content,
+            )
+            raw = self._call(VOICE_REVIEW_SYSTEM_PROMPT, user_msg)
+            data = json.loads(raw)
+            assessments[doc_type] = data.get("assessment", "")
+            all_issues.extend(data.get("issues", []))
+            all_suggestions.extend(data.get("suggestions", []))
+            if m := data.get("overall_match"):
+                match_scores.append(m)
+
+        overall_match = (
+            min(match_scores, key=lambda m: _MATCH_RANK.get(m, 2))
+            if match_scores else "moderate"
         )
-        raw = self._call(VOICE_REVIEW_SYSTEM_PROMPT, user_msg)
-        return VoiceReviewResult(**json.loads(raw))
+
+        return VoiceReviewResult(
+            overall_match=overall_match,
+            cover_letter_assessment=assessments.get("Cover Letter", "(not reviewed)"),
+            resume_assessment=assessments.get("Resume", "(not reviewed)"),
+            interview_guide_assessment=assessments.get("Interview Guide", "(not reviewed)"),
+            specific_issues=all_issues,
+            suggestions=all_suggestions,
+        )
 
     def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:
-        """Identify AI-sounding or generic content in the documents."""
-        user_msg = AI_DETECTION_USER_TEMPLATE.format(
-            cover_letter=docs.cover_letter or "(not generated)",
-            resume=docs.resume or "(not generated)",
-            interview_guide=docs.interview_guide or "(not generated)",
+        """Identify AI-sounding or generic content in the documents.
+
+        Each document is reviewed in its own call to stay within context limits.
+        """
+        doc_map = [
+            ("Cover Letter", docs.cover_letter),
+            ("Resume", docs.resume),
+            ("Interview Guide", docs.interview_guide),
+        ]
+
+        flags_by_doc: dict[str, list[str]] = {
+            "Cover Letter": [],
+            "Resume": [],
+            "Interview Guide": [],
+        }
+        all_suggestions: list[str] = []
+        risk_scores: list[str] = []
+
+        for doc_type, content in doc_map:
+            if not content:
+                continue
+            user_msg = AI_DETECTION_DOC_USER_TEMPLATE.format(
+                doc_type=doc_type,
+                doc_content=content,
+            )
+            raw = self._call(AI_DETECTION_SYSTEM_PROMPT, user_msg)
+            data = json.loads(raw)
+            flags_by_doc[doc_type] = data.get("flags", [])
+            all_suggestions.extend(data.get("suggestions", []))
+            if r := data.get("risk_level"):
+                risk_scores.append(r)
+
+        risk_level = (
+            max(risk_scores, key=lambda r: _RISK_RANK.get(r, 2))
+            if risk_scores else "low"
         )
-        raw = self._call(AI_DETECTION_SYSTEM_PROMPT, user_msg)
-        return AIDetectionResult(**json.loads(raw))
+
+        return AIDetectionResult(
+            risk_level=risk_level,
+            cover_letter_flags=flags_by_doc["Cover Letter"],
+            resume_flags=flags_by_doc["Resume"],
+            interview_guide_flags=flags_by_doc["Interview Guide"],
+            suggestions=all_suggestions,
+        )
 
     def _call(self, system: str, user_msg: str) -> str:
         """Make an Ollama API call and return the text response."""
-        response = self.client.chat.completions.create(
+        response = self.client.chat(
             model=MODEL,
-            max_tokens=MAX_TOKENS,
-            response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": user_msg},
+                {"role": "user", "content": "/no_think\n" + user_msg},
             ],
-            extra_body={"think": False},
+            think=False,
+            format="json",
+            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
         )
-        raw = response.choices[0].message.content.strip()
+        raw = response.message.content.strip()
+
+        # Strip any residual <think>...</think> blocks as a defensive fallback
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+
+        # Repair Python-style literals that models sometimes emit (None→null, True→true, False→false)
+        raw = _normalize_llm_json(raw)
+
+        if not raw:
+            logging.warning(
+                "Ollama reviewer returned empty content. Full response: %r",
+                response.message.content,
+            )
+            raise ValueError(
+                "Reviewer returned empty content — model may have run out of context tokens."
+            )
 
         # Strip markdown fences if present (defensive fallback)
         if raw.startswith("```"):
@@ -103,3 +256,4 @@ class DocumentReviewer:
             raw = raw.rsplit("```", 1)[0].strip()
 
         return raw
+

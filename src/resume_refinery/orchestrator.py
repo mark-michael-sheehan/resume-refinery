@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable, Optional
+
+from dotenv import load_dotenv
 
 from .exporters import export_document_set
 from .models import (
@@ -20,7 +23,14 @@ from .models import (
 from .session import SessionStore
 from .specialist_agents import DraftingAgent, EvidenceAgent, RepairAgent, VerificationAgent, VoiceAgent
 
+load_dotenv()
+
+MAX_TRUTH_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_TRUTH_PASSES", "2"))
+MAX_VOICE_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_VOICE_PASSES", "2"))
+MAX_AI_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_AI_PASSES", "2"))
+
 ProgressCallback = Callable[[str], None]
+StreamCallback = Callable[[str], None]
 
 
 class ResumeRefineryOrchestrator:
@@ -51,6 +61,7 @@ class ResumeRefineryOrchestrator:
         skip_review: bool = False,
         allow_unverified: bool = False,
         progress: ProgressCallback | None = None,
+        stream_callback: StreamCallback | None = None,
     ) -> OrchestrationResult:
         session = self.store.create(job, career, voice)
         self._progress(progress, f"Session created: {session.session_id}")
@@ -59,7 +70,13 @@ class ResumeRefineryOrchestrator:
         docs = DocumentSet()
         for key, label in self._doc_labels().items():
             self._progress(progress, f"Generating {label}...")
-            chunks = list(self.drafting_agent.stream_document(key, career, voice, job, context))
+            chunks: list[str] = []
+            for chunk in self.drafting_agent.stream_document(key, career, voice, job, context):
+                chunks.append(chunk)
+                if stream_callback:
+                    stream_callback(chunk)
+            if stream_callback:
+                stream_callback("\n")
             docs.set(key, "".join(chunks).strip())
 
         reviews = self._verify_and_repair(docs, career, voice, job, context, progress=progress)
@@ -92,6 +109,7 @@ class ResumeRefineryOrchestrator:
         skip_review: bool = False,
         allow_unverified: bool = False,
         progress: ProgressCallback | None = None,
+        stream_callback: StreamCallback | None = None,
     ) -> OrchestrationResult:
         session = self.store.get(session_id)
         career, voice = self.store.load_inputs(session)
@@ -105,16 +123,22 @@ class ResumeRefineryOrchestrator:
                 continue
             self._progress(progress, f"Regenerating {key.replace('_', ' ')}...")
             previous = current_docs.get(key)
-            regenerated = self.drafting_agent.generate_document(
-                key,
-                career,
-                voice,
-                job,
-                context,
-                feedback=feedback,
-                previous_version=previous,
-            )
-            current_docs.set(key, regenerated)
+            if stream_callback:
+                chunks: list[str] = []
+                for chunk in self.drafting_agent.stream_document(
+                    key, career, voice, job, context,
+                    feedback=feedback, previous_version=previous,
+                ):
+                    chunks.append(chunk)
+                    stream_callback(chunk)
+                stream_callback("\n")
+                current_docs.set(key, "".join(chunks).strip())
+            else:
+                regenerated = self.drafting_agent.generate_document(
+                    key, career, voice, job, context,
+                    feedback=feedback, previous_version=previous,
+                )
+                current_docs.set(key, regenerated)
 
         reviews = self._verify_and_repair(
             current_docs,
@@ -195,22 +219,62 @@ class ResumeRefineryOrchestrator:
         *,
         feedback: str | None = None,
         progress: ProgressCallback | None = None,
-        max_passes: int = 2,
+        max_truth_passes: int = MAX_TRUTH_PASSES,
+        max_voice_passes: int = MAX_VOICE_PASSES,
+        max_ai_passes: int = MAX_AI_PASSES,
     ) -> ReviewBundle:
+        import logging
+
+        # --- Truthfulness loop ---
         truth = None
-        for _ in range(max_passes):
+        for _ in range(max_truth_passes):
             self._progress(progress, "Running strict truthfulness review...")
-            truth = self.verification_agent.review_truthfulness(docs, career)
+            try:
+                truth = self.verification_agent.review_truthfulness(docs, career)
+            except Exception as exc:
+                logging.warning("Truthfulness review failed (%s); skipping repair loop.", exc)
+                self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
+                break
             if truth.all_supported:
                 break
             self._progress(progress, "Repairing unsupported claims...")
             self.repair_agent.repair_documents(docs, truth, career, voice, job, context, feedback=feedback)
 
-        self._progress(progress, "Running final verification reviews...")
-        final_reviews = self.verification_agent.review_all(docs, career, voice)
-        if truth is not None:
-            final_reviews.truthfulness = truth if final_reviews.truthfulness is None else final_reviews.truthfulness
-        return final_reviews
+        # --- Voice-match loop ---
+        voice_result = None
+        for _ in range(max_voice_passes):
+            self._progress(progress, "Running voice-match review...")
+            try:
+                voice_result = self.verification_agent.review_voice(docs, voice)
+            except Exception as exc:
+                logging.warning("Voice review failed (%s); skipping repair loop.", exc)
+                self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
+                break
+            if voice_result.overall_match == "strong":
+                break
+            self._progress(progress, "Repairing voice-match issues...")
+            self.repair_agent.repair_voice(docs, voice_result, career, voice, job, context, feedback=feedback)
+
+        # --- AI-detection loop ---
+        ai_result = None
+        for _ in range(max_ai_passes):
+            self._progress(progress, "Running AI-detection review...")
+            try:
+                ai_result = self.verification_agent.review_ai_detection(docs)
+            except Exception as exc:
+                logging.warning("AI-detection review failed (%s); skipping repair loop.", exc)
+                self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
+                break
+            if ai_result.risk_level == "low":
+                break
+            self._progress(progress, "Repairing AI-flagged content...")
+            self.repair_agent.repair_ai_detection(docs, ai_result, career, voice, job, context, feedback=feedback)
+
+        return ReviewBundle(
+            truthfulness=truth,
+            voice=voice_result,
+            ai_detection=ai_result,
+        )
 
     def _export(self, session: Session, docs: DocumentSet) -> dict[str, Path]:
         version_dir = self.store.session_dir(session.session_id) / f"v{session.current_version}"

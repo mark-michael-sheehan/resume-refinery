@@ -1,11 +1,11 @@
-"""Core agent — generates individual career documents using an OpenAI-compatible API (Ollama)."""
+"""Core agent — generates individual career documents using Ollama."""
 
 from __future__ import annotations
 
 import os
 from typing import Iterator
 
-import openai
+import ollama
 from dotenv import load_dotenv
 
 from .models import CareerProfile, DocumentKey, DocumentSet, JobDescription, VoiceProfile
@@ -19,9 +19,10 @@ from .prompts import (
 
 load_dotenv()
 
-BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "4096"))
+NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
 
 _DOC_PROMPTS: dict[DocumentKey, str] = {
     "cover_letter": COVER_LETTER_PROMPT,
@@ -31,13 +32,10 @@ _DOC_PROMPTS: dict[DocumentKey, str] = {
 
 
 class ResumeRefineryAgent:
-    """Generates and refines career documents using an OpenAI-compatible API (Ollama)."""
+    """Generates and refines career documents using Ollama."""
 
     def __init__(self, api_key: str | None = None) -> None:
-        self.client = openai.OpenAI(
-            api_key=api_key or os.environ.get("OPENAI_API_KEY", "ollama"),
-            base_url=BASE_URL,
-        )
+        self.client = ollama.Client(host=BASE_URL)
 
     # ------------------------------------------------------------------
     # Public API
@@ -85,20 +83,20 @@ class ResumeRefineryAgent:
             feedback=feedback,
             previous_version=previous_version,
         )
-        stream = self.client.chat.completions.create(
+        stream = self.client.chat(
             model=MODEL,
-            max_tokens=MAX_TOKENS,
-            stream=True,
             messages=[
                 {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
+                {"role": "user", "content": "/no_think\n" + user_msg},
             ],
-            extra_body={"think": False},
+            stream=True,
+            think=False,
+            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
         )
         for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+            content = chunk.message.content
+            if content:
+                yield content
 
     # ------------------------------------------------------------------
     # Internal
@@ -121,13 +119,13 @@ class ResumeRefineryAgent:
             feedback=feedback,
             previous_version=previous_version,
         )
-        response = self.client.chat.completions.create(
+        response = self.client.chat(
             model=MODEL,
-            max_tokens=MAX_TOKENS,
             messages=[
                 {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
+                {"role": "user", "content": "/no_think\n" + user_msg},
             ],
-            extra_body={"think": False},
+            think=False,
+            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
         )
-        return response.choices[0].message.content.strip()
+        return response.message.content.strip()

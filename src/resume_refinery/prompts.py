@@ -172,44 +172,72 @@ Do not assume, infer, or soften this rule.
 """
 
 
-TRUTHFULNESS_USER_TEMPLATE = """## Career Profile
+TRUTHFULNESS_DOC_USER_TEMPLATE = """## Career Profile
 {career_profile}
 
-## Cover Letter
-{cover_letter}
-
-## Resume
-{resume}
-
-## Interview Guide
-{interview_guide}
+## {doc_type}
+{doc_content}
 
 ## Task
+Check every factual claim in the {doc_type} against the Career Profile above.
 Return a JSON object with this shape:
 {{
-  "all_supported": boolean,
-  "cover_letter": {{
-    "pass_strict": boolean,
-    "unsupported_claims": [string],
-    "evidence_examples": [string]
-  }},
-  "resume": {{
-    "pass_strict": boolean,
-    "unsupported_claims": [string],
-    "evidence_examples": [string]
-  }},
-  "interview_guide": {{
-    "pass_strict": boolean,
-    "unsupported_claims": [string],
-    "evidence_examples": [string]
-  }},
+  "pass_strict": boolean,
+  "unsupported_claims": [string],
+  "evidence_examples": [string],
   "suggestions": [string]
 }}
 
 Rules:
-- Unsupported claims must quote the exact problematic phrase.
-- evidence_examples must quote exact phrases from the career profile that support claims.
-- If any unsupported claim exists in any document, all_supported must be false.
+- Unsupported claims must quote the exact problematic phrase from the {doc_type}.
+- evidence_examples must quote exact phrases from the Career Profile that support claims.
+- suggestions should describe how to fix or remove unsupported claims.
+- pass_strict must be false if any unsupported claim exists.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+VOICE_REVIEW_DOC_USER_TEMPLATE = """## Voice Profile
+{voice_profile}
+
+## {doc_type}
+{doc_content}
+
+## Task
+Evaluate how well this {doc_type} reflects the Voice Profile above.
+Return a JSON object with this shape:
+{{
+  "overall_match": "strong" | "moderate" | "weak",
+  "assessment": string,
+  "issues": [string],
+  "suggestions": [string]
+}}
+
+- overall_match: holistic rating for this document.
+- assessment: 1–2 sentences summarising the match quality.
+- issues: specific phrases or passages that feel off-voice (quote them).
+- suggestions: concrete changes to better match the voice profile.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+AI_DETECTION_DOC_USER_TEMPLATE = """## {doc_type}
+{doc_content}
+
+## Task
+Identify AI-generated, generic, or hollow content in this {doc_type}.
+Return a JSON object with this shape:
+{{
+  "risk_level": "low" | "medium" | "high",
+  "flags": [string],
+  "suggestions": [string]
+}}
+
+- risk_level: overall AI-detection risk for this document.
+- flags: specific phrases or passages that sound AI-generated (quote them).
+- suggestions: concrete rewrites or guidance to make flagged content sound human.
 
 Return JSON only — no markdown fences, no explanation.
 """

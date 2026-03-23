@@ -1,6 +1,33 @@
 """Tests for bounded specialist agents."""
 
-from resume_refinery.specialist_agents import EvidenceAgent, VoiceAgent
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from resume_refinery.models import (
+    AIDetectionResult,
+    DocumentSet,
+    DocumentTruthResult,
+    DraftingContext,
+    EvidencePack,
+    JobRequirement,
+    ReviewBundle,
+    TruthfulnessResult,
+    VoiceReviewResult,
+    VoiceStyleGuide,
+)
+from resume_refinery.specialist_agents import (
+    DraftingAgent,
+    EvidenceAgent,
+    RepairAgent,
+    VerificationAgent,
+    VoiceAgent,
+)
+
+
+# ---------------------------------------------------------------------------
+# EvidenceAgent
+# ---------------------------------------------------------------------------
 
 
 def test_evidence_agent_extracts_requirements_and_matches(career_profile, job_description):
@@ -21,3 +48,352 @@ def test_voice_agent_distills_style_guide(voice_profile):
     assert any("direct" in item.lower() for item in guide.core_adjectives)
     assert guide.style_rules
     assert any("short declarative sentences" in item.lower() for item in guide.style_rules)
+
+
+def test_evidence_agent_identifies_gaps(career_profile):
+    """When the job requires something not in the career profile, it should appear in gaps."""
+    from resume_refinery.models import JobDescription
+    job = JobDescription(
+        raw_content="Required: Rust experience, quantum computing, blockchain architecture.",
+        title="Quantum Engineer",
+        company="QuantumCo",
+    )
+    agent = EvidenceAgent()
+    pack = agent.build_evidence_pack(career_profile, job)
+
+    # These niche requirements should not match the career profile
+    assert len(pack.gaps) > 0
+
+
+def test_evidence_agent_fallback_requirements():
+    """When no requirement keywords are found, fallback to first lines."""
+    from resume_refinery.models import CareerProfile, JobDescription
+    job = JobDescription(
+        raw_content="# Data Scientist\nCompany: BigCo\n\nBuild models.\nImprove metrics.",
+        title="Data Scientist",
+        company="BigCo",
+    )
+    career = CareerProfile(raw_content="# Someone\nDoes stuff.")
+    agent = EvidenceAgent()
+    pack = agent.build_evidence_pack(career, job)
+
+    # Should still produce some requirements from fallback
+    assert pack.job_requirements
+
+
+def test_evidence_agent_source_summary(career_profile, job_description):
+    agent = EvidenceAgent()
+    pack = agent.build_evidence_pack(career_profile, job_description)
+    assert pack.source_summary  # Non-empty
+
+
+def test_evidence_agent_limits_requirements():
+    """Should cap at 10 requirements."""
+    from resume_refinery.models import CareerProfile, JobDescription
+    lines = "\n".join(f"- Required: skill_{i} experience" for i in range(20))
+    job = JobDescription(raw_content=f"# Job\n{lines}", title="Job", company="Co")
+    career = CareerProfile(raw_content="# Name\nDoes things.")
+    agent = EvidenceAgent()
+    pack = agent.build_evidence_pack(career, job)
+    assert len(pack.job_requirements) <= 10
+
+
+# ---------------------------------------------------------------------------
+# VoiceAgent
+# ---------------------------------------------------------------------------
+
+
+def test_voice_agent_phrases_to_avoid():
+    from resume_refinery.models import VoiceProfile
+    voice = VoiceProfile(raw_content=(
+        "# Voice\n"
+        "## Adjectives\n- Bold\n"
+        "## Phrases to Avoid\n- results-driven\n- industry-leading\n"
+    ))
+    agent = VoiceAgent()
+    guide = agent.build_style_guide(voice)
+    assert any("results-driven" in p for p in guide.phrases_to_avoid)
+
+
+def test_voice_agent_writing_samples():
+    from resume_refinery.models import VoiceProfile
+    voice = VoiceProfile(raw_content=(
+        "# Voice\n"
+        "## Writing Samples\n"
+        "I built the thing and it worked.\n\n"
+        "We shipped on time. No drama.\n"
+    ))
+    agent = VoiceAgent()
+    guide = agent.build_style_guide(voice)
+    assert guide.writing_samples
+
+
+def test_voice_agent_empty_profile():
+    from resume_refinery.models import VoiceProfile
+    voice = VoiceProfile(raw_content="nothing structured here")
+    agent = VoiceAgent()
+    guide = agent.build_style_guide(voice)
+    # Should not crash — returns empty/minimal guide
+    assert isinstance(guide, VoiceStyleGuide)
+
+
+# ---------------------------------------------------------------------------
+# DraftingAgent
+# ---------------------------------------------------------------------------
+
+
+def _make_context():
+    return DraftingContext(
+        evidence_pack=EvidencePack(
+            job_requirements=[JobRequirement(requirement="Python")],
+            matched_evidence=[],
+            gaps=["Rust"],
+            source_summary=["Built things"],
+        ),
+        voice_style_guide=VoiceStyleGuide(
+            core_adjectives=["direct"],
+            style_rules=["Short sentences"],
+        ),
+    )
+
+
+def test_drafting_agent_generate_all(career_profile, voice_profile, job_description):
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "Generated."
+
+    agent = DraftingAgent(generator=mock_generator)
+    docs = agent.generate_all(career_profile, voice_profile, job_description, _make_context())
+
+    assert docs.cover_letter == "Generated."
+    assert docs.resume == "Generated."
+    assert docs.interview_guide == "Generated."
+    assert mock_generator.generate_document.call_count == 3
+
+
+def test_drafting_agent_generate_document_with_feedback(career_profile, voice_profile, job_description):
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "Revised."
+
+    agent = DraftingAgent(generator=mock_generator)
+    result = agent.generate_document(
+        "cover_letter", career_profile, voice_profile, job_description, _make_context(),
+        feedback="Shorten it", previous_version="Old draft",
+    )
+
+    assert result == "Revised."
+    call_kwargs = mock_generator.generate_document.call_args
+    assert call_kwargs.kwargs["feedback"] == "Shorten it"
+    assert call_kwargs.kwargs["previous_version"] == "Old draft"
+
+
+def test_drafting_agent_stream_document(career_profile, voice_profile, job_description):
+    mock_generator = MagicMock()
+    mock_generator.stream_document.return_value = iter(["chunk1", "chunk2"])
+
+    agent = DraftingAgent(generator=mock_generator)
+    chunks = list(agent.stream_document("resume", career_profile, voice_profile, job_description, _make_context()))
+
+    assert chunks == ["chunk1", "chunk2"]
+
+
+def test_drafting_agent_career_context_includes_evidence(career_profile, voice_profile, job_description):
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "doc"
+
+    agent = DraftingAgent(generator=mock_generator)
+    agent.generate_document("resume", career_profile, voice_profile, job_description, _make_context())
+
+    # The career profile passed to the generator should include evidence pack info
+    enriched_career = mock_generator.generate_document.call_args.args[1]
+    assert "Evidence Pack" in enriched_career.raw_content
+    assert "Python" in enriched_career.raw_content
+
+
+def test_drafting_agent_voice_context_includes_guide(career_profile, voice_profile, job_description):
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "doc"
+
+    agent = DraftingAgent(generator=mock_generator)
+    agent.generate_document("resume", career_profile, voice_profile, job_description, _make_context())
+
+    enriched_voice = mock_generator.generate_document.call_args.args[2]
+    assert "Distilled Voice Guide" in enriched_voice.raw_content
+    assert "direct" in enriched_voice.raw_content
+
+
+# ---------------------------------------------------------------------------
+# VerificationAgent
+# ---------------------------------------------------------------------------
+
+
+class FakeReviewer:
+    def review_truthfulness(self, docs, career):
+        doc = DocumentTruthResult(pass_strict=True)
+        return TruthfulnessResult(
+            all_supported=True,
+            cover_letter=doc, resume=doc, interview_guide=doc,
+        )
+
+    def review_voice(self, docs, voice):
+        return VoiceReviewResult(
+            overall_match="strong",
+            cover_letter_assessment="Good",
+            resume_assessment="Good",
+            interview_guide_assessment="Good",
+        )
+
+    def review_ai_detection(self, docs):
+        return AIDetectionResult(risk_level="low")
+
+
+def test_verification_agent_review_all(document_set, career_profile, voice_profile):
+    agent = VerificationAgent(reviewer=FakeReviewer())
+    bundle = agent.review_all(document_set, career_profile, voice_profile)
+
+    assert bundle.truthfulness is not None
+    assert bundle.voice is not None
+    assert bundle.ai_detection is not None
+    assert bundle.truthfulness.all_supported is True
+
+
+def test_verification_agent_review_truthfulness(document_set, career_profile):
+    agent = VerificationAgent(reviewer=FakeReviewer())
+    result = agent.review_truthfulness(document_set, career_profile)
+    assert result.all_supported is True
+
+
+def test_verification_agent_review_voice(document_set, voice_profile):
+    agent = VerificationAgent(reviewer=FakeReviewer())
+    result = agent.review_voice(document_set, voice_profile)
+    assert result.overall_match == "strong"
+
+
+def test_verification_agent_review_ai_detection(document_set):
+    agent = VerificationAgent(reviewer=FakeReviewer())
+    result = agent.review_ai_detection(document_set)
+    assert result.risk_level == "low"
+
+
+# ---------------------------------------------------------------------------
+# RepairAgent
+# ---------------------------------------------------------------------------
+
+
+def test_repair_agent_repair_documents(career_profile, voice_profile, job_description):
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "repaired content"
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    docs = DocumentSet(cover_letter="old cl", resume="old resume", interview_guide="old ig")
+    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim A"])
+    doc_pass = DocumentTruthResult(pass_strict=True)
+    truth = TruthfulnessResult(
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=doc_pass,
+        interview_guide=doc_fail,
+    )
+    context = _make_context()
+
+    agent.repair_documents(docs, truth, career_profile, voice_profile, job_description, context)
+
+    # cover_letter and interview_guide should be repaired; resume should stay
+    assert docs.cover_letter == "repaired content"
+    assert docs.resume == "old resume"
+    assert docs.interview_guide == "repaired content"
+    assert mock_generator.generate_document.call_count == 2
+
+
+def test_repair_agent_repair_voice(career_profile, voice_profile, job_description):
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "voice-fixed"
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    voice_review = VoiceReviewResult(
+        overall_match="weak",
+        cover_letter_assessment="Off-voice",
+        resume_assessment="Off-voice",
+        interview_guide_assessment="Off-voice",
+        specific_issues=["too formal"],
+        suggestions=["Use contractions"],
+    )
+    context = _make_context()
+
+    agent.repair_voice(docs, voice_review, career_profile, voice_profile, job_description, context)
+
+    assert docs.cover_letter == "voice-fixed"
+    assert docs.resume == "voice-fixed"
+    assert docs.interview_guide == "voice-fixed"
+    assert mock_generator.generate_document.call_count == 3
+
+    # Verify feedback includes voice issues
+    feedback_arg = mock_generator.generate_document.call_args.kwargs["feedback"]
+    assert "too formal" in feedback_arg
+
+
+def test_repair_agent_repair_ai_detection(career_profile, voice_profile, job_description):
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "ai-fixed"
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    ai_review = AIDetectionResult(
+        risk_level="high",
+        cover_letter_flags=["passionate about innovation"],
+        resume_flags=[],
+        interview_guide_flags=["demonstrated track record"],
+        suggestions=["Be specific"],
+    )
+    context = _make_context()
+
+    agent.repair_ai_detection(docs, ai_review, career_profile, voice_profile, job_description, context)
+
+    # Only cover_letter and interview_guide have flags → only those are repaired
+    assert docs.cover_letter == "ai-fixed"
+    assert docs.resume == "r"  # No flags → not repaired
+    assert docs.interview_guide == "ai-fixed"
+    assert mock_generator.generate_document.call_count == 2
+
+
+def test_repair_agent_repair_documents_no_failures(career_profile, voice_profile, job_description):
+    """When all docs pass strict truth, no repairs should happen."""
+    mock_generator = MagicMock()
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    doc_pass = DocumentTruthResult(pass_strict=True)
+    truth = TruthfulnessResult(
+        all_supported=True,
+        cover_letter=doc_pass, resume=doc_pass, interview_guide=doc_pass,
+    )
+    context = _make_context()
+
+    agent.repair_documents(docs, truth, career_profile, voice_profile, job_description, context)
+
+    assert mock_generator.generate_document.call_count == 0
+    assert docs.cover_letter == "cl"  # Unchanged
+
+
+def test_repair_agent_repair_ai_no_flags(career_profile, voice_profile, job_description):
+    """When no documents have AI flags, no repairs should happen."""
+    mock_generator = MagicMock()
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    ai_review = AIDetectionResult(
+        risk_level="low",
+        cover_letter_flags=[],
+        resume_flags=[],
+        interview_guide_flags=[],
+    )
+    context = _make_context()
+
+    agent.repair_ai_detection(docs, ai_review, career_profile, voice_profile, job_description, context)
+
+    assert mock_generator.generate_document.call_count == 0

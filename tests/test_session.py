@@ -5,7 +5,14 @@ import os
 
 import pytest
 
-from resume_refinery.models import DocumentSet, ReviewBundle
+from resume_refinery.models import (
+    DocumentSet,
+    DocumentTruthResult,
+    ReviewBundle,
+    TruthfulnessResult,
+    VoiceReviewResult,
+    AIDetectionResult,
+)
 from resume_refinery.session import SessionStore, _slugify
 
 
@@ -103,3 +110,119 @@ def test_load_inputs(tmp_path, career_profile, voice_profile, job_description, m
 
     assert loaded_career.raw_content == career_profile.raw_content
     assert loaded_voice.raw_content == voice_profile.raw_content
+
+
+# ---------------------------------------------------------------------------
+# Session ID deduplication on collision
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_dedup(tmp_path, career_profile, voice_profile, job_description, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    first = store.create(job_description, career_profile, voice_profile)
+    second = store.create(job_description, career_profile, voice_profile)
+
+    assert first.session_id != second.session_id
+    assert second.session_id.endswith("_2") or second.session_id > first.session_id
+
+
+# ---------------------------------------------------------------------------
+# Load documents for a specific version
+# ---------------------------------------------------------------------------
+
+
+def test_load_documents_specific_version(tmp_path, career_profile, voice_profile, job_description, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    docs_v1 = DocumentSet(cover_letter="v1 letter", resume="v1 resume", interview_guide="v1 guide")
+    session = store.save_documents(session, docs_v1)
+    docs_v2 = DocumentSet(cover_letter="v2 letter", resume="v2 resume", interview_guide="v2 guide")
+    session = store.save_documents(session, docs_v2)
+
+    loaded_v1 = store.load_documents(session, version=1)
+    loaded_v2 = store.load_documents(session, version=2)
+
+    assert loaded_v1.cover_letter == "v1 letter"
+    assert loaded_v2.cover_letter == "v2 letter"
+
+
+# ---------------------------------------------------------------------------
+# Save/load reviews with truthfulness
+# ---------------------------------------------------------------------------
+
+
+def test_save_and_load_truthfulness_review(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set)
+
+    doc = DocumentTruthResult(pass_strict=True)
+    truth = TruthfulnessResult(
+        all_supported=True,
+        cover_letter=doc, resume=doc, interview_guide=doc,
+        suggestions=["Keep it up"],
+    )
+    bundle = ReviewBundle(truthfulness=truth)
+    session = store.save_reviews(session, bundle)
+
+    loaded = store.load_reviews(session)
+    assert loaded.truthfulness is not None
+    assert loaded.truthfulness.all_supported is True
+    assert loaded.voice is None
+    assert loaded.ai_detection is None
+
+
+# ---------------------------------------------------------------------------
+# Load reviews when none exist
+# ---------------------------------------------------------------------------
+
+
+def test_load_reviews_when_none_exist(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set)
+
+    loaded = store.load_reviews(session)
+    assert loaded.voice is None
+    assert loaded.ai_detection is None
+    assert loaded.truthfulness is None
+
+
+# ---------------------------------------------------------------------------
+# save_documents with specific docs_regenerated list
+# ---------------------------------------------------------------------------
+
+
+def test_save_documents_with_docs_regenerated(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set, docs_regenerated=["cover_letter"])
+
+    assert session.versions[0].docs_regenerated == ["cover_letter"]
+
+
+# ---------------------------------------------------------------------------
+# slugify edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_slugify_special_chars():
+    # Trailing special chars become trailing dashes after substitution
+    result = _slugify("Hello World!!! @#$")
+    assert result.startswith("hello-world")
+    assert "!!!" not in result
+
+
+def test_slugify_long_string():
+    result = _slugify("a" * 100)
+    assert len(result) <= 40

@@ -13,11 +13,8 @@ pip install -e .
 
 # 3. Configure Ollama endpoint
 cp .env.example .env
-# Edit .env if Ollama runs on a non-default URL (default: http://localhost:11434/v1)
-
-# Optional: choose a lighter model
-# RESUME_REFINERY_MODEL=qwen3.5:4b
-# RESUME_REFINERY_REVIEW_MODEL=qwen3.5:4b
+# Edit .env if Ollama runs on a non-default URL (default: http://localhost:11434)
+# See the Environment Variables section below for all available options.
 ```
 
 ---
@@ -158,6 +155,53 @@ For each version, the following files are created:
 | `cover_letter.md` | Markdown source (for diffing between versions) |
 | `resume.md` | Markdown source |
 | `interview_guide.md` | Markdown source |
+
+---
+
+## Environment Variables
+
+All settings are read from a `.env` file in the project root (or from the real environment).
+Copy `.env.example` to `.env` to get started — every variable has a sensible default.
+
+### Ollama connection
+
+| Variable | Default | Description |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Base URL of the Ollama server. Use the bare host — do **not** add `/v1`. |
+
+### Document generation
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_REFINERY_MODEL` | `qwen3.5:9b` | Model used to write the cover letter, resume, and interview guide. Any model pulled in Ollama works; `qwen3.5:4b` is faster and lighter. |
+| `RESUME_REFINERY_MAX_TOKENS` | `4096` | Maximum new tokens the generation model may produce per document. Raise if output is cut off mid-section. |
+
+### Review / verification
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_REFINERY_REVIEW_MODEL` | `qwen3.5:9b` | Model used for truthfulness, voice-match, and AI-detection reviews. Can be set to a lighter model to save RAM (e.g. `qwen3.5:4b`). |
+| `RESUME_REFINERY_REVIEW_MAX_TOKENS` | `4096` | Maximum new tokens the review model may produce per review call. Each call covers one document at a time, so 4096 is generally sufficient. |
+
+### Context window (shared)
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_REFINERY_NUM_CTX` | `16384` | KV-cache size (tokens) requested from Ollama for every call — both generation and review. Ollama pre-allocates this on the GPU/CPU at call time: `16384` uses ~2 GB extra RAM and comfortably fits a full career profile plus one document. Raise to `32768` for very long profiles; lower to `8192` if you hit out-of-memory errors. If you see `WARNING: Ollama reviewer returned empty content`, increase this value. |
+
+### Repair loop pass limits
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_REFINERY_MAX_TRUTH_PASSES` | `2` | Max review+repair passes for the truthfulness loop. Each pass checks claims against the career profile; failing docs are re-generated before the next pass. Set to `1` to review without repair, `0` to skip entirely. |
+| `RESUME_REFINERY_MAX_VOICE_PASSES` | `2` | Max passes for the voice-match loop. Each pass rates voice fidelity; if not `"strong"`, all docs are re-generated with voice feedback. |
+| `RESUME_REFINERY_MAX_AI_PASSES` | `2` | Max passes for the AI-detection loop. Each pass flags generic/AI-sounding phrases; flagged docs are re-generated with the quoted phrases as repair feedback. |
+
+### Session storage
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_REFINERY_SESSIONS_DIR` | `~/.resume_refinery/sessions` | Directory where sessions are persisted. Each session is a subdirectory containing input copies, versioned Markdown sources, DOCX exports, and review JSON files. |
 | `voice_review.json` | Voice-match review results |
 | `ai_review.json` | AI-detection review results |
 | `truth_review.json` | Strict claim-support verification results |

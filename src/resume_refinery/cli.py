@@ -55,6 +55,7 @@ def new(
         skip_review=skip_review,
         allow_unverified=allow_unverified,
         progress=_progress,
+        stream_callback=_stream_chunk,
     )
     _report_result(result, show_quality_reviews=not skip_review)
     if result.strict_truth_failed:
@@ -97,6 +98,7 @@ def refine(
         skip_review=skip_review,
         allow_unverified=allow_unverified,
         progress=_progress,
+        stream_callback=_stream_chunk,
     )
     _report_result(result, show_quality_reviews=not skip_review)
     if result.strict_truth_failed:
@@ -204,6 +206,11 @@ def show(
 
 def _progress(message: str) -> None:
     console.print(f"\n[bold cyan]{message}[/bold cyan]")
+
+
+def _stream_chunk(chunk: str) -> None:
+    sys.stdout.write(chunk)
+    sys.stdout.flush()
 
 
 def _report_result(result, show_quality_reviews: bool) -> None:

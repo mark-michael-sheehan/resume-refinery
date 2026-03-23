@@ -7,6 +7,7 @@ from typing import Iterable, Iterator
 
 from .agent import ResumeRefineryAgent
 from .models import (
+    AIDetectionResult,
     CareerProfile,
     DocumentKey,
     DocumentSet,
@@ -18,6 +19,7 @@ from .models import (
     ReviewBundle,
     TruthfulnessResult,
     VoiceProfile,
+    VoiceReviewResult,
     VoiceStyleGuide,
 )
 from .reviewers import DocumentReviewer
@@ -302,6 +304,12 @@ class VerificationAgent:
     def review_truthfulness(self, docs: DocumentSet, career: CareerProfile) -> TruthfulnessResult:
         return self.reviewer.review_truthfulness(docs, career)
 
+    def review_voice(self, docs: DocumentSet, voice: VoiceProfile) -> VoiceReviewResult:
+        return self.reviewer.review_voice(docs, voice)
+
+    def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:
+        return self.reviewer.review_ai_detection(docs)
+
 
 class RepairAgent:
     """Performs bounded rewrites in response to verifier findings."""
@@ -358,3 +366,77 @@ class RepairAgent:
             parts.append("Unsupported claims to remove or directly evidence:\n" + "\n".join(f"- {claim}" for claim in claims[:8]))
         parts.append("Rewrite strictly using only evidence from the career profile and evidence pack.")
         return "\n\n".join(parts)
+
+    def repair_voice(
+        self,
+        docs: DocumentSet,
+        voice_review: VoiceReviewResult,
+        career: CareerProfile,
+        voice: VoiceProfile,
+        job: JobDescription,
+        context: DraftingContext,
+        feedback: str | None = None,
+    ) -> DocumentSet:
+        """Re-generate documents flagged by the voice-match review."""
+        doc_assessments: dict[DocumentKey, str] = {
+            "cover_letter": voice_review.cover_letter_assessment,
+            "resume": voice_review.resume_assessment,
+            "interview_guide": voice_review.interview_guide_assessment,
+        }
+        for key in ("cover_letter", "resume", "interview_guide"):
+            previous = docs.get(key)
+            if not previous:
+                continue
+            parts = []
+            if feedback:
+                parts.append(feedback)
+            parts.append(f"Voice-match assessment: {doc_assessments[key]}")
+            if voice_review.specific_issues:
+                parts.append("Specific voice issues to fix:\n" + "\n".join(f"- {i}" for i in voice_review.specific_issues[:8]))
+            if voice_review.suggestions:
+                parts.append("Suggestions:\n" + "\n".join(f"- {s}" for s in voice_review.suggestions[:8]))
+            parts.append("Rewrite to match the voice profile more closely. Keep all factual content intact.")
+            repair_feedback = "\n\n".join(parts)
+            regenerated = self.drafting_agent.generate_document(
+                key, career, voice, job, context,
+                feedback=repair_feedback, previous_version=previous,
+            )
+            docs.set(key, regenerated)
+        return docs
+
+    def repair_ai_detection(
+        self,
+        docs: DocumentSet,
+        ai_review: AIDetectionResult,
+        career: CareerProfile,
+        voice: VoiceProfile,
+        job: JobDescription,
+        context: DraftingContext,
+        feedback: str | None = None,
+    ) -> DocumentSet:
+        """Re-generate documents flagged by the AI-detection review."""
+        flag_map: dict[DocumentKey, list[str]] = {
+            "cover_letter": ai_review.cover_letter_flags,
+            "resume": ai_review.resume_flags,
+            "interview_guide": ai_review.interview_guide_flags,
+        }
+        for key, flags in flag_map.items():
+            if not flags:
+                continue
+            previous = docs.get(key)
+            if not previous:
+                continue
+            parts = []
+            if feedback:
+                parts.append(feedback)
+            parts.append("AI-detection flagged the following phrases as generic or AI-sounding:\n" + "\n".join(f'- "{f}"' for f in flags[:8]))
+            if ai_review.suggestions:
+                parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in ai_review.suggestions[:8]))
+            parts.append("Rewrite these passages to sound more authentically human. Use the voice profile. Keep all factual content intact.")
+            repair_feedback = "\n\n".join(parts)
+            regenerated = self.drafting_agent.generate_document(
+                key, career, voice, job, context,
+                feedback=repair_feedback, previous_version=previous,
+            )
+            docs.set(key, regenerated)
+        return docs

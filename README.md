@@ -40,20 +40,29 @@ pip install -r requirements.txt
 pip install -e .
 
 cp .env.example .env
-# Edit .env if Ollama runs on a non-default URL (default: http://localhost:11434/v1)
+# Edit .env if Ollama runs on a non-default URL (default: http://localhost:11434)
 ```
 
 Optional model/token settings:
 
 ```bash
-# generation defaults to qwen3.5:9b  (lighter: qwen3.5:4b)
+# Generation model — defaults to qwen3.5:9b (lighter: qwen3.5:4b)
 RESUME_REFINERY_MODEL=qwen3.5:9b
 RESUME_REFINERY_MAX_TOKENS=4096
 
-# review defaults to qwen3.5:9b
+# Review model — can be the same as generation or a lighter model
 RESUME_REFINERY_REVIEW_MODEL=qwen3.5:9b
 RESUME_REFINERY_REVIEW_MAX_TOKENS=4096
+
+# Context window size in tokens (shared by generation and review)
+# Ollama pre-allocates this as KV cache; 16384 ≈ 2 GB extra RAM
+RESUME_REFINERY_NUM_CTX=16384
+
+# Custom session storage path (default: ~/.resume_refinery/sessions)
+# RESUME_REFINERY_SESSIONS_DIR=/path/to/sessions
 ```
+
+See [`.env.example`](.env.example) for the full reference with descriptions.
 
 ---
 
