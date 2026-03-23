@@ -310,11 +310,19 @@ class ResumeRefineryOrchestrator:
             if not doc.pass_strict:
                 claims = doc.unsupported_claims
                 if claims:
-                    parts.append(f"  {label}: {len(claims)} unsupported — " + "; ".join(claims[:4]))
+                    parts.append(f"  {label}: {len(claims)} unsupported")
+                    for claim in claims:
+                        parts.append(f"    • {claim}")
                 else:
                     parts.append(f"  {label}: strict check failed (no specific claims listed)")
+                if doc.evidence_examples:
+                    parts.append(f"  {label} evidence examples:")
+                    for ex in doc.evidence_examples:
+                        parts.append(f"    ✓ {ex}")
         if truth.suggestions:
-            parts.append("  Suggestions: " + "; ".join(truth.suggestions[:3]))
+            parts.append("  Suggestions:")
+            for s in truth.suggestions:
+                parts.append(f"    • {s}")
         return "\n".join(parts)
 
     def _summarise_voice(self, voice: VoiceReviewResult) -> str:
@@ -326,11 +334,16 @@ class ResumeRefineryOrchestrator:
             ("Interview Guide", voice.interview_guide_match, voice.interview_guide_assessment),
         ]:
             mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
-            parts.append(f"  {label}: [{mc}]{match}[/{mc}] — {assessment[:120]}")
+            parts.append(f"  {label}: [{mc}]{match}[/{mc}]")
+            parts.append(f"    {assessment}")
         if voice.specific_issues:
-            parts.append("  Issues: " + "; ".join(voice.specific_issues[:4]))
+            parts.append("  Issues:")
+            for issue in voice.specific_issues:
+                parts.append(f"    • {issue}")
         if voice.suggestions:
-            parts.append("  Suggestions: " + "; ".join(voice.suggestions[:3]))
+            parts.append("  Suggestions:")
+            for s in voice.suggestions:
+                parts.append(f"    • {s}")
         return "\n".join(parts)
 
     def _summarise_ai(self, ai: AIDetectionResult) -> str:
@@ -340,9 +353,13 @@ class ResumeRefineryOrchestrator:
                              ("Resume", ai.resume_flags),
                              ("Interview Guide", ai.interview_guide_flags)]:
             if flags:
-                parts.append(f"  {label}: " + "; ".join(f'"{f}"' for f in flags[:4]))
+                parts.append(f"  {label}:")
+                for f in flags:
+                    parts.append(f'    • "{f}"')
         if ai.suggestions:
-            parts.append("  Suggestions: " + "; ".join(ai.suggestions[:3]))
+            parts.append("  Suggestions:")
+            for s in ai.suggestions:
+                parts.append(f"    • {s}")
         return "\n".join(parts)
 
     def _doc_labels(self) -> dict[DocumentKey, str]:

@@ -372,6 +372,8 @@ class RepairAgent:
                          "embellish, generalize, or infer beyond what the evidence supports.")
         if doc_truth.evidence_examples:
             parts.append("Evidence examples to reference:\n" + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8]))
+        if truth.suggestions:
+            parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in truth.suggestions[:8]))
         parts.append("Rewrite strictly using only evidence from the career profile and evidence pack.")
         return "\n\n".join(parts)
 

@@ -470,3 +470,24 @@ def test_feedback_for_doc_with_claims(career_profile, voice_profile, job_descrip
 
     assert "Increased revenue by 500%" in feedback
     assert "truthfulness check failed" not in feedback.lower()  # uses claims path, not empty-claims path
+
+
+def test_feedback_includes_truth_suggestions(career_profile, voice_profile, job_description):
+    """Top-level TruthfulnessResult.suggestions should be included in repair feedback."""
+    mock_generator = MagicMock()
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["Led 50-person team"])
+    truth = TruthfulnessResult(
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=DocumentTruthResult(pass_strict=True),
+        interview_guide=DocumentTruthResult(pass_strict=True),
+        suggestions=["Stick to verifiable metrics", "Avoid leadership claims without evidence"],
+    )
+
+    feedback = agent._feedback_for_doc("cover_letter", truth, None)
+
+    assert "Stick to verifiable metrics" in feedback
+    assert "Avoid leadership claims without evidence" in feedback
