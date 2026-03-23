@@ -68,11 +68,21 @@ def _normalize_llm_json(raw: str) -> str:
         return raw  # let the caller surface the original error
 
 
+_GEN_MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
+
+
 class DocumentReviewer:
     """Runs voice-match and AI-detection reviews on a DocumentSet."""
 
     def __init__(self, api_key: str | None = None) -> None:
         self.client = ollama.Client(host=BASE_URL)
+        if MODEL == _GEN_MODEL:
+            logging.warning(
+                "Review model (%s) is the same as generation model. "
+                "Set RESUME_REFINERY_REVIEW_MODEL to a different model for more "
+                "objective reviews.",
+                MODEL,
+            )
 
     def review_all(self, docs: DocumentSet, voice: VoiceProfile) -> ReviewBundle:
         """Run both review passes and return a ReviewBundle."""
@@ -140,6 +150,8 @@ class DocumentReviewer:
         assessments: dict[str, str] = {}
         all_issues: list[str] = []
         all_suggestions: list[str] = []
+        per_doc_issues: dict[str, list[str]] = {}
+        per_doc_suggestions: dict[str, list[str]] = {}
         match_scores: list[str] = []
         per_doc_match: dict[str, str] = {}
 
@@ -147,6 +159,8 @@ class DocumentReviewer:
             if not content:
                 assessments[doc_type] = "(not generated)"
                 per_doc_match[doc_type] = "strong"  # nothing to review
+                per_doc_issues[doc_type] = []
+                per_doc_suggestions[doc_type] = []
                 continue
             user_msg = VOICE_REVIEW_DOC_USER_TEMPLATE.format(
                 voice_profile=voice.raw_content,
@@ -156,8 +170,12 @@ class DocumentReviewer:
             raw = self._call(VOICE_REVIEW_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             assessments[doc_type] = data.get("assessment", "")
-            all_issues.extend(data.get("issues", []))
-            all_suggestions.extend(data.get("suggestions", []))
+            doc_issues = data.get("issues", [])
+            doc_suggestions = data.get("suggestions", [])
+            per_doc_issues[doc_type] = doc_issues
+            per_doc_suggestions[doc_type] = doc_suggestions
+            all_issues.extend(doc_issues)
+            all_suggestions.extend(doc_suggestions)
             doc_match = data.get("overall_match", "moderate")
             per_doc_match[doc_type] = doc_match
             match_scores.append(doc_match)
@@ -177,6 +195,12 @@ class DocumentReviewer:
             interview_guide_assessment=assessments.get("Interview Guide", "(not reviewed)"),
             specific_issues=all_issues,
             suggestions=all_suggestions,
+            cover_letter_issues=per_doc_issues.get("Cover Letter", []),
+            resume_issues=per_doc_issues.get("Resume", []),
+            interview_guide_issues=per_doc_issues.get("Interview Guide", []),
+            cover_letter_suggestions=per_doc_suggestions.get("Cover Letter", []),
+            resume_suggestions=per_doc_suggestions.get("Resume", []),
+            interview_guide_suggestions=per_doc_suggestions.get("Interview Guide", []),
         )
 
     def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:

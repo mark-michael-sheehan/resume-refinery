@@ -137,6 +137,13 @@ class VoiceReviewResult(BaseModel):
     interview_guide_assessment: str
     specific_issues: list[str] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
+    # Per-document issues and suggestions for targeted repair
+    cover_letter_issues: list[str] = Field(default_factory=list)
+    resume_issues: list[str] = Field(default_factory=list)
+    interview_guide_issues: list[str] = Field(default_factory=list)
+    cover_letter_suggestions: list[str] = Field(default_factory=list)
+    resume_suggestions: list[str] = Field(default_factory=list)
+    interview_guide_suggestions: list[str] = Field(default_factory=list)
 
 
 class AIDetectionResult(BaseModel):

@@ -92,6 +92,43 @@ def test_voice_review_per_doc_match_explicit():
     assert vr.interview_guide_match == "moderate"
 
 
+def test_voice_review_per_doc_issues_and_suggestions_defaults():
+    """Per-doc issues/suggestions default to empty lists."""
+    vr = VoiceReviewResult(
+        overall_match="strong",
+        cover_letter_assessment="Good",
+        resume_assessment="Good",
+        interview_guide_assessment="Good",
+    )
+    assert vr.cover_letter_issues == []
+    assert vr.resume_issues == []
+    assert vr.interview_guide_issues == []
+    assert vr.cover_letter_suggestions == []
+    assert vr.resume_suggestions == []
+    assert vr.interview_guide_suggestions == []
+
+
+def test_voice_review_per_doc_issues_and_suggestions_explicit():
+    """Per-doc issues/suggestions can be set explicitly."""
+    vr = VoiceReviewResult(
+        overall_match="weak",
+        cover_letter_assessment="Off",
+        resume_assessment="Good",
+        interview_guide_assessment="Okay",
+        cover_letter_issues=["too formal"],
+        cover_letter_suggestions=["use contractions"],
+        resume_issues=[],
+        interview_guide_issues=["scripted"],
+        interview_guide_suggestions=["be natural"],
+    )
+    assert vr.cover_letter_issues == ["too formal"]
+    assert vr.cover_letter_suggestions == ["use contractions"]
+    assert vr.resume_issues == []
+    assert vr.resume_suggestions == []
+    assert vr.interview_guide_issues == ["scripted"]
+    assert vr.interview_guide_suggestions == ["be natural"]
+
+
 def test_voice_review_per_doc_match_invalid_literal():
     with pytest.raises(ValidationError):
         VoiceReviewResult(

@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 from typing import Iterable, Iterator
+
+import ollama
+from dotenv import load_dotenv
 
 from .agent import ResumeRefineryAgent
 from .models import (
@@ -22,7 +28,20 @@ from .models import (
     VoiceReviewResult,
     VoiceStyleGuide,
 )
+from .prompts import (
+    EVIDENCE_MATCHING_SYSTEM_PROMPT,
+    EVIDENCE_MATCHING_USER_TEMPLATE,
+    REQUIREMENT_EXTRACTION_SYSTEM_PROMPT,
+    REQUIREMENT_EXTRACTION_USER_TEMPLATE,
+)
 from .reviewers import DocumentReviewer
+
+load_dotenv()
+
+_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+_MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
+_NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
+_MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "4096"))
 
 _STOPWORDS = {
     "a",
@@ -54,29 +73,28 @@ _STOPWORDS = {
 
 
 class EvidenceAgent:
-    """Extracts job requirements and grounded evidence from raw inputs."""
+    """Extracts job requirements and grounded evidence from raw inputs.
+
+    Uses LLM calls for semantic understanding with keyword-based fallbacks
+    when the LLM is unavailable or returns invalid results.
+    """
+
+    def __init__(self, client: ollama.Client | None = None) -> None:
+        self.client = client or ollama.Client(host=_BASE_URL)
 
     def build_evidence_pack(self, career: CareerProfile, job: JobDescription) -> EvidencePack:
         requirements = self._extract_requirements(job.raw_content)
-        career_lines = self._career_lines(career.raw_content)
         matched: list[EvidenceItem] = []
         gaps: list[str] = []
 
         for requirement in requirements:
-            evidence_lines = self._match_evidence(requirement.requirement, career_lines)
-            if evidence_lines:
-                for score, evidence in enumerate(evidence_lines[:3], start=1):
-                    matched.append(
-                        EvidenceItem(
-                            requirement=requirement.requirement,
-                            evidence=evidence,
-                            source_excerpt=evidence,
-                            relevance_score=max(1, 6 - score),
-                        )
-                    )
+            evidence_items = self._match_evidence(requirement.requirement, career.raw_content)
+            if evidence_items:
+                matched.extend(evidence_items)
             else:
                 gaps.append(requirement.requirement)
 
+        career_lines = self._career_lines(career.raw_content)
         summary = [line for line in career_lines if len(line) > 20][:8]
         return EvidencePack(
             job_requirements=requirements,
@@ -86,6 +104,39 @@ class EvidenceAgent:
         )
 
     def _extract_requirements(self, raw_job: str) -> list[JobRequirement]:
+        """Extract requirements using LLM, falling back to keyword heuristics."""
+        try:
+            return self._extract_requirements_llm(raw_job)
+        except Exception as exc:
+            logging.warning("LLM requirement extraction failed (%s); using keyword fallback.", exc)
+            return self._extract_requirements_keyword(raw_job)
+
+    def _extract_requirements_llm(self, raw_job: str) -> list[JobRequirement]:
+        """Use the LLM to extract structured requirements from the job description."""
+        user_msg = REQUIREMENT_EXTRACTION_USER_TEMPLATE.format(job_description=raw_job)
+        raw = self._call_llm(REQUIREMENT_EXTRACTION_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError(f"Expected JSON array, got {type(data).__name__}")
+        requirements: list[JobRequirement] = []
+        for item in data[:10]:
+            if isinstance(item, dict) and "requirement" in item:
+                category = item.get("category", "other")
+                if category not in ("skill", "experience", "leadership", "domain", "other"):
+                    category = "other"
+                requirements.append(
+                    JobRequirement(
+                        requirement=item["requirement"],
+                        category=category,
+                        source_excerpt=item.get("source_excerpt", item["requirement"]),
+                    )
+                )
+        if not requirements:
+            raise ValueError("LLM returned empty requirements list")
+        return requirements
+
+    def _extract_requirements_keyword(self, raw_job: str) -> list[JobRequirement]:
+        """Keyword heuristic fallback for requirement extraction."""
         requirements: list[JobRequirement] = []
         seen: set[str] = set()
         for line in raw_job.splitlines():
@@ -113,6 +164,91 @@ class EvidenceAgent:
                 requirements.append(JobRequirement(requirement=line, source_excerpt=line))
         return requirements[:10]
 
+    def _match_evidence(self, requirement: str, career_content: str) -> list[EvidenceItem]:
+        """Match evidence using LLM, falling back to keyword overlap."""
+        try:
+            return self._match_evidence_llm(requirement, career_content)
+        except Exception as exc:
+            logging.warning("LLM evidence matching failed (%s); using keyword fallback.", exc)
+            career_lines = self._career_lines(career_content)
+            return self._match_evidence_keyword(requirement, career_lines)
+
+    def _match_evidence_llm(self, requirement: str, career_content: str) -> list[EvidenceItem]:
+        """Use the LLM to find semantically relevant evidence for a requirement."""
+        user_msg = EVIDENCE_MATCHING_USER_TEMPLATE.format(
+            requirement=requirement,
+            career_profile=career_content,
+        )
+        raw = self._call_llm(EVIDENCE_MATCHING_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError(f"Expected JSON array, got {type(data).__name__}")
+        items: list[EvidenceItem] = []
+        for entry in data[:3]:
+            if isinstance(entry, dict) and "evidence" in entry:
+                score = entry.get("relevance_score", 3)
+                if not isinstance(score, int) or score < 1 or score > 5:
+                    score = 3
+                items.append(
+                    EvidenceItem(
+                        requirement=requirement,
+                        evidence=entry["evidence"],
+                        source_excerpt=entry["evidence"],
+                        relevance_score=score,
+                    )
+                )
+        return items
+
+    def _match_evidence_keyword(self, requirement: str, career_lines: list[str]) -> list[EvidenceItem]:
+        """Keyword overlap fallback for evidence matching."""
+        req_keywords = self._keywords(requirement)
+        scored: list[tuple[int, str]] = []
+        for line in career_lines:
+            line_keywords = self._keywords(line)
+            overlap = len(req_keywords & line_keywords)
+            if overlap:
+                scored.append((overlap, line))
+        scored.sort(key=lambda item: (-item[0], -len(item[1])))
+        items: list[EvidenceItem] = []
+        for rank, (_, evidence) in enumerate(scored[:3], start=1):
+            items.append(
+                EvidenceItem(
+                    requirement=requirement,
+                    evidence=evidence,
+                    source_excerpt=evidence,
+                    relevance_score=max(1, 6 - rank),
+                )
+            )
+        return items
+
+    def _call_llm(self, system: str, user_msg: str) -> str:
+        """Make an Ollama API call and return cleaned JSON text."""
+        response = self.client.chat(
+            model=_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": "/no_think\n" + user_msg},
+            ],
+            think=False,
+            format="json",
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
+        )
+        raw = response.message.content.strip()
+        # Strip residual think blocks
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+        # Repair LLM JSON quirks
+        from .reviewers import _normalize_llm_json
+        raw = _normalize_llm_json(raw)
+        if not raw:
+            raise ValueError("LLM returned empty content")
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.rsplit("```", 1)[0].strip()
+        return raw
+
     def _split_requirement_line(self, line: str) -> list[str]:
         if ":" in line:
             _, tail = line.split(":", 1)
@@ -134,17 +270,6 @@ class EvidenceAgent:
 
     def _career_lines(self, raw_career: str) -> list[str]:
         return [line.strip(" -\t") for line in raw_career.splitlines() if line.strip()]
-
-    def _match_evidence(self, requirement: str, career_lines: list[str]) -> list[str]:
-        req_keywords = self._keywords(requirement)
-        scored: list[tuple[int, str]] = []
-        for line in career_lines:
-            line_keywords = self._keywords(line)
-            overlap = len(req_keywords & line_keywords)
-            if overlap:
-                scored.append((overlap, line))
-        scored.sort(key=lambda item: (-item[0], -len(item[1])))
-        return [line for _, line in scored]
 
     def _keywords(self, text: str) -> set[str]:
         return {
@@ -265,6 +390,12 @@ class DraftingAgent:
         if evidence_pack.gaps:
             summary_lines.append("\n### Potential Gaps")
             summary_lines.extend(f"- {gap}" for gap in evidence_pack.gaps[:6])
+            summary_lines.append(
+                "\n**Important**: The gaps above are requirements from the job description "
+                "that have no direct evidence in the career profile. Do NOT fabricate "
+                "experience to cover them. Either omit them or frame related transferable "
+                "skills honestly."
+            )
         summary_lines.append("\n### Full Career Profile")
         summary_lines.append(career.raw_content)
         return career.model_copy(update={"raw_content": "\n".join(summary_lines)})
@@ -326,10 +457,11 @@ class RepairAgent:
         job: JobDescription,
         context: DraftingContext,
         feedback: str | None = None,
+        previous_suggestions: list[str] | None = None,
     ) -> DocumentSet:
         for key in self._docs_to_fix(truth):
             previous = docs.get(key)
-            repair_feedback = self._feedback_for_doc(key, truth, feedback)
+            repair_feedback = self._feedback_for_doc(key, truth, feedback, previous_suggestions)
             regenerated = self.drafting_agent.generate_document(
                 key,
                 career,
@@ -352,7 +484,7 @@ class RepairAgent:
             docs.append("interview_guide")
         return docs
 
-    def _feedback_for_doc(self, key: DocumentKey, truth: TruthfulnessResult, feedback: str | None) -> str:
+    def _feedback_for_doc(self, key: DocumentKey, truth: TruthfulnessResult, feedback: str | None, previous_suggestions: list[str] | None = None) -> str:
         if key == "cover_letter":
             doc_truth = truth.cover_letter
         elif key == "resume":
@@ -373,7 +505,12 @@ class RepairAgent:
         if doc_truth.evidence_examples:
             parts.append("Evidence examples to reference:\n" + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8]))
         if truth.suggestions:
-            parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in truth.suggestions[:8]))
+            # Deduplicate: only include suggestions not already attempted
+            new_suggestions = self._deduplicate(truth.suggestions, previous_suggestions)
+            if new_suggestions:
+                parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in new_suggestions[:8]))
+        if previous_suggestions:
+            parts.append("Previously attempted suggestions (already tried — try a different approach):\n" + "\n".join(f"- {s}" for s in previous_suggestions[:8]))
         parts.append("Rewrite strictly using only evidence from the career profile and evidence pack.")
         return "\n\n".join(parts)
 
@@ -386,6 +523,7 @@ class RepairAgent:
         job: JobDescription,
         context: DraftingContext,
         feedback: str | None = None,
+        previous_suggestions: list[str] | None = None,
     ) -> DocumentSet:
         """Re-generate only documents that don't already have a 'strong' voice match."""
         doc_assessments: dict[DocumentKey, str] = {
@@ -398,6 +536,16 @@ class RepairAgent:
             "resume": voice_review.resume_match,
             "interview_guide": voice_review.interview_guide_match,
         }
+        doc_issues: dict[DocumentKey, list[str]] = {
+            "cover_letter": voice_review.cover_letter_issues,
+            "resume": voice_review.resume_issues,
+            "interview_guide": voice_review.interview_guide_issues,
+        }
+        doc_suggestions: dict[DocumentKey, list[str]] = {
+            "cover_letter": voice_review.cover_letter_suggestions,
+            "resume": voice_review.resume_suggestions,
+            "interview_guide": voice_review.interview_guide_suggestions,
+        }
         for key in ("cover_letter", "resume", "interview_guide"):
             if doc_matches[key] == "strong":
                 continue  # already on-voice — skip
@@ -408,10 +556,17 @@ class RepairAgent:
             if feedback:
                 parts.append(feedback)
             parts.append(f"Voice-match assessment: {doc_assessments[key]}")
-            if voice_review.specific_issues:
-                parts.append("Specific voice issues to fix:\n" + "\n".join(f"- {i}" for i in voice_review.specific_issues[:8]))
-            if voice_review.suggestions:
-                parts.append("Suggestions:\n" + "\n".join(f"- {s}" for s in voice_review.suggestions[:8]))
+            # Use per-doc issues/suggestions when available, fall back to aggregated
+            issues = doc_issues[key] or voice_review.specific_issues
+            suggestions = doc_suggestions[key] or voice_review.suggestions
+            if issues:
+                parts.append("Specific voice issues to fix:\n" + "\n".join(f"- {i}" for i in issues[:8]))
+            if suggestions:
+                new_suggestions = self._deduplicate(suggestions, previous_suggestions)
+                if new_suggestions:
+                    parts.append("Suggestions:\n" + "\n".join(f"- {s}" for s in new_suggestions[:8]))
+            if previous_suggestions:
+                parts.append("Previously attempted suggestions (already tried — try a different approach):\n" + "\n".join(f"- {s}" for s in previous_suggestions[:8]))
             parts.append("Rewrite to match the voice profile more closely. Keep all factual content intact.")
             repair_feedback = "\n\n".join(parts)
             regenerated = self.drafting_agent.generate_document(
@@ -430,6 +585,7 @@ class RepairAgent:
         job: JobDescription,
         context: DraftingContext,
         feedback: str | None = None,
+        previous_suggestions: list[str] | None = None,
     ) -> DocumentSet:
         """Re-generate documents flagged by the AI-detection review."""
         flag_map: dict[DocumentKey, list[str]] = {
@@ -448,7 +604,11 @@ class RepairAgent:
                 parts.append(feedback)
             parts.append("AI-detection flagged the following phrases as generic or AI-sounding:\n" + "\n".join(f'- "{f}"' for f in flags[:8]))
             if ai_review.suggestions:
-                parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in ai_review.suggestions[:8]))
+                new_suggestions = self._deduplicate(ai_review.suggestions, previous_suggestions)
+                if new_suggestions:
+                    parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in new_suggestions[:8]))
+            if previous_suggestions:
+                parts.append("Previously attempted suggestions (already tried — try a different approach):\n" + "\n".join(f"- {s}" for s in previous_suggestions[:8]))
             parts.append("Rewrite these passages to sound more authentically human. Use the voice profile. Keep all factual content intact.")
             repair_feedback = "\n\n".join(parts)
             regenerated = self.drafting_agent.generate_document(
@@ -457,3 +617,11 @@ class RepairAgent:
             )
             docs.set(key, regenerated)
         return docs
+
+    @staticmethod
+    def _deduplicate(current: list[str], previous: list[str] | None) -> list[str]:
+        """Return suggestions from *current* not already in *previous*."""
+        if not previous:
+            return current
+        seen = {s.strip().lower() for s in previous}
+        return [s for s in current if s.strip().lower() not in seen]

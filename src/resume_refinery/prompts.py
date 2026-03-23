@@ -34,6 +34,10 @@ Requirements:
 - Match the applicant's voice precisely from their voice profile
 - 3–4 paragraphs, roughly one page (about 350-500 words)
 - Every claim must be explicitly grounded in the career profile; do not infer missing facts
+- If the evidence pack lists "Potential Gaps" (requirements without matching evidence), \
+  do NOT fabricate experience to cover them. Instead, either omit those requirements or \
+  frame transferable skills honestly — e.g. "While I haven't worked directly with X, \
+  my experience with Y provides a strong foundation."
 - Output Markdown only — no preamble, no explanation
 """
 
@@ -47,6 +51,9 @@ Requirements:
 - Quantify achievements wherever the data exists in the profile
 - Incorporate key terms from the job description naturally
 - Aim for one page unless the profile clearly has 10+ years of content
+- If the evidence pack lists "Potential Gaps" (requirements without matching evidence), \
+  do NOT fabricate experience to fill them. Omit those requirements or honestly highlight \
+  transferable skills that partially address them.
 - Output Markdown only — no preamble, no explanation
 """
 
@@ -238,6 +245,71 @@ Return a JSON object with this shape:
 - risk_level: overall AI-detection risk for this document.
 - flags: specific phrases or passages that sound AI-generated (quote them).
 - suggestions: concrete rewrites or guidance to make flagged content sound human.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Evidence extraction prompts
+# ---------------------------------------------------------------------------
+
+REQUIREMENT_EXTRACTION_SYSTEM_PROMPT = """You are an expert recruiter and job description analyst. \
+Your task is to extract the key requirements from a job description into a structured list. \
+Be thorough: capture technical skills, soft skills, experience levels, domain knowledge, \
+and any qualifications mentioned explicitly or implied."""
+
+
+REQUIREMENT_EXTRACTION_USER_TEMPLATE = """## Job Description
+{job_description}
+
+## Task
+Extract all key requirements from this job description. Return a JSON array of objects:
+[
+  {{
+    "requirement": "short description of the requirement",
+    "category": "skill" | "experience" | "leadership" | "domain" | "other"
+  }}
+]
+
+Rules:
+- Include technical skills, tools, languages, and frameworks.
+- Include soft skills and leadership expectations.
+- Include years-of-experience or seniority requirements.
+- Include domain knowledge (e.g. fintech, healthcare).
+- Deduplicate — don't list the same requirement twice.
+- Limit to the 10 most important requirements, ordered by importance.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+EVIDENCE_MATCHING_SYSTEM_PROMPT = """You are an expert career coach who matches candidate \
+experience to job requirements. Your task is to find the most relevant evidence from a \
+candidate's career profile that demonstrates they meet a specific requirement."""
+
+
+EVIDENCE_MATCHING_USER_TEMPLATE = """## Requirement
+{requirement}
+
+## Career Profile
+{career_profile}
+
+## Task
+Find the top 3 most relevant pieces of evidence from the career profile that demonstrate \
+the candidate meets the requirement above. Return a JSON array of objects:
+[
+  {{
+    "evidence": "exact quote or close paraphrase from the career profile",
+    "relevance_score": 1-5 (5 = perfect match, 1 = tangentially related)
+  }}
+]
+
+Rules:
+- Only include evidence actually present in the career profile.
+- Do NOT fabricate or embellish evidence.
+- If no relevant evidence exists, return an empty array [].
+- Prefer specific, quantified achievements over general statements.
 
 Return JSON only — no markdown fences, no explanation.
 """

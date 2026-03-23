@@ -357,3 +357,101 @@ def test_voice_review_stores_per_doc_match(mock_client_cls, document_set, voice_
     assert result.interview_guide_match == "moderate"
     assert result.overall_match == "weak"  # worst-of aggregation
 
+
+# ---------------------------------------------------------------------------
+# Same-model warning
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_same_model_warning_logged(mock_client_cls, caplog):
+    """When review model matches generation model, a warning should be logged."""
+    import logging
+    import resume_refinery.reviewers as rev_mod
+
+    original_model = rev_mod.MODEL
+    original_gen_model = rev_mod._GEN_MODEL
+    try:
+        rev_mod.MODEL = "same-model"
+        rev_mod._GEN_MODEL = "same-model"
+        mock_client_cls.return_value = MagicMock()
+
+        with caplog.at_level(logging.WARNING, logger="resume_refinery.reviewers"):
+            reviewer = DocumentReviewer(api_key="test-key")
+
+        assert any("same as generation model" in rec.message for rec in caplog.records)
+    finally:
+        rev_mod.MODEL = original_model
+        rev_mod._GEN_MODEL = original_gen_model
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_different_model_no_warning(mock_client_cls, caplog):
+    """When review model differs from generation model, no warning should appear."""
+    import logging
+    import resume_refinery.reviewers as rev_mod
+
+    original_model = rev_mod.MODEL
+    original_gen_model = rev_mod._GEN_MODEL
+    try:
+        rev_mod.MODEL = "review-model"
+        rev_mod._GEN_MODEL = "gen-model"
+        mock_client_cls.return_value = MagicMock()
+
+        with caplog.at_level(logging.WARNING, logger="resume_refinery.reviewers"):
+            reviewer = DocumentReviewer(api_key="test-key")
+
+        assert not any("same as generation model" in rec.message for rec in caplog.records)
+    finally:
+        rev_mod.MODEL = original_model
+        rev_mod._GEN_MODEL = original_gen_model
+
+
+# ---------------------------------------------------------------------------
+# Voice review: per-doc issues and suggestions
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_voice_review_stores_per_doc_issues_and_suggestions(mock_client_cls, document_set, voice_profile):
+    """Per-doc issues and suggestions from the LLM are stored in the result."""
+    cl = json.dumps({
+        "overall_match": "weak",
+        "assessment": "Off-voice",
+        "issues": ["opener too formal"],
+        "suggestions": ["Use a casual hook"],
+    })
+    resume = json.dumps({
+        "overall_match": "strong",
+        "assessment": "Good",
+        "issues": [],
+        "suggestions": [],
+    })
+    ig = json.dumps({
+        "overall_match": "moderate",
+        "assessment": "Slightly stiff",
+        "issues": ["Q&A feels scripted"],
+        "suggestions": ["Make answers more conversational"],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_mock_response(cl),
+        _make_mock_response(resume),
+        _make_mock_response(ig),
+    ]
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_voice(document_set, voice_profile)
+
+    # Per-doc fields
+    assert result.cover_letter_issues == ["opener too formal"]
+    assert result.cover_letter_suggestions == ["Use a casual hook"]
+    assert result.resume_issues == []
+    assert result.resume_suggestions == []
+    assert result.interview_guide_issues == ["Q&A feels scripted"]
+    assert result.interview_guide_suggestions == ["Make answers more conversational"]
+    # Aggregated fields still contain all items
+    assert "opener too formal" in result.specific_issues
+    assert "Q&A feels scripted" in result.specific_issues
+

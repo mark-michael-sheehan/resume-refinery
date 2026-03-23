@@ -491,3 +491,186 @@ def test_feedback_includes_truth_suggestions(career_profile, voice_profile, job_
 
     assert "Stick to verifiable metrics" in feedback
     assert "Avoid leadership claims without evidence" in feedback
+
+
+# ---------------------------------------------------------------------------
+# LLM-powered EvidenceAgent tests
+# ---------------------------------------------------------------------------
+
+import json
+
+
+def _make_llm_response(response_text: str):
+    """Build an ollama chat response mock."""
+    mock_message = MagicMock()
+    mock_message.content = response_text
+    mock_response = MagicMock()
+    mock_response.message = mock_message
+    return mock_response
+
+
+def test_evidence_agent_llm_requirement_extraction(career_profile, job_description):
+    """When LLM is available, requirements should come from the LLM."""
+    llm_response = json.dumps([
+        {"requirement": "Python expertise", "category": "skill"},
+        {"requirement": "Distributed systems experience", "category": "skill"},
+        {"requirement": "Technical leadership", "category": "leadership"},
+    ])
+    mock_client = MagicMock()
+    # First call = requirement extraction, subsequent calls = evidence matching (one per requirement)
+    evidence_response = json.dumps([
+        {"evidence": "Led backend migration, cut deploy time 60%", "relevance_score": 5}
+    ])
+    mock_client.chat.side_effect = [
+        _make_llm_response(llm_response),
+        _make_llm_response(evidence_response),
+        _make_llm_response(evidence_response),
+        _make_llm_response(evidence_response),
+    ]
+
+    agent = EvidenceAgent(client=mock_client)
+    pack = agent.build_evidence_pack(career_profile, job_description)
+
+    assert len(pack.job_requirements) == 3
+    assert pack.job_requirements[0].requirement == "Python expertise"
+    assert pack.job_requirements[0].category == "skill"
+    assert pack.matched_evidence  # Should have evidence from LLM
+
+
+def test_evidence_agent_llm_evidence_matching(career_profile, job_description):
+    """LLM evidence matching should return EvidenceItems with relevance scores."""
+    req_response = json.dumps([{"requirement": "Python", "category": "skill"}])
+    evidence_response = json.dumps([
+        {"evidence": "Led backend migration in Python", "relevance_score": 5},
+        {"evidence": "Built data pipeline", "relevance_score": 3},
+    ])
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_llm_response(req_response),
+        _make_llm_response(evidence_response),
+    ]
+
+    agent = EvidenceAgent(client=mock_client)
+    pack = agent.build_evidence_pack(career_profile, job_description)
+
+    assert len(pack.matched_evidence) == 2
+    assert pack.matched_evidence[0].relevance_score == 5
+
+
+def test_evidence_agent_llm_returns_gaps_for_unmatched(career_profile):
+    """When LLM finds no evidence, the requirement should appear as a gap."""
+    from resume_refinery.models import JobDescription
+    job = JobDescription(raw_content="Required: Quantum computing", title="QC", company="QCo")
+
+    req_response = json.dumps([{"requirement": "Quantum computing", "category": "skill"}])
+    empty_evidence = json.dumps([])
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_llm_response(req_response),
+        _make_llm_response(empty_evidence),
+    ]
+
+    agent = EvidenceAgent(client=mock_client)
+    pack = agent.build_evidence_pack(career_profile, job)
+
+    assert "Quantum computing" in pack.gaps
+
+
+def test_evidence_agent_falls_back_on_llm_failure(career_profile, job_description):
+    """When LLM calls fail, keyword fallback should still produce results."""
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = Exception("Connection refused")
+
+    agent = EvidenceAgent(client=mock_client)
+    pack = agent.build_evidence_pack(career_profile, job_description)
+
+    # Should still get results from keyword fallback
+    assert pack.job_requirements
+    assert pack.matched_evidence or pack.gaps  # Either found evidence or identified gaps
+
+
+# ---------------------------------------------------------------------------
+# RepairAgent dedup and previous_suggestions
+# ---------------------------------------------------------------------------
+
+
+def test_repair_agent_deduplicate():
+    """_deduplicate should remove suggestions already in previous list."""
+    agent = RepairAgent()
+    current = ["Fix claim A", "Rewrite intro", "Add metrics"]
+    previous = ["Fix claim A", "add metrics"]  # case-insensitive dedup
+
+    result = agent._deduplicate(current, previous)
+
+    assert result == ["Rewrite intro"]
+
+
+def test_repair_agent_deduplicate_no_previous():
+    """With no previous suggestions, all current should be returned."""
+    agent = RepairAgent()
+    assert agent._deduplicate(["A", "B"], None) == ["A", "B"]
+    assert agent._deduplicate(["A", "B"], []) == ["A", "B"]
+
+
+def test_repair_documents_accepts_previous_suggestions(career_profile, voice_profile, job_description):
+    """repair_documents should accept and pass previous_suggestions without error."""
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "repaired"
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    docs = DocumentSet(cover_letter="old", resume="old", interview_guide="old")
+    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
+    truth = TruthfulnessResult(
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=DocumentTruthResult(pass_strict=True),
+        interview_guide=DocumentTruthResult(pass_strict=True),
+        suggestions=["Fix claim X", "Fix claim Y"],
+    )
+    context = _make_context()
+
+    agent.repair_documents(
+        docs, truth, career_profile, voice_profile, job_description, context,
+        previous_suggestions=["Fix claim X"],
+    )
+
+    feedback = mock_generator.generate_document.call_args.kwargs["feedback"]
+    # "Fix claim X" was already attempted — should appear in "previously attempted"
+    assert "previously attempted" in feedback.lower()
+    # "Fix claim Y" is new — should appear in suggestions
+    assert "Fix claim Y" in feedback
+
+
+def test_repair_voice_uses_per_doc_issues(career_profile, voice_profile, job_description):
+    """repair_voice should use per-doc issues when available."""
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "fixed"
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    voice_review = VoiceReviewResult(
+        overall_match="weak",
+        cover_letter_match="weak",
+        resume_match="strong",
+        interview_guide_match="strong",
+        cover_letter_assessment="Off-voice",
+        resume_assessment="Good",
+        interview_guide_assessment="Good",
+        specific_issues=["global issue"],
+        suggestions=["global suggestion"],
+        cover_letter_issues=["opener too formal"],
+        cover_letter_suggestions=["Use contractions in opener"],
+    )
+    context = _make_context()
+
+    agent.repair_voice(docs, voice_review, career_profile, voice_profile, job_description, context)
+
+    # Only cover_letter should be repaired (others are "strong")
+    assert docs.cover_letter == "fixed"
+    assert docs.resume == "r"
+    feedback = mock_generator.generate_document.call_args.kwargs["feedback"]
+    # Should use per-doc issues, not global
+    assert "opener too formal" in feedback
+    assert "Use contractions in opener" in feedback

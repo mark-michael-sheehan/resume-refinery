@@ -120,21 +120,21 @@ class FakeRepairAgent:
         self.voice_calls = 0
         self.ai_calls = 0
 
-    def repair_documents(self, docs, truth, career, voice, job, context, feedback=None):
+    def repair_documents(self, docs, truth, career, voice, job, context, feedback=None, previous_suggestions=None):
         self.calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
         docs.interview_guide = "interview_guide repaired"
         return docs
 
-    def repair_voice(self, docs, voice_review, career, voice, job, context, feedback=None):
+    def repair_voice(self, docs, voice_review, career, voice, job, context, feedback=None, previous_suggestions=None):
         self.voice_calls += 1
         docs.cover_letter = "cover_letter voice-fixed"
         docs.resume = "resume voice-fixed"
         docs.interview_guide = "interview_guide voice-fixed"
         return docs
 
-    def repair_ai_detection(self, docs, ai_review, career, voice, job, context, feedback=None):
+    def repair_ai_detection(self, docs, ai_review, career, voice, job, context, feedback=None, previous_suggestions=None):
         self.ai_calls += 1
         docs.cover_letter = "cover_letter ai-fixed"
         docs.resume = "resume ai-fixed"
@@ -186,7 +186,7 @@ def test_orchestrator_create_verifies_all_three_loops(tmp_path, monkeypatch, car
     assert repair.calls == 1
     assert repair.voice_calls == 1
     assert repair.ai_calls == 1
-    assert verification.truth_calls == 2
+    assert verification.truth_calls == 3  # 2 in loop + 1 post-repair recheck
     assert verification.voice_calls == 2
     assert verification.ai_calls == 2
     # Final reviews should reflect the passing second call
@@ -430,7 +430,7 @@ def test_max_passes_one_reviews_but_never_repairs(tmp_path, monkeypatch, career_
     )
 
     # Review ran once for each loop
-    assert verification.truth_calls == 1
+    assert verification.truth_calls == 2  # 1 in loop + 1 post-repair recheck
     assert verification.voice_calls == 1
     assert verification.ai_calls == 1
     # Repair ran once for each loop (review fails → repair → loop exhausted)
@@ -464,13 +464,13 @@ def test_independent_per_loop_max_passes(tmp_path, monkeypatch, career_profile, 
         max_truth_passes=0, max_voice_passes=3, max_ai_passes=1,
     )
 
-    assert verification.truth_calls == 0
+    assert verification.truth_calls == 1  # 0 in loop + 1 post-repair recheck
     assert verification.voice_calls == 3
     assert verification.ai_calls == 1
     assert repair.calls == 0        # truth skipped
     assert repair.voice_calls == 3   # 3 passes, all fail → 3 repairs
     assert repair.ai_calls == 1      # 1 pass, fails → 1 repair
-    assert result.truthfulness is None
+    assert result.truthfulness is not None  # post-repair recheck ran
 
 
 def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -494,7 +494,7 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
         max_truth_passes=4, max_voice_passes=4, max_ai_passes=4,
     )
 
-    assert verification.truth_calls == 4
+    assert verification.truth_calls == 5  # 4 in loop + 1 post-repair recheck
     assert verification.voice_calls == 4
     assert verification.ai_calls == 4
     assert repair.calls == 4
@@ -746,3 +746,57 @@ def test_progress_includes_review_summaries(tmp_path, monkeypatch, career_profil
     assert "Cover Letter:" in combined
     # AI summary: shows risk level
     assert "AI-detection risk:" in combined
+
+
+# ---------------------------------------------------------------------------
+# Post-repair truthfulness recheck
+# ---------------------------------------------------------------------------
+
+
+def test_post_repair_truth_recheck_runs(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """After all loops complete, a final truth recheck should run."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    messages: list[str] = []
+    verification = FakeVerificationAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=verification,
+        repair_agent=FakeRepairAgent(),
+    )
+
+    orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        progress=messages.append,
+    )
+
+    # Should include the final recheck message
+    assert any("final truthfulness recheck" in m.lower() for m in messages)
+    # truth_calls = 2 (loop) + 1 (recheck) = 3
+    assert verification.truth_calls == 3
+
+
+def test_post_repair_truth_recheck_skipped_when_nothing_ran(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """When max_passes=0 for all loops, no recheck should run."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    verification = NeverPassVerificationAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=verification,
+        repair_agent=FakeRepairAgent(),
+    )
+
+    result = orchestrator._verify_and_repair(
+        DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
+        career_profile, voice_profile, job_description.model_copy(),
+        orchestrator._build_context(career_profile, voice_profile, job_description),
+        max_truth_passes=0, max_voice_passes=0, max_ai_passes=0,
+    )
+
+    assert verification.truth_calls == 0
+    assert result.truthfulness is None
