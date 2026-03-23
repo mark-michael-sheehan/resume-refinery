@@ -243,7 +243,7 @@ class ResumeRefineryOrchestrator:
                 logging.warning("Truthfulness review failed (%s); skipping repair loop.", exc)
                 self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
                 break
-            self._progress(progress, self._summarise_truth(truth))
+            self._progress(progress, self._summarise_truth(truth, previous_truth_suggestions))
             if truth.all_supported:
                 break
             self._progress(progress, "Repairing unsupported claims...")
@@ -264,7 +264,7 @@ class ResumeRefineryOrchestrator:
                 logging.warning("Voice review failed (%s); skipping repair loop.", exc)
                 self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
                 break
-            self._progress(progress, self._summarise_voice(voice_result))
+            self._progress(progress, self._summarise_voice(voice_result, previous_voice_suggestions))
             if voice_result.overall_match == "strong":
                 break
             self._progress(progress, "Repairing voice-match issues...")
@@ -285,7 +285,7 @@ class ResumeRefineryOrchestrator:
                 logging.warning("AI-detection review failed (%s); skipping repair loop.", exc)
                 self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
                 break
-            self._progress(progress, self._summarise_ai(ai_result))
+            self._progress(progress, self._summarise_ai(ai_result, previous_ai_suggestions))
             # Exit when no document has flagged phrases, regardless of aggregate risk_level
             has_flags = (
                 ai_result.cover_letter_flags
@@ -333,7 +333,7 @@ class ResumeRefineryOrchestrator:
     # Review-result summaries emitted via the progress callback
     # ------------------------------------------------------------------
 
-    def _summarise_truth(self, truth: TruthfulnessResult) -> str:
+    def _summarise_truth(self, truth: TruthfulnessResult, previous_suggestions: list[str] | None = None) -> str:
         if truth.all_supported:
             return "[green]Truthfulness: ALL SUPPORTED[/green]"
         parts = ["[red]Truthfulness: UNSUPPORTED CLAIMS DETECTED[/red]"]
@@ -356,9 +356,13 @@ class ResumeRefineryOrchestrator:
             parts.append("  Suggestions:")
             for s in truth.suggestions:
                 parts.append(f"    • {s}")
+        if previous_suggestions:
+            parts.append("  Previously attempted:")
+            for s in previous_suggestions:
+                parts.append(f"    ◦ {s}")
         return "\n".join(parts)
 
-    def _summarise_voice(self, voice: VoiceReviewResult) -> str:
+    def _summarise_voice(self, voice: VoiceReviewResult, previous_suggestions: list[str] | None = None) -> str:
         color = {"strong": "green", "moderate": "yellow", "weak": "red"}[voice.overall_match]
         parts = [f"[{color}]Voice match: {voice.overall_match.upper()}[/{color}]"]
         per_doc_issues: dict[str, list[str]] = {
@@ -387,9 +391,13 @@ class ResumeRefineryOrchestrator:
             if suggestions:
                 for s in suggestions:
                     parts.append(f"    → {s}")
+        if previous_suggestions:
+            parts.append("  Previously attempted:")
+            for s in previous_suggestions:
+                parts.append(f"    ◦ {s}")
         return "\n".join(parts)
 
-    def _summarise_ai(self, ai: AIDetectionResult) -> str:
+    def _summarise_ai(self, ai: AIDetectionResult, previous_suggestions: list[str] | None = None) -> str:
         color = {"low": "green", "medium": "yellow", "high": "red"}[ai.risk_level]
         parts = [f"[{color}]AI-detection risk: {ai.risk_level.upper()}[/{color}]"]
         for label, flags in [("Cover Letter", ai.cover_letter_flags),
@@ -403,6 +411,10 @@ class ResumeRefineryOrchestrator:
             parts.append("  Suggestions:")
             for s in ai.suggestions:
                 parts.append(f"    • {s}")
+        if previous_suggestions:
+            parts.append("  Previously attempted:")
+            for s in previous_suggestions:
+                parts.append(f"    ◦ {s}")
         return "\n".join(parts)
 
     def _doc_labels(self) -> dict[DocumentKey, str]:
