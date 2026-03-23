@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from .exporters import export_document_set
 from .models import (
+    AIDetectionResult,
     CareerProfile,
     DocumentKey,
     DocumentSet,
@@ -17,7 +18,9 @@ from .models import (
     OrchestrationResult,
     ReviewBundle,
     Session,
+    TruthfulnessResult,
     VoiceProfile,
+    VoiceReviewResult,
     JobDescription,
 )
 from .session import SessionStore
@@ -235,6 +238,7 @@ class ResumeRefineryOrchestrator:
                 logging.warning("Truthfulness review failed (%s); skipping repair loop.", exc)
                 self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
                 break
+            self._progress(progress, self._summarise_truth(truth))
             if truth.all_supported:
                 break
             self._progress(progress, "Repairing unsupported claims...")
@@ -250,6 +254,7 @@ class ResumeRefineryOrchestrator:
                 logging.warning("Voice review failed (%s); skipping repair loop.", exc)
                 self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
                 break
+            self._progress(progress, self._summarise_voice(voice_result))
             if voice_result.overall_match == "strong":
                 break
             self._progress(progress, "Repairing voice-match issues...")
@@ -265,6 +270,7 @@ class ResumeRefineryOrchestrator:
                 logging.warning("AI-detection review failed (%s); skipping repair loop.", exc)
                 self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
                 break
+            self._progress(progress, self._summarise_ai(ai_result))
             # Exit when no document has flagged phrases, regardless of aggregate risk_level
             has_flags = (
                 ai_result.cover_letter_flags
@@ -289,6 +295,55 @@ class ResumeRefineryOrchestrator:
     def _progress(self, callback: ProgressCallback | None, message: str) -> None:
         if callback is not None:
             callback(message)
+
+    # ------------------------------------------------------------------
+    # Review-result summaries emitted via the progress callback
+    # ------------------------------------------------------------------
+
+    def _summarise_truth(self, truth: TruthfulnessResult) -> str:
+        if truth.all_supported:
+            return "[green]Truthfulness: ALL SUPPORTED[/green]"
+        parts = ["[red]Truthfulness: UNSUPPORTED CLAIMS DETECTED[/red]"]
+        for label, doc in [("Cover Letter", truth.cover_letter),
+                           ("Resume", truth.resume),
+                           ("Interview Guide", truth.interview_guide)]:
+            if not doc.pass_strict:
+                claims = doc.unsupported_claims
+                if claims:
+                    parts.append(f"  {label}: {len(claims)} unsupported — " + "; ".join(claims[:4]))
+                else:
+                    parts.append(f"  {label}: strict check failed (no specific claims listed)")
+        if truth.suggestions:
+            parts.append("  Suggestions: " + "; ".join(truth.suggestions[:3]))
+        return "\n".join(parts)
+
+    def _summarise_voice(self, voice: VoiceReviewResult) -> str:
+        color = {"strong": "green", "moderate": "yellow", "weak": "red"}[voice.overall_match]
+        parts = [f"[{color}]Voice match: {voice.overall_match.upper()}[/{color}]"]
+        for label, match, assessment in [
+            ("Cover Letter", voice.cover_letter_match, voice.cover_letter_assessment),
+            ("Resume", voice.resume_match, voice.resume_assessment),
+            ("Interview Guide", voice.interview_guide_match, voice.interview_guide_assessment),
+        ]:
+            mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
+            parts.append(f"  {label}: [{mc}]{match}[/{mc}] — {assessment[:120]}")
+        if voice.specific_issues:
+            parts.append("  Issues: " + "; ".join(voice.specific_issues[:4]))
+        if voice.suggestions:
+            parts.append("  Suggestions: " + "; ".join(voice.suggestions[:3]))
+        return "\n".join(parts)
+
+    def _summarise_ai(self, ai: AIDetectionResult) -> str:
+        color = {"low": "green", "medium": "yellow", "high": "red"}[ai.risk_level]
+        parts = [f"[{color}]AI-detection risk: {ai.risk_level.upper()}[/{color}]"]
+        for label, flags in [("Cover Letter", ai.cover_letter_flags),
+                             ("Resume", ai.resume_flags),
+                             ("Interview Guide", ai.interview_guide_flags)]:
+            if flags:
+                parts.append(f"  {label}: " + "; ".join(f'"{f}"' for f in flags[:4]))
+        if ai.suggestions:
+            parts.append("  Suggestions: " + "; ".join(ai.suggestions[:3]))
+        return "\n".join(parts)
 
     def _doc_labels(self) -> dict[DocumentKey, str]:
         return {

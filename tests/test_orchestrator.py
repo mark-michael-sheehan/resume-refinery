@@ -713,3 +713,36 @@ def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, car
     assert verification.ai_calls == 1
     assert repair.ai_calls == 0
     assert result.ai_detection.risk_level == "medium"  # preserved as-is
+
+
+# ---------------------------------------------------------------------------
+# Progress callback receives review summaries after each review
+# ---------------------------------------------------------------------------
+
+
+def test_progress_includes_review_summaries(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Progress messages should contain review result details, not just status labels."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    messages: list[str] = []
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=FakeVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        progress=messages.append,
+    )
+
+    combined = "\n".join(messages)
+    # Truthfulness summary: first call fails, shows unsupported claim detail
+    assert "UNSUPPORTED CLAIMS" in combined or "ALL SUPPORTED" in combined
+    # Voice summary: shows per-doc match levels
+    assert "Voice match:" in combined
+    assert "Cover Letter:" in combined
+    # AI summary: shows risk level
+    assert "AI-detection risk:" in combined
