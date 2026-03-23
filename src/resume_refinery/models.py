@@ -129,6 +129,9 @@ class DocumentSet(BaseModel):
 
 class VoiceReviewResult(BaseModel):
     overall_match: Literal["strong", "moderate", "weak"]
+    cover_letter_match: Literal["strong", "moderate", "weak"] = "moderate"
+    resume_match: Literal["strong", "moderate", "weak"] = "moderate"
+    interview_guide_match: Literal["strong", "moderate", "weak"] = "moderate"
     cover_letter_assessment: str
     resume_assessment: str
     interview_guide_assessment: str

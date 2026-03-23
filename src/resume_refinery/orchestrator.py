@@ -265,7 +265,13 @@ class ResumeRefineryOrchestrator:
                 logging.warning("AI-detection review failed (%s); skipping repair loop.", exc)
                 self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
                 break
-            if ai_result.risk_level == "low":
+            # Exit when no document has flagged phrases, regardless of aggregate risk_level
+            has_flags = (
+                ai_result.cover_letter_flags
+                or ai_result.resume_flags
+                or ai_result.interview_guide_flags
+            )
+            if not has_flags:
                 break
             self._progress(progress, "Repairing AI-flagged content...")
             self.repair_agent.repair_ai_detection(docs, ai_result, career, voice, job, context, feedback=feedback)

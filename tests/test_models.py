@@ -63,6 +63,46 @@ def test_voice_review_valid_literals(voice_review):
     assert voice_review.overall_match in ("strong", "moderate", "weak")
 
 
+def test_voice_review_per_doc_match_defaults():
+    """Per-doc match fields default to 'moderate' when not explicitly set."""
+    vr = VoiceReviewResult(
+        overall_match="strong",
+        cover_letter_assessment="Good",
+        resume_assessment="Good",
+        interview_guide_assessment="Good",
+    )
+    assert vr.cover_letter_match == "moderate"
+    assert vr.resume_match == "moderate"
+    assert vr.interview_guide_match == "moderate"
+
+
+def test_voice_review_per_doc_match_explicit():
+    """Per-doc match fields can be set explicitly."""
+    vr = VoiceReviewResult(
+        overall_match="weak",
+        cover_letter_match="strong",
+        resume_match="weak",
+        interview_guide_match="moderate",
+        cover_letter_assessment="On-voice",
+        resume_assessment="Off-voice",
+        interview_guide_assessment="Okay",
+    )
+    assert vr.cover_letter_match == "strong"
+    assert vr.resume_match == "weak"
+    assert vr.interview_guide_match == "moderate"
+
+
+def test_voice_review_per_doc_match_invalid_literal():
+    with pytest.raises(ValidationError):
+        VoiceReviewResult(
+            overall_match="strong",
+            cover_letter_match="excellent",  # invalid
+            cover_letter_assessment="",
+            resume_assessment="",
+            interview_guide_assessment="",
+        )
+
+
 def test_voice_review_invalid_literal():
     with pytest.raises(ValidationError):
         VoiceReviewResult(

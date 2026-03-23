@@ -665,3 +665,51 @@ def test_progress_callback_receives_messages(tmp_path, monkeypatch, career_profi
     assert len(messages) > 0
     assert any("evidence" in m.lower() for m in messages)
     assert any("voice" in m.lower() for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# AI loop exits on no flags even when risk_level is elevated
+# ---------------------------------------------------------------------------
+
+
+class MediumRiskNoFlagsVerificationAgent(AlwaysPassVerificationAgent):
+    """AI detection returns elevated risk but no per-doc flags."""
+
+    def __init__(self):
+        self.ai_calls = 0
+
+    def review_ai_detection(self, docs):
+        self.ai_calls += 1
+        return AIDetectionResult(
+            risk_level="medium",
+            cover_letter_flags=[],
+            resume_flags=[],
+            interview_guide_flags=[],
+        )
+
+
+def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Even when risk_level is 'medium', the loop should exit if no docs have flags."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    verification = MediumRiskNoFlagsVerificationAgent()
+    repair = FakeRepairAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=verification,
+        repair_agent=repair,
+    )
+
+    result = orchestrator._verify_and_repair(
+        DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
+        career_profile, voice_profile, job_description.model_copy(),
+        orchestrator._build_context(career_profile, voice_profile, job_description),
+        max_ai_passes=3,
+    )
+
+    # Should review once and exit — no flags means no repair needed
+    assert verification.ai_calls == 1
+    assert repair.ai_calls == 0
+    assert result.ai_detection.risk_level == "medium"  # preserved as-is

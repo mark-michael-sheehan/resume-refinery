@@ -329,3 +329,31 @@ def test_review_ai_detection_skips_missing_docs(mock_client_cls):
     assert result.resume_flags == []
     assert "generic phrase" in result.interview_guide_flags
 
+
+# ---------------------------------------------------------------------------
+# Voice review: per-doc match levels are stored
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_voice_review_stores_per_doc_match(mock_client_cls, document_set, voice_profile):
+    """Per-doc overall_match values from the LLM are stored in the result."""
+    strong = json.dumps({"overall_match": "strong", "assessment": "On-voice", "issues": [], "suggestions": []})
+    weak = json.dumps({"overall_match": "weak", "assessment": "Off-voice", "issues": [], "suggestions": []})
+    moderate = json.dumps({"overall_match": "moderate", "assessment": "Okay", "issues": [], "suggestions": []})
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_mock_response(strong),    # cover letter
+        _make_mock_response(weak),      # resume
+        _make_mock_response(moderate),  # interview guide
+    ]
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_voice(document_set, voice_profile)
+
+    assert result.cover_letter_match == "strong"
+    assert result.resume_match == "weak"
+    assert result.interview_guide_match == "moderate"
+    assert result.overall_match == "weak"  # worst-of aggregation
+

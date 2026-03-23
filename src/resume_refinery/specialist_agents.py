@@ -354,16 +354,24 @@ class RepairAgent:
 
     def _feedback_for_doc(self, key: DocumentKey, truth: TruthfulnessResult, feedback: str | None) -> str:
         if key == "cover_letter":
-            claims = truth.cover_letter.unsupported_claims
+            doc_truth = truth.cover_letter
         elif key == "resume":
-            claims = truth.resume.unsupported_claims
+            doc_truth = truth.resume
         else:
-            claims = truth.interview_guide.unsupported_claims
+            doc_truth = truth.interview_guide
         parts = []
         if feedback:
             parts.append(feedback)
-        if claims:
-            parts.append("Unsupported claims to remove or directly evidence:\n" + "\n".join(f"- {claim}" for claim in claims[:8]))
+        if doc_truth.unsupported_claims:
+            parts.append("Unsupported claims to remove or directly evidence:\n" + "\n".join(f"- {claim}" for claim in doc_truth.unsupported_claims[:8]))
+        elif not doc_truth.pass_strict:
+            # Strict check failed but no specific claims listed — give explicit guidance
+            parts.append("The truthfulness check failed but no specific unsupported claims were identified. "
+                         "Review every claim in the document and ensure each one is directly supported by "
+                         "concrete evidence from the career profile. Remove or rephrase any statements that "
+                         "embellish, generalize, or infer beyond what the evidence supports.")
+        if doc_truth.evidence_examples:
+            parts.append("Evidence examples to reference:\n" + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8]))
         parts.append("Rewrite strictly using only evidence from the career profile and evidence pack.")
         return "\n\n".join(parts)
 
@@ -377,13 +385,20 @@ class RepairAgent:
         context: DraftingContext,
         feedback: str | None = None,
     ) -> DocumentSet:
-        """Re-generate documents flagged by the voice-match review."""
+        """Re-generate only documents that don't already have a 'strong' voice match."""
         doc_assessments: dict[DocumentKey, str] = {
             "cover_letter": voice_review.cover_letter_assessment,
             "resume": voice_review.resume_assessment,
             "interview_guide": voice_review.interview_guide_assessment,
         }
+        doc_matches: dict[DocumentKey, str] = {
+            "cover_letter": voice_review.cover_letter_match,
+            "resume": voice_review.resume_match,
+            "interview_guide": voice_review.interview_guide_match,
+        }
         for key in ("cover_letter", "resume", "interview_guide"):
+            if doc_matches[key] == "strong":
+                continue  # already on-voice — skip
             previous = docs.get(key)
             if not previous:
                 continue

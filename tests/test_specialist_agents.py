@@ -397,3 +397,76 @@ def test_repair_agent_repair_ai_no_flags(career_profile, voice_profile, job_desc
     agent.repair_ai_detection(docs, ai_review, career_profile, voice_profile, job_description, context)
 
     assert mock_generator.generate_document.call_count == 0
+
+
+def test_repair_voice_skips_strong_docs(career_profile, voice_profile, job_description):
+    """When a doc's per-doc match is 'strong', repair_voice should skip it."""
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "voice-fixed"
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    voice_review = VoiceReviewResult(
+        overall_match="moderate",
+        cover_letter_match="strong",      # should be skipped
+        resume_match="weak",              # should be repaired
+        interview_guide_match="strong",   # should be skipped
+        cover_letter_assessment="On-voice",
+        resume_assessment="Off-voice",
+        interview_guide_assessment="On-voice",
+        specific_issues=["too formal"],
+        suggestions=["Use contractions"],
+    )
+    context = _make_context()
+
+    agent.repair_voice(docs, voice_review, career_profile, voice_profile, job_description, context)
+
+    # Only resume regenerated
+    assert docs.cover_letter == "cl"  # unchanged (strong)
+    assert docs.resume == "voice-fixed"
+    assert docs.interview_guide == "ig"  # unchanged (strong)
+    assert mock_generator.generate_document.call_count == 1
+
+
+def test_feedback_for_doc_empty_claims_but_fails(career_profile, voice_profile, job_description):
+    """When pass_strict=False but unsupported_claims is empty, feedback should still be specific."""
+    mock_generator = MagicMock()
+    mock_generator.generate_document.return_value = "repaired"
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=[], evidence_examples=["Led migration project"])
+    truth = TruthfulnessResult(
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=DocumentTruthResult(pass_strict=True),
+        interview_guide=DocumentTruthResult(pass_strict=True),
+    )
+
+    feedback = agent._feedback_for_doc("cover_letter", truth, None)
+
+    # Should contain specific guidance even without unsupported_claims
+    assert "truthfulness check failed" in feedback.lower()
+    assert "Led migration project" in feedback  # evidence_examples surfaced
+    assert "Rewrite strictly" in feedback
+
+
+def test_feedback_for_doc_with_claims(career_profile, voice_profile, job_description):
+    """When unsupported_claims are present, they should appear in feedback."""
+    mock_generator = MagicMock()
+    drafting = DraftingAgent(generator=mock_generator)
+    agent = RepairAgent(drafting_agent=drafting)
+
+    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["Increased revenue by 500%"])
+    truth = TruthfulnessResult(
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=DocumentTruthResult(pass_strict=True),
+        interview_guide=DocumentTruthResult(pass_strict=True),
+    )
+
+    feedback = agent._feedback_for_doc("cover_letter", truth, None)
+
+    assert "Increased revenue by 500%" in feedback
+    assert "truthfulness check failed" not in feedback.lower()  # uses claims path, not empty-claims path

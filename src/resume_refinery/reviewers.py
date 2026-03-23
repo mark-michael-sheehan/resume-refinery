@@ -141,10 +141,12 @@ class DocumentReviewer:
         all_issues: list[str] = []
         all_suggestions: list[str] = []
         match_scores: list[str] = []
+        per_doc_match: dict[str, str] = {}
 
         for doc_type, content in doc_map:
             if not content:
                 assessments[doc_type] = "(not generated)"
+                per_doc_match[doc_type] = "strong"  # nothing to review
                 continue
             user_msg = VOICE_REVIEW_DOC_USER_TEMPLATE.format(
                 voice_profile=voice.raw_content,
@@ -156,8 +158,9 @@ class DocumentReviewer:
             assessments[doc_type] = data.get("assessment", "")
             all_issues.extend(data.get("issues", []))
             all_suggestions.extend(data.get("suggestions", []))
-            if m := data.get("overall_match"):
-                match_scores.append(m)
+            doc_match = data.get("overall_match", "moderate")
+            per_doc_match[doc_type] = doc_match
+            match_scores.append(doc_match)
 
         overall_match = (
             min(match_scores, key=lambda m: _MATCH_RANK.get(m, 2))
@@ -166,6 +169,9 @@ class DocumentReviewer:
 
         return VoiceReviewResult(
             overall_match=overall_match,
+            cover_letter_match=per_doc_match.get("Cover Letter", "moderate"),
+            resume_match=per_doc_match.get("Resume", "moderate"),
+            interview_guide_match=per_doc_match.get("Interview Guide", "moderate"),
             cover_letter_assessment=assessments.get("Cover Letter", "(not reviewed)"),
             resume_assessment=assessments.get("Resume", "(not reviewed)"),
             interview_guide_assessment=assessments.get("Interview Guide", "(not reviewed)"),
