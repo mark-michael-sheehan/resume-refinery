@@ -623,6 +623,13 @@ class RepairAgent:
             "AI-detection flags. Never sacrifice truthfulness to improve voice or AI-detection. "
             "Keep all supported factual content intact."
         )
+        parts.append(
+            "MINIMAL EDITS ONLY: Make the smallest changes necessary to address the feedback "
+            "above. Preserve all text that is not specifically flagged. Do not restructure "
+            "paragraphs, rephrase sentences, or rewrite sections that already pass all checks. "
+            "If a flagged phrase can be fixed by changing a few words, do that — do not rewrite "
+            "the surrounding paragraph."
+        )
         return parts
 
     def repair_documents(

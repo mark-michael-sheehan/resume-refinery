@@ -50,6 +50,15 @@ Requirements:
   e.g. "I haven't managed Kafka at 50B events/month, but I scaled our pipeline from 1M \
   to 10M events/day using similar distributed patterns." Frame the learning curve as an \
   asset, not a liability.
+- Avoid hollow superlatives (passionate, dynamic, results-driven), generic claims \
+  without specifics, over-use of em-dashes, and hedging language. Every sentence must be \
+  specific enough that it could only describe this applicant for this role.
+- Mirror the applicant's voice profile exactly — use their characteristic phrases, \
+  sentence rhythms, and tone. Do not default to formal corporate writing unless the \
+  voice profile explicitly calls for it.
+- Before outputting, self-check: (1) every claim is explicitly supported by the career \
+  profile, (2) the tone matches the voice profile, (3) no phrase sounds generic or \
+  AI-generated. Fix any violations before returning.
 - Output Markdown only — no preamble, no explanation
 """
 
@@ -74,6 +83,15 @@ Requirements:
   briefly pivot to a concrete transferable skill with evidence — e.g. "While I haven't \
   worked directly with X, my experience with Y provides a strong foundation." Frame the \
   learning curve as an asset, not a liability.
+- Avoid hollow superlatives (passionate, dynamic, results-driven), generic claims \
+  without specifics, over-use of em-dashes, and hedging language. Every bullet point \
+  must be specific enough that it could only describe this applicant.
+- Mirror the applicant's voice profile exactly — use their characteristic phrases \
+  and tone. Do not default to formal corporate writing unless the voice profile \
+  explicitly calls for it.
+- Before outputting, self-check: (1) every claim is explicitly supported by the career \
+  profile, (2) the tone matches the voice profile, (3) no phrase sounds generic or \
+  AI-generated. Fix any violations before returning.
 - Output Markdown only — no preamble, no explanation
 """
 
@@ -89,6 +107,8 @@ Requirements:
   with evidence — do NOT suggest fabricating experience
 - 5 strong questions for the applicant to ask the interviewer
 - Every claim must be explicitly grounded in the career profile; do not infer missing facts
+- Before outputting, self-check: (1) every claim is explicitly supported by the career \
+  profile, (2) no phrase sounds generic or AI-generated. Fix any violations before returning.
 - Output Markdown only — no preamble, no explanation
 """
 
