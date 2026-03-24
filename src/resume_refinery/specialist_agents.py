@@ -448,6 +448,163 @@ class RepairAgent:
     def __init__(self, drafting_agent: DraftingAgent | None = None) -> None:
         self.drafting_agent = drafting_agent or DraftingAgent()
 
+    def repair_unified(
+        self,
+        docs: DocumentSet,
+        truth: TruthfulnessResult | None,
+        voice_review: VoiceReviewResult | None,
+        ai_review: AIDetectionResult | None,
+        career: CareerProfile,
+        voice: VoiceProfile,
+        job: JobDescription,
+        context: DraftingContext,
+        feedback: str | None = None,
+        previous_suggestions: list[str] | None = None,
+    ) -> DocumentSet:
+        """Unified repair: combine feedback from all reviewers and repair each doc once."""
+        for key in ("cover_letter", "resume", "interview_guide"):
+            parts = self._build_unified_feedback(
+                key, truth, voice_review, ai_review, feedback, previous_suggestions,
+            )
+            if not parts:
+                continue
+            previous = docs.get(key)
+            if not previous:
+                continue
+            repair_feedback = "\n\n".join(parts)
+            regenerated = self.drafting_agent.generate_document(
+                key, career, voice, job, context,
+                feedback=repair_feedback, previous_version=previous,
+            )
+            docs.set(key, regenerated)
+        return docs
+
+    def _build_unified_feedback(
+        self,
+        key: DocumentKey,
+        truth: TruthfulnessResult | None,
+        voice_review: VoiceReviewResult | None,
+        ai_review: AIDetectionResult | None,
+        feedback: str | None,
+        previous_suggestions: list[str] | None,
+    ) -> list[str]:
+        parts: list[str] = []
+        has_issues = False
+
+        if feedback:
+            parts.append(feedback)
+
+        # --- Truthfulness ---
+        if truth:
+            truth_map = {
+                "cover_letter": truth.cover_letter,
+                "resume": truth.resume,
+                "interview_guide": truth.interview_guide,
+            }
+            doc_truth = truth_map[key]
+            if not doc_truth.pass_strict:
+                has_issues = True
+                if doc_truth.unsupported_claims:
+                    parts.append(
+                        "TRUTHFULNESS — Unsupported claims to remove or directly evidence:\n"
+                        + "\n".join(f"- {c}" for c in doc_truth.unsupported_claims[:8])
+                    )
+                else:
+                    parts.append(
+                        "TRUTHFULNESS — The truthfulness check failed. Review every claim "
+                        "and ensure each is directly supported by evidence from the career profile."
+                    )
+                if doc_truth.evidence_examples:
+                    parts.append(
+                        "Evidence examples to reference:\n"
+                        + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8])
+                    )
+                if truth.suggestions:
+                    new = self._deduplicate(truth.suggestions, previous_suggestions)
+                    if new:
+                        parts.append(
+                            "Truthfulness suggestions:\n"
+                            + "\n".join(f"- {s}" for s in new[:8])
+                        )
+
+        # --- Voice ---
+        if voice_review:
+            voice_matches: dict[DocumentKey, str] = {
+                "cover_letter": voice_review.cover_letter_match,
+                "resume": voice_review.resume_match,
+                "interview_guide": voice_review.interview_guide_match,
+            }
+            if voice_matches[key] != "strong":
+                has_issues = True
+                assessments: dict[DocumentKey, str] = {
+                    "cover_letter": voice_review.cover_letter_assessment,
+                    "resume": voice_review.resume_assessment,
+                    "interview_guide": voice_review.interview_guide_assessment,
+                }
+                doc_issues_map: dict[DocumentKey, list[str]] = {
+                    "cover_letter": voice_review.cover_letter_issues,
+                    "resume": voice_review.resume_issues,
+                    "interview_guide": voice_review.interview_guide_issues,
+                }
+                doc_suggestions_map: dict[DocumentKey, list[str]] = {
+                    "cover_letter": voice_review.cover_letter_suggestions,
+                    "resume": voice_review.resume_suggestions,
+                    "interview_guide": voice_review.interview_guide_suggestions,
+                }
+                parts.append(f"VOICE — Assessment: {assessments[key]}")
+                issues = doc_issues_map[key] or voice_review.specific_issues
+                if issues:
+                    parts.append(
+                        "Voice issues to fix:\n"
+                        + "\n".join(f"- {i}" for i in issues[:8])
+                    )
+                suggestions = doc_suggestions_map[key] or voice_review.suggestions
+                if suggestions:
+                    new = self._deduplicate(suggestions, previous_suggestions)
+                    if new:
+                        parts.append(
+                            "Voice suggestions:\n"
+                            + "\n".join(f"- {s}" for s in new[:8])
+                        )
+
+        # --- AI detection ---
+        if ai_review:
+            flag_map: dict[DocumentKey, list[str]] = {
+                "cover_letter": ai_review.cover_letter_flags,
+                "resume": ai_review.resume_flags,
+                "interview_guide": ai_review.interview_guide_flags,
+            }
+            flags = flag_map[key]
+            if flags:
+                has_issues = True
+                parts.append(
+                    "AI DETECTION — Flagged phrases:\n"
+                    + "\n".join(f'- "{f}"' for f in flags[:8])
+                )
+                if ai_review.suggestions:
+                    new = self._deduplicate(ai_review.suggestions, previous_suggestions)
+                    if new:
+                        parts.append(
+                            "AI-detection suggestions:\n"
+                            + "\n".join(f"- {s}" for s in new[:8])
+                        )
+
+        if not has_issues:
+            return []
+
+        if previous_suggestions:
+            parts.append(
+                "Previously attempted suggestions (already tried — try a different approach):\n"
+                + "\n".join(f"- {s}" for s in previous_suggestions[:12])
+            )
+
+        parts.append(
+            "Rewrite using only evidence from the career profile. "
+            "Match the voice profile. Avoid generic AI-sounding phrases. "
+            "Keep all factual content intact."
+        )
+        return parts
+
     def repair_documents(
         self,
         docs: DocumentSet,

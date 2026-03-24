@@ -28,9 +28,7 @@ from .specialist_agents import DraftingAgent, EvidenceAgent, RepairAgent, Verifi
 
 load_dotenv()
 
-MAX_TRUTH_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_TRUTH_PASSES", "2"))
-MAX_VOICE_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_VOICE_PASSES", "2"))
-MAX_AI_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_AI_PASSES", "2"))
+MAX_REPAIR_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_REPAIR_PASSES", "2"))
 
 ProgressCallback = Callable[[str], None]
 StreamCallback = Callable[[str], None]
@@ -222,98 +220,83 @@ class ResumeRefineryOrchestrator:
         *,
         feedback: str | None = None,
         progress: ProgressCallback | None = None,
-        max_truth_passes: int = MAX_TRUTH_PASSES,
-        max_voice_passes: int = MAX_VOICE_PASSES,
-        max_ai_passes: int = MAX_AI_PASSES,
+        max_passes: int = MAX_REPAIR_PASSES,
     ) -> ReviewBundle:
         import logging
 
-        # Track suggestions from previous passes to avoid repeating the same fixes
         previous_truth_suggestions: list[str] = []
         previous_voice_suggestions: list[str] = []
         previous_ai_suggestions: list[str] = []
 
-        # --- Truthfulness loop ---
         truth = None
-        for _ in range(max_truth_passes):
-            self._progress(progress, "Running strict truthfulness review...")
+        voice_result = None
+        ai_result = None
+
+        for pass_num in range(max_passes):
+            self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
+
+            # --- Run all three reviews ---
             try:
                 truth = self.verification_agent.review_truthfulness(docs, career)
             except Exception as exc:
-                logging.warning("Truthfulness review failed (%s); skipping repair loop.", exc)
+                logging.warning("Truthfulness review failed (%s)", exc)
                 self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
-                break
-            self._progress(progress, self._summarise_truth(truth, previous_truth_suggestions))
-            if truth.all_supported:
-                break
-            self._progress(progress, "Repairing unsupported claims...")
-            self.repair_agent.repair_documents(
-                docs, truth, career, voice, job, context,
-                feedback=feedback,
-                previous_suggestions=previous_truth_suggestions,
-            )
-            previous_truth_suggestions.extend(truth.suggestions)
+                truth = None
 
-        # --- Voice-match loop ---
-        voice_result = None
-        for _ in range(max_voice_passes):
-            self._progress(progress, "Running voice-match review...")
             try:
                 voice_result = self.verification_agent.review_voice(docs, voice)
             except Exception as exc:
-                logging.warning("Voice review failed (%s); skipping repair loop.", exc)
+                logging.warning("Voice review failed (%s)", exc)
                 self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
-                break
-            self._progress(progress, self._summarise_voice(voice_result, previous_voice_suggestions))
-            if voice_result.overall_match == "strong":
-                break
-            self._progress(progress, "Repairing voice-match issues...")
-            self.repair_agent.repair_voice(
-                docs, voice_result, career, voice, job, context,
-                feedback=feedback,
-                previous_suggestions=previous_voice_suggestions,
-            )
-            previous_voice_suggestions.extend(voice_result.suggestions)
+                voice_result = None
 
-        # --- AI-detection loop ---
-        ai_result = None
-        for _ in range(max_ai_passes):
-            self._progress(progress, "Running AI-detection review...")
             try:
                 ai_result = self.verification_agent.review_ai_detection(docs)
             except Exception as exc:
-                logging.warning("AI-detection review failed (%s); skipping repair loop.", exc)
+                logging.warning("AI-detection review failed (%s)", exc)
                 self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
-                break
-            self._progress(progress, self._summarise_ai(ai_result, previous_ai_suggestions))
-            # Exit when no document has flagged phrases, regardless of aggregate risk_level
-            has_flags = (
-                ai_result.cover_letter_flags
-                or ai_result.resume_flags
-                or ai_result.interview_guide_flags
-            )
-            if not has_flags:
-                break
-            self._progress(progress, "Repairing AI-flagged content...")
-            self.repair_agent.repair_ai_detection(
-                docs, ai_result, career, voice, job, context,
-                feedback=feedback,
-                previous_suggestions=previous_ai_suggestions,
-            )
-            previous_ai_suggestions.extend(ai_result.suggestions)
+                ai_result = None
 
-        # --- Post-repair truthfulness recheck ---
-        # Voice and AI repairs may introduce fabricated claims;
-        # re-verify truthfulness on the final documents.
-        if truth and not truth.all_supported or (voice_result or ai_result):
-            self._progress(progress, "Running final truthfulness recheck...")
-            try:
-                final_truth = self.verification_agent.review_truthfulness(docs, career)
-                self._progress(progress, self._summarise_truth(final_truth))
-                truth = final_truth
-            except Exception as exc:
-                logging.warning("Final truth recheck failed (%s); keeping previous result.", exc)
-                self._progress(progress, f"[yellow]Final truth recheck skipped: {exc}[/yellow]")
+            # --- Summarise all three ---
+            if truth:
+                self._progress(progress, self._summarise_truth(truth, previous_truth_suggestions))
+            if voice_result:
+                self._progress(progress, self._summarise_voice(voice_result, previous_voice_suggestions))
+            if ai_result:
+                self._progress(progress, self._summarise_ai(ai_result, previous_ai_suggestions))
+
+            # --- Check if all passing ---
+            truth_ok = truth is None or truth.all_supported
+            voice_ok = voice_result is None or voice_result.overall_match == "strong"
+            ai_ok = ai_result is None or not any([
+                ai_result.cover_letter_flags,
+                ai_result.resume_flags,
+                ai_result.interview_guide_flags,
+            ])
+
+            if truth_ok and voice_ok and ai_ok:
+                break
+
+            # --- Unified repair ---
+            self._progress(progress, "Repairing documents...")
+            self.repair_agent.repair_unified(
+                docs, truth, voice_result, ai_result,
+                career, voice, job, context,
+                feedback=feedback,
+                previous_suggestions=(
+                    previous_truth_suggestions
+                    + previous_voice_suggestions
+                    + previous_ai_suggestions
+                ),
+            )
+
+            # Collect suggestions for next pass
+            if truth and truth.suggestions:
+                previous_truth_suggestions.extend(truth.suggestions)
+            if voice_result and voice_result.suggestions:
+                previous_voice_suggestions.extend(voice_result.suggestions)
+            if ai_result and ai_result.suggestions:
+                previous_ai_suggestions.extend(ai_result.suggestions)
 
         return ReviewBundle(
             truthfulness=truth,
@@ -340,18 +323,8 @@ class ResumeRefineryOrchestrator:
         for label, doc in [("Cover Letter", truth.cover_letter),
                            ("Resume", truth.resume),
                            ("Interview Guide", truth.interview_guide)]:
-            if not doc.pass_strict:
-                claims = doc.unsupported_claims
-                if claims:
-                    parts.append(f"  {label}: {len(claims)} unsupported")
-                    for claim in claims:
-                        parts.append(f"    • {claim}")
-                else:
-                    parts.append(f"  {label}: strict check failed (no specific claims listed)")
-                if doc.evidence_examples:
-                    parts.append(f"  {label} evidence examples:")
-                    for ex in doc.evidence_examples:
-                        parts.append(f"    ✓ {ex}")
+            status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗ ({len(doc.unsupported_claims)} unsupported)[/red]"
+            parts.append(f"  {label}: {status}")
         if truth.suggestions:
             parts.append("  Suggestions:")
             for s in truth.suggestions:
@@ -365,32 +338,22 @@ class ResumeRefineryOrchestrator:
     def _summarise_voice(self, voice: VoiceReviewResult, previous_suggestions: list[str] | None = None) -> str:
         color = {"strong": "green", "moderate": "yellow", "weak": "red"}[voice.overall_match]
         parts = [f"[{color}]Voice match: {voice.overall_match.upper()}[/{color}]"]
-        per_doc_issues: dict[str, list[str]] = {
-            "Cover Letter": voice.cover_letter_issues,
-            "Resume": voice.resume_issues,
-            "Interview Guide": voice.interview_guide_issues,
-        }
         per_doc_suggestions: dict[str, list[str]] = {
             "Cover Letter": voice.cover_letter_suggestions,
             "Resume": voice.resume_suggestions,
             "Interview Guide": voice.interview_guide_suggestions,
         }
-        for label, match, assessment in [
-            ("Cover Letter", voice.cover_letter_match, voice.cover_letter_assessment),
-            ("Resume", voice.resume_match, voice.resume_assessment),
-            ("Interview Guide", voice.interview_guide_match, voice.interview_guide_assessment),
+        for label, match in [
+            ("Cover Letter", voice.cover_letter_match),
+            ("Resume", voice.resume_match),
+            ("Interview Guide", voice.interview_guide_match),
         ]:
             mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
             parts.append(f"  {label}: [{mc}]{match}[/{mc}]")
-            parts.append(f"    {assessment}")
-            issues = per_doc_issues.get(label, [])
-            if issues:
-                for issue in issues:
-                    parts.append(f"    • Issue: {issue}")
             suggestions = per_doc_suggestions.get(label, [])
             if suggestions:
                 for s in suggestions:
-                    parts.append(f"    → {s}")
+                    parts.append(f"    • {s}")
         if previous_suggestions:
             parts.append("  Previously attempted:")
             for s in previous_suggestions:
@@ -400,13 +363,6 @@ class ResumeRefineryOrchestrator:
     def _summarise_ai(self, ai: AIDetectionResult, previous_suggestions: list[str] | None = None) -> str:
         color = {"low": "green", "medium": "yellow", "high": "red"}[ai.risk_level]
         parts = [f"[{color}]AI-detection risk: {ai.risk_level.upper()}[/{color}]"]
-        for label, flags in [("Cover Letter", ai.cover_letter_flags),
-                             ("Resume", ai.resume_flags),
-                             ("Interview Guide", ai.interview_guide_flags)]:
-            if flags:
-                parts.append(f"  {label}:")
-                for f in flags:
-                    parts.append(f'    • "{f}"')
         if ai.suggestions:
             parts.append("  Suggestions:")
             for s in ai.suggestions:

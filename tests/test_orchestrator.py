@@ -116,29 +116,13 @@ class FakeVerificationAgent:
 
 class FakeRepairAgent:
     def __init__(self):
-        self.calls = 0
-        self.voice_calls = 0
-        self.ai_calls = 0
+        self.unified_calls = 0
 
-    def repair_documents(self, docs, truth, career, voice, job, context, feedback=None, previous_suggestions=None):
-        self.calls += 1
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, previous_suggestions=None):
+        self.unified_calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
         docs.interview_guide = "interview_guide repaired"
-        return docs
-
-    def repair_voice(self, docs, voice_review, career, voice, job, context, feedback=None, previous_suggestions=None):
-        self.voice_calls += 1
-        docs.cover_letter = "cover_letter voice-fixed"
-        docs.resume = "resume voice-fixed"
-        docs.interview_guide = "interview_guide voice-fixed"
-        return docs
-
-    def repair_ai_detection(self, docs, ai_review, career, voice, job, context, feedback=None, previous_suggestions=None):
-        self.ai_calls += 1
-        docs.cover_letter = "cover_letter ai-fixed"
-        docs.resume = "resume ai-fixed"
-        docs.interview_guide = "interview_guide ai-fixed"
         return docs
 
 
@@ -162,7 +146,7 @@ def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, 
     assert result.evidence_pack is not None
     assert result.voice_style_guide is not None
     assert result.exported_paths
-    assert repair.calls == 1
+    assert repair.unified_calls == 1
     assert Path(next(iter(result.exported_paths.values()))).exists()
 
 
@@ -182,11 +166,9 @@ def test_orchestrator_create_verifies_all_three_loops(tmp_path, monkeypatch, car
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    # Each fake fails on the first call, passes on the second → one repair per loop
-    assert repair.calls == 1
-    assert repair.voice_calls == 1
-    assert repair.ai_calls == 1
-    assert verification.truth_calls == 3  # 2 in loop + 1 post-repair recheck
+    # Unified loop: pass 1 all fail → repair → pass 2 all pass
+    assert repair.unified_calls == 1
+    assert verification.truth_calls == 2
     assert verification.voice_calls == 2
     assert verification.ai_calls == 2
     # Final reviews should reflect the passing second call
@@ -271,9 +253,7 @@ def test_no_repair_when_all_reviews_pass(tmp_path, monkeypatch, career_profile, 
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    assert repair.calls == 0
-    assert repair.voice_calls == 0
-    assert repair.ai_calls == 0
+    assert repair.unified_calls == 0
     assert result.reviews.truthfulness.all_supported is True
     assert result.reviews.voice.overall_match == "strong"
     assert result.reviews.ai_detection.risk_level == "low"
@@ -379,7 +359,7 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
         )
 
 
-def test_max_passes_zero_skips_all_loops(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+def test_max_passes_zero_skips_all_reviews(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     verification = NeverPassVerificationAgent()
     repair = FakeRepairAgent()
@@ -396,20 +376,20 @@ def test_max_passes_zero_skips_all_loops(tmp_path, monkeypatch, career_profile, 
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
-        max_truth_passes=0, max_voice_passes=0, max_ai_passes=0,
+        max_passes=0,
     )
 
     assert verification.truth_calls == 0
     assert verification.voice_calls == 0
     assert verification.ai_calls == 0
-    assert repair.calls == 0
+    assert repair.unified_calls == 0
     assert result.truthfulness is None
     assert result.voice is None
     assert result.ai_detection is None
 
 
-def test_max_passes_one_reviews_but_never_repairs(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """With 1 pass the review runs once; because the review fails the loop exits without repair."""
+def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """With 1 pass the review runs once; fails → one unified repair → loop exhausted."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     verification = NeverPassVerificationAgent()
     repair = FakeRepairAgent()
@@ -426,51 +406,19 @@ def test_max_passes_one_reviews_but_never_repairs(tmp_path, monkeypatch, career_
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
-        max_truth_passes=1, max_voice_passes=1, max_ai_passes=1,
+        max_passes=1,
     )
 
-    # Review ran once for each loop
-    assert verification.truth_calls == 2  # 1 in loop + 1 post-repair recheck
+    # All three reviewers called once in the single pass
+    assert verification.truth_calls == 1
     assert verification.voice_calls == 1
     assert verification.ai_calls == 1
-    # Repair ran once for each loop (review fails → repair → loop exhausted)
-    assert repair.calls == 1
-    assert repair.voice_calls == 1
-    assert repair.ai_calls == 1
-    # Result reflects the failing review
+    # One unified repair
+    assert repair.unified_calls == 1
+    # Result reflects the failing review (no second review after repair)
     assert result.truthfulness.all_supported is False
     assert result.voice.overall_match == "weak"
     assert result.ai_detection.risk_level == "high"
-
-
-def test_independent_per_loop_max_passes(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """Each loop's max_passes is independent of the others."""
-    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
-    verification = NeverPassVerificationAgent()
-    repair = FakeRepairAgent()
-    orchestrator = ResumeRefineryOrchestrator(
-        store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
-        voice_agent=FakeVoiceAgent(),
-        drafting_agent=FakeDraftingAgent(),
-        verification_agent=verification,
-        repair_agent=repair,
-    )
-
-    result = orchestrator._verify_and_repair(
-        DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
-        career_profile, voice_profile, job_description.model_copy(),
-        orchestrator._build_context(career_profile, voice_profile, job_description),
-        max_truth_passes=0, max_voice_passes=3, max_ai_passes=1,
-    )
-
-    assert verification.truth_calls == 1  # 0 in loop + 1 post-repair recheck
-    assert verification.voice_calls == 3
-    assert verification.ai_calls == 1
-    assert repair.calls == 0        # truth skipped
-    assert repair.voice_calls == 3   # 3 passes, all fail → 3 repairs
-    assert repair.ai_calls == 1      # 1 pass, fails → 1 repair
-    assert result.truthfulness is not None  # post-repair recheck ran
 
 
 def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -491,15 +439,14 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
-        max_truth_passes=4, max_voice_passes=4, max_ai_passes=4,
+        max_passes=4,
     )
 
-    assert verification.truth_calls == 5  # 4 in loop + 1 post-repair recheck
+    # 4 passes × 1 call each = 4 calls per reviewer
+    assert verification.truth_calls == 4
     assert verification.voice_calls == 4
     assert verification.ai_calls == 4
-    assert repair.calls == 4
-    assert repair.voice_calls == 4
-    assert repair.ai_calls == 4
+    assert repair.unified_calls == 4
     assert result.truthfulness.all_supported is False
     assert result.voice.overall_match == "weak"
     assert result.ai_detection.risk_level == "high"
@@ -706,12 +653,12 @@ def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, car
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
-        max_ai_passes=3,
+        max_passes=3,
     )
 
-    # Should review once and exit — no flags means no repair needed
+    # All reviews pass (truth+voice from AlwaysPass, AI has no flags) → no repair
     assert verification.ai_calls == 1
-    assert repair.ai_calls == 0
+    assert repair.unified_calls == 0
     assert result.ai_detection.risk_level == "medium"  # preserved as-is
 
 
@@ -753,8 +700,8 @@ def test_progress_includes_review_summaries(tmp_path, monkeypatch, career_profil
 # ---------------------------------------------------------------------------
 
 
-def test_post_repair_truth_recheck_runs(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """After all loops complete, a final truth recheck should run."""
+def test_progress_includes_pass_headers(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Progress messages should include review pass headers."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     messages: list[str] = []
     verification = FakeVerificationAgent()
@@ -772,31 +719,8 @@ def test_post_repair_truth_recheck_runs(tmp_path, monkeypatch, career_profile, v
         progress=messages.append,
     )
 
-    # Should include the final recheck message
-    assert any("final truthfulness recheck" in m.lower() for m in messages)
-    # truth_calls = 2 (loop) + 1 (recheck) = 3
-    assert verification.truth_calls == 3
-
-
-def test_post_repair_truth_recheck_skipped_when_nothing_ran(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """When max_passes=0 for all loops, no recheck should run."""
-    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
-    verification = NeverPassVerificationAgent()
-    orchestrator = ResumeRefineryOrchestrator(
-        store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
-        voice_agent=FakeVoiceAgent(),
-        drafting_agent=FakeDraftingAgent(),
-        verification_agent=verification,
-        repair_agent=FakeRepairAgent(),
-    )
-
-    result = orchestrator._verify_and_repair(
-        DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
-        career_profile, voice_profile, job_description.model_copy(),
-        orchestrator._build_context(career_profile, voice_profile, job_description),
-        max_truth_passes=0, max_voice_passes=0, max_ai_passes=0,
-    )
-
-    assert verification.truth_calls == 0
-    assert result.truthfulness is None
+    combined = "\n".join(messages)
+    # Should include pass headers
+    assert "Review Pass 1/" in combined
+    # truth_calls = 2 (pass 1 fails, pass 2 passes)
+    assert verification.truth_calls == 2
