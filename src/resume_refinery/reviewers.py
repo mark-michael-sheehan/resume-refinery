@@ -114,7 +114,7 @@ class DocumentReviewer:
                 doc_type=doc_type,
                 doc_content=content,
             )
-            raw = self._call(TRUTHFULNESS_SYSTEM_PROMPT, user_msg)
+            raw = self._call(TRUTHFULNESS_SYSTEM_PROMPT, user_msg, think=True)
             data = json.loads(raw)
             results[doc_type] = DocumentTruthResult(
                 pass_strict=data.get("pass_strict", True),
@@ -262,15 +262,22 @@ class DocumentReviewer:
             resume_suggestions=suggestions_by_doc["Resume"],
         )
 
-    def _call(self, system: str, user_msg: str) -> str:
+    def _call(self, system: str, user_msg: str, *, think: bool = False) -> str:
         """Make an Ollama API call and return the text response."""
-        response = self.client.chat(
-            model=MODEL,
-            messages=[
+        if think:
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ]
+        else:
+            messages = [
                 {"role": "system", "content": system},
                 {"role": "user", "content": "/no_think\n" + user_msg},
-            ],
-            think=False,
+            ]
+        response = self.client.chat(
+            model=MODEL,
+            messages=messages,
+            think=think,
             format="json",
             options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
         )

@@ -154,10 +154,16 @@ def generation_user_message(
 # ---------------------------------------------------------------------------
 
 VOICE_REVIEW_SYSTEM_PROMPT = """You are an expert editor specialising in authentic \
-personal voice in professional writing. Your task is to evaluate whether a set of \
-career documents (cover letter, resume, interview guide) genuinely reflects the \
-applicant's stated voice — or whether they sound generic, overly polished, or \
-like they were written by someone else.
+personal voice in professional writing. Your task is to evaluate whether a \
+career document genuinely reflects the applicant's stated voice — or whether \
+it sounds generic, overly polished, or like it was written by someone else.
+
+Decision rules (apply literally, do not deliberate):
+- If 3+ characteristic phrases from the voice profile appear naturally → "strong"
+- If the tone broadly matches but characteristic phrasing is absent → "moderate"
+- If the document reads like generic corporate writing with no voice markers → "weak"
+- Flag ONLY phrases you can quote from the document. Do not flag absence of phrases.
+- Every suggestion must name the exact phrase to change and what to change it to.
 """
 
 VOICE_REVIEW_USER_TEMPLATE = """## Voice Profile
@@ -185,11 +191,20 @@ Return JSON only — no markdown fences, no explanation.
 """
 
 AI_DETECTION_SYSTEM_PROMPT = """You are an expert in identifying AI-generated content in \
-professional writing. You know the tells: hollow superlatives ("passionate", "dynamic", \
-"results-driven"), generic claims without specifics, unnatural sentence rhythms, \
-over-use of em-dashes, hedging language, and content that could apply to any candidate \
-for any similar role. Your task is to flag such content in career documents so it can \
-be rewritten to sound genuinely human.
+professional writing. Flag content that matches these specific patterns — do not \
+deliberate or weigh context; if a pattern matches, flag it:
+
+1. Hollow superlatives with no quantification: "passionate", "dynamic", "results-driven", \
+   "highly motivated", "proven track record" (unless followed by specific numbers/evidence).
+2. Generic claims that could describe any candidate: "strong communicator", "team player", \
+   "detail-oriented" without a concrete example attached.
+3. Structural tells: 3+ em-dashes in a single document, "Furthermore," / "Moreover," \
+   transitions, and sentences starting with "I am" followed by an adjective.
+4. Hedging language: "I believe", "I feel that", "arguably", "it could be said".
+5. Filler sentences that add no information if deleted.
+
+Do NOT flag: industry-standard terminology, quantified claims, or specific \
+technical descriptions even if they sound polished.
 """
 
 AI_DETECTION_USER_TEMPLATE = """## Cover Letter
@@ -253,7 +268,9 @@ VOICE_REVIEW_DOC_USER_TEMPLATE = """## Voice Profile
 {doc_content}
 
 ## Task
-Evaluate how well this {doc_type} reflects the Voice Profile above.
+Rate how well this {doc_type} matches the Voice Profile. Apply the decision rules \
+from your system prompt strictly.
+
 Return a JSON object with this shape:
 {{
   "overall_match": "strong" | "moderate" | "weak",
@@ -262,10 +279,13 @@ Return a JSON object with this shape:
   "suggestions": [string]
 }}
 
-- overall_match: holistic rating for this document.
-- assessment: 1–2 sentences summarising the match quality.
-- issues: specific phrases or passages that feel off-voice (quote them).
-- suggestions: concrete changes to better match the voice profile.
+- overall_match: use the decision rules above — do not hedge between categories.
+- assessment: 1–2 sentences. State which voice markers are present or missing.
+- issues: quote specific phrases from the {doc_type} that feel off-voice.
+- suggestions: for each issue, state what to replace it with. Be concrete, not vague.
+
+Do NOT flag content simply because it is professional. Only flag content that \
+contradicts the voice profile or sounds like a different person wrote it.
 
 Return JSON only — no markdown fences, no explanation.
 """
@@ -275,7 +295,9 @@ AI_DETECTION_DOC_USER_TEMPLATE = """## {doc_type}
 {doc_content}
 
 ## Task
-Identify AI-generated, generic, or hollow content in this {doc_type}.
+Apply the 5 pattern rules from your system prompt to this {doc_type}. Flag only \
+exact matches — do not flag content that is merely professional or well-written.
+
 Return a JSON object with this shape:
 {{
   "risk_level": "low" | "medium" | "high",
@@ -283,9 +305,12 @@ Return a JSON object with this shape:
   "suggestions": [string]
 }}
 
-- risk_level: overall AI-detection risk for this document.
-- flags: specific phrases or passages that sound AI-generated (quote them as strings).
-- suggestions: concrete rewrites or guidance as plain text strings. Every item must be a string sentence, never a number.
+- risk_level: "low" = 0–1 flags, "medium" = 2–3 flags, "high" = 4+ flags.
+- flags: quote the exact phrase from the document (as a string). Only include phrases \
+  that match one of the 5 patterns. Do not flag quantified achievements or specific \
+  technical descriptions.
+- suggestions: for each flag, provide a concrete rewrite as a plain text string. \
+  Every item must be a string sentence, never a number.
 
 Return JSON only — no markdown fences, no explanation.
 """
