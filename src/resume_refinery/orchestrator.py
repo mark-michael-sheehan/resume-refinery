@@ -291,12 +291,14 @@ class ResumeRefineryOrchestrator:
             )
 
             # Collect suggestions for next pass
-            if truth and truth.suggestions:
-                previous_truth_suggestions.extend(truth.suggestions)
+            if truth:
+                for doc in (truth.cover_letter, truth.resume, truth.interview_guide):
+                    previous_truth_suggestions.extend(doc.suggestions)
             if voice_result and voice_result.suggestions:
                 previous_voice_suggestions.extend(voice_result.suggestions)
-            if ai_result and ai_result.suggestions:
-                previous_ai_suggestions.extend(ai_result.suggestions)
+            if ai_result:
+                previous_ai_suggestions.extend(ai_result.cover_letter_suggestions)
+                previous_ai_suggestions.extend(ai_result.resume_suggestions)
 
         return ReviewBundle(
             truthfulness=truth,
@@ -326,10 +328,9 @@ class ResumeRefineryOrchestrator:
                            ("Interview Guide", truth.interview_guide)]:
             status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗ ({len(doc.unsupported_claims)} unsupported)[/red]"
             parts.append(f"  {label}: {status}")
-        if truth.suggestions:
-            parts.append("  Suggestions:")
-            for s in truth.suggestions:
-                parts.append(f"    • {s}")
+            if doc.suggestions:
+                for s in doc.suggestions:
+                    parts.append(f"    • {s}")
         if previous_suggestions:
             parts.append("  Previously attempted:")
             for s in previous_suggestions:
@@ -364,10 +365,22 @@ class ResumeRefineryOrchestrator:
     def _summarise_ai(self, ai: AIDetectionResult, previous_suggestions: list[str] | None = None) -> str:
         color = {"low": "green", "medium": "yellow", "high": "red"}[ai.risk_level]
         parts = [f"[{color}]AI-detection risk: {ai.risk_level.upper()}[/{color}]"]
-        if ai.suggestions:
-            parts.append("  Suggestions:")
-            for s in ai.suggestions:
-                parts.append(f"    • {s}")
+        per_doc_suggestions: dict[str, list[str]] = {
+            "Cover Letter": ai.cover_letter_suggestions,
+            "Resume": ai.resume_suggestions,
+        }
+        per_doc_flags: dict[str, list[str]] = {
+            "Cover Letter": ai.cover_letter_flags,
+            "Resume": ai.resume_flags,
+        }
+        for label in ("Cover Letter", "Resume"):
+            flags = per_doc_flags.get(label, [])
+            suggestions = per_doc_suggestions.get(label, [])
+            if flags or suggestions:
+                flag_count = len(flags)
+                parts.append(f"  {label}: {flag_count} flag(s)")
+                for s in suggestions:
+                    parts.append(f"    • {s}")
         if previous_suggestions:
             parts.append("  Previously attempted:")
             for s in previous_suggestions:
