@@ -618,10 +618,22 @@ class RepairAgent:
             )
 
         parts.append(
-            "PRIORITY ORDER: 1) Fix truthfulness issues FIRST — remove or directly evidence "
-            "every unsupported claim. 2) Then match the voice profile. 3) Then address "
-            "AI-detection flags. Never sacrifice truthfulness to improve voice or AI-detection. "
-            "Keep all supported factual content intact."
+            "REPAIR PROCEDURE (follow these phases in order during your thinking):\n"
+            "Phase 1 — TRUTHFULNESS: Identify every unsupported claim listed above. "
+            "For each one, either remove it or replace it with a fact directly from "
+            "the Career Profile. Do NOT rephrase surrounding text. Write out the "
+            "corrected draft.\n"
+            "Phase 2 — VOICE & AI: Apply voice and AI-detection fixes ONLY to "
+            "sentences that were NOT changed in Phase 1. If a voice/AI fix would "
+            "alter a factual claim, skip it.\n"
+            "Phase 3 — TRUTHFULNESS SELF-CHECK: Re-read your Phase 2 draft "
+            "sentence by sentence. For each sentence, verify the claim still "
+            "appears verbatim or is directly supported in the Career Profile. "
+            "If any new unsupported claim was introduced in Phase 2, revert that "
+            "sentence to the Phase 1 version.\n"
+            "Repeat Phases 2-3 until a full pass introduces ZERO new unsupported "
+            "claims. Usually 1-2 iterations suffice.\n"
+            "FINAL — OUTPUT: Emit the final document. It must pass truthfulness."
         )
         parts.append(
             "MINIMAL EDITS ONLY: Make the smallest changes necessary to address the feedback "
