@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Iterator
 
 import ollama
@@ -21,7 +22,7 @@ load_dotenv()
 
 BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
-MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "4096"))
+MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "8192"))
 NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
 
 _DOC_PROMPTS: dict[DocumentKey, str] = {
@@ -87,16 +88,44 @@ class ResumeRefineryAgent:
             model=MODEL,
             messages=[
                 {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-                {"role": "user", "content": "/no_think\n" + user_msg},
+                {"role": "user", "content": user_msg},
             ],
             stream=True,
-            think=False,
+            think=True,
             options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
         )
+        # Stream chunks, suppressing <think>...</think> blocks from output.
+        in_think = False
         for chunk in stream:
-            content = chunk.message.content
-            if content:
-                yield content
+            content = chunk.message.content or ""
+            if not content:
+                continue
+            if in_think:
+                # Still inside a think block — look for the closing tag.
+                close_idx = content.find("</think>")
+                if close_idx != -1:
+                    in_think = False
+                    remainder = content[close_idx + len("</think>"):]
+                    if remainder:
+                        yield remainder
+                continue
+            # Check if this chunk opens a think block.
+            open_idx = content.find("<think>")
+            if open_idx != -1:
+                # Yield any text before the tag.
+                before = content[:open_idx]
+                if before:
+                    yield before
+                # Check if the closing tag is also in this chunk.
+                close_idx = content.find("</think>", open_idx)
+                if close_idx != -1:
+                    remainder = content[close_idx + len("</think>"):]
+                    if remainder:
+                        yield remainder
+                else:
+                    in_think = True
+                continue
+            yield content
 
     # ------------------------------------------------------------------
     # Internal
@@ -123,9 +152,12 @@ class ResumeRefineryAgent:
             model=MODEL,
             messages=[
                 {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-                {"role": "user", "content": "/no_think\n" + user_msg},
+                {"role": "user", "content": user_msg},
             ],
-            think=False,
+            think=True,
             options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
         )
-        return response.message.content.strip()
+        # Strip thinking blocks from the response.
+        raw = response.message.content
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+        return raw

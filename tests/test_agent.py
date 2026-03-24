@@ -153,8 +153,8 @@ def test_generate_all_calls_all_three_keys(mock_client_cls, career_profile, voic
 
 
 @patch("resume_refinery.agent.ollama.Client")
-def test_ollama_called_with_think_false(mock_client_cls, career_profile, voice_profile, job_description):
-    """All calls should include think=False to prevent think-token budget waste."""
+def test_ollama_called_with_think_true(mock_client_cls, career_profile, voice_profile, job_description):
+    """Generation calls should include think=True so the model can self-check."""
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response("output")
     mock_client_cls.return_value = mock_client
@@ -162,7 +162,7 @@ def test_ollama_called_with_think_false(mock_client_cls, career_profile, voice_p
     agent = ResumeRefineryAgent(api_key="test-key")
     agent.generate_document("resume", career_profile, voice_profile, job_description)
     call_kwargs = mock_client.chat.call_args.kwargs
-    assert call_kwargs["think"] is False
+    assert call_kwargs["think"] is True
 
 
 def test_generation_user_message_no_feedback(career_profile, voice_profile, job_description):
