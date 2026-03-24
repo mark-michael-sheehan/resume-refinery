@@ -104,7 +104,6 @@ class DocumentReviewer:
         ]
 
         results: dict[str, DocumentTruthResult] = {}
-        all_suggestions: list[str] = []
 
         for doc_type, content in doc_map:
             if not content:
@@ -121,8 +120,8 @@ class DocumentReviewer:
                 pass_strict=data.get("pass_strict", True),
                 unsupported_claims=data.get("unsupported_claims", []),
                 evidence_examples=data.get("evidence_examples", []),
+                suggestions=data.get("suggestions", []),
             )
-            all_suggestions.extend(data.get("suggestions", []))
 
         cl = results["Cover Letter"]
         resume = results["Resume"]
@@ -133,7 +132,6 @@ class DocumentReviewer:
             cover_letter=cl,
             resume=resume,
             interview_guide=ig,
-            suggestions=all_suggestions,
         )
 
     def review_voice(self, docs: DocumentSet, voice: VoiceProfile) -> VoiceReviewResult:
@@ -226,7 +224,11 @@ class DocumentReviewer:
             "Resume": [],
             "Interview Guide": [],
         }
-        all_suggestions: list[str] = []
+        suggestions_by_doc: dict[str, list[str]] = {
+            "Cover Letter": [],
+            "Resume": [],
+            "Interview Guide": [],
+        }
         risk_scores: list[str] = []
 
         for doc_type, content in doc_map:
@@ -242,7 +244,7 @@ class DocumentReviewer:
             raw = self._call(AI_DETECTION_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             flags_by_doc[doc_type] = data.get("flags", [])
-            all_suggestions.extend(data.get("suggestions", []))
+            suggestions_by_doc[doc_type] = data.get("suggestions", [])
             if r := data.get("risk_level"):
                 risk_scores.append(r)
 
@@ -256,7 +258,8 @@ class DocumentReviewer:
             cover_letter_flags=flags_by_doc["Cover Letter"],
             resume_flags=flags_by_doc["Resume"],
             interview_guide_flags=flags_by_doc["Interview Guide"],
-            suggestions=all_suggestions,
+            cover_letter_suggestions=suggestions_by_doc["Cover Letter"],
+            resume_suggestions=suggestions_by_doc["Resume"],
         )
 
     def _call(self, system: str, user_msg: str) -> str:

@@ -162,12 +162,15 @@ class AIDetectionResult(BaseModel):
     resume_flags: StrList = Field(default_factory=list)
     interview_guide_flags: StrList = Field(default_factory=list)
     suggestions: StrList = Field(default_factory=list)
+    cover_letter_suggestions: StrList = Field(default_factory=list)
+    resume_suggestions: StrList = Field(default_factory=list)
 
 
 class DocumentTruthResult(BaseModel):
     pass_strict: bool
     unsupported_claims: StrList = Field(default_factory=list)
     evidence_examples: StrList = Field(default_factory=list)
+    suggestions: StrList = Field(default_factory=list)
 
 
 class TruthfulnessResult(BaseModel):

@@ -473,18 +473,21 @@ def test_feedback_for_doc_with_claims(career_profile, voice_profile, job_descrip
 
 
 def test_feedback_includes_truth_suggestions(career_profile, voice_profile, job_description):
-    """Top-level TruthfulnessResult.suggestions should be included in repair feedback."""
+    """Per-document DocumentTruthResult.suggestions should be included in repair feedback."""
     mock_generator = MagicMock()
     drafting = DraftingAgent(generator=mock_generator)
     agent = RepairAgent(drafting_agent=drafting)
 
-    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["Led 50-person team"])
+    doc_fail = DocumentTruthResult(
+        pass_strict=False,
+        unsupported_claims=["Led 50-person team"],
+        suggestions=["Stick to verifiable metrics", "Avoid leadership claims without evidence"],
+    )
     truth = TruthfulnessResult(
         all_supported=False,
         cover_letter=doc_fail,
         resume=DocumentTruthResult(pass_strict=True),
         interview_guide=DocumentTruthResult(pass_strict=True),
-        suggestions=["Stick to verifiable metrics", "Avoid leadership claims without evidence"],
     )
 
     feedback = agent._feedback_for_doc("cover_letter", truth, None)
@@ -620,13 +623,16 @@ def test_repair_documents_accepts_previous_suggestions(career_profile, voice_pro
     agent = RepairAgent(drafting_agent=drafting)
 
     docs = DocumentSet(cover_letter="old", resume="old", interview_guide="old")
-    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
+    doc_fail = DocumentTruthResult(
+        pass_strict=False,
+        unsupported_claims=["claim"],
+        suggestions=["Fix claim X", "Fix claim Y"],
+    )
     truth = TruthfulnessResult(
         all_supported=False,
         cover_letter=doc_fail,
         resume=DocumentTruthResult(pass_strict=True),
         interview_guide=DocumentTruthResult(pass_strict=True),
-        suggestions=["Fix claim X", "Fix claim Y"],
     )
     context = _make_context()
 
@@ -806,13 +812,16 @@ def test_repair_unified_includes_previous_suggestions(career_profile, voice_prof
     agent = RepairAgent(drafting_agent=drafting)
 
     docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
-    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
+    doc_fail = DocumentTruthResult(
+        pass_strict=False,
+        unsupported_claims=["claim"],
+        suggestions=["Fix claim X", "Fix claim Y"],
+    )
     truth = TruthfulnessResult(
         all_supported=False,
         cover_letter=doc_fail,
         resume=DocumentTruthResult(pass_strict=True),
         interview_guide=DocumentTruthResult(pass_strict=True),
-        suggestions=["Fix claim X", "Fix claim Y"],
     )
     context = _make_context()
 

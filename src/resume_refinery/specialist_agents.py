@@ -531,8 +531,8 @@ class RepairAgent:
                         "Evidence examples to reference:\n"
                         + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8])
                     )
-                if truth.suggestions:
-                    new = self._deduplicate(truth.suggestions, previous_suggestions)
+                if doc_truth.suggestions:
+                    new = self._deduplicate(doc_truth.suggestions, previous_suggestions)
                     if new:
                         parts.append(
                             "Truthfulness suggestions:\n"
@@ -586,6 +586,11 @@ class RepairAgent:
                 "resume": ai_review.resume_flags,
                 "interview_guide": ai_review.interview_guide_flags,
             }
+            ai_suggestions_map: dict[DocumentKey, list[str]] = {
+                "cover_letter": ai_review.cover_letter_suggestions,
+                "resume": ai_review.resume_suggestions,
+                "interview_guide": [],
+            }
             flags = flag_map[key]
             if flags:
                 has_issues = True
@@ -593,8 +598,10 @@ class RepairAgent:
                     "AI DETECTION — Flagged phrases:\n"
                     + "\n".join(f'- "{f}"' for f in flags[:8])
                 )
-                if ai_review.suggestions:
-                    new = self._deduplicate(ai_review.suggestions, previous_suggestions)
+                # Use per-doc suggestions; fall back to aggregated for backward compat
+                ai_suggestions = ai_suggestions_map.get(key) or ai_review.suggestions
+                if ai_suggestions:
+                    new = self._deduplicate(ai_suggestions, previous_suggestions)
                     if new:
                         parts.append(
                             "AI-detection suggestions:\n"
@@ -673,9 +680,9 @@ class RepairAgent:
                          "embellish, generalize, or infer beyond what the evidence supports.")
         if doc_truth.evidence_examples:
             parts.append("Evidence examples to reference:\n" + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8]))
-        if truth.suggestions:
+        if doc_truth.suggestions:
             # Deduplicate: only include suggestions not already attempted
-            new_suggestions = self._deduplicate(truth.suggestions, previous_suggestions)
+            new_suggestions = self._deduplicate(doc_truth.suggestions, previous_suggestions)
             if new_suggestions:
                 parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in new_suggestions[:8]))
         if previous_suggestions:
@@ -762,6 +769,11 @@ class RepairAgent:
             "resume": ai_review.resume_flags,
             "interview_guide": ai_review.interview_guide_flags,
         }
+        per_doc_suggestions: dict[DocumentKey, list[str]] = {
+            "cover_letter": ai_review.cover_letter_suggestions,
+            "resume": ai_review.resume_suggestions,
+            "interview_guide": [],
+        }
         for key, flags in flag_map.items():
             if not flags:
                 continue
@@ -772,8 +784,10 @@ class RepairAgent:
             if feedback:
                 parts.append(feedback)
             parts.append("AI-detection flagged the following phrases as generic or AI-sounding:\n" + "\n".join(f'- "{f}"' for f in flags[:8]))
-            if ai_review.suggestions:
-                new_suggestions = self._deduplicate(ai_review.suggestions, previous_suggestions)
+            # Use per-doc suggestions; fall back to aggregated suggestions for backward compat
+            suggestions = per_doc_suggestions.get(key) or ai_review.suggestions
+            if suggestions:
+                new_suggestions = self._deduplicate(suggestions, previous_suggestions)
                 if new_suggestions:
                     parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in new_suggestions[:8]))
             if previous_suggestions:
