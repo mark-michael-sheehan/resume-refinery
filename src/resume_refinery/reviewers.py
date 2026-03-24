@@ -68,6 +68,47 @@ def _normalize_llm_json(raw: str) -> str:
         return raw  # let the caller surface the original error
 
 
+def _extract_json(text: str) -> str:
+    """Extract the first JSON object or array from *text*.
+
+    When ``format="json"`` is not used (e.g. with thinking mode), the model
+    may emit preamble/postamble text or wrap JSON in markdown fences.  This
+    helper finds the outermost ``{…}`` or ``[…]`` substring.
+    """
+    # Strip markdown code fences first.
+    fenced = re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", text)
+    if fenced:
+        text = fenced.group(1).strip()
+    # Find the first { or [ and match to its closing counterpart.
+    for start_char, end_char in (("{", "}"), ("[", "]")):
+        start = text.find(start_char)
+        if start == -1:
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == start_char:
+                depth += 1
+            elif ch == end_char:
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+    return text  # fallback: return as-is and let caller handle errors
+
+
 _GEN_MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 
 
@@ -114,7 +155,7 @@ class DocumentReviewer:
                 doc_type=doc_type,
                 doc_content=content,
             )
-            raw = self._call(TRUTHFULNESS_SYSTEM_PROMPT, user_msg, think=True)
+            raw = self._call(TRUTHFULNESS_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             results[doc_type] = DocumentTruthResult(
                 pass_strict=data.get("pass_strict", True),
@@ -274,9 +315,10 @@ class DocumentReviewer:
                 {"role": "system", "content": system},
                 {"role": "user", "content": "/no_think\n" + user_msg},
             ]
-        # When thinking is enabled, don't cap num_predict — let the context
-        # window be the natural limit so thinking tokens don't starve content.
-        predict = -1 if think else MAX_TOKENS
+        # Cap num_predict when thinking is enabled to prevent unbounded
+        # reasoning loops that make the call appear to hang.  Ollama
+        # separates thinking from content, so format="json" still works.
+        predict = MAX_TOKENS * 2 if think else MAX_TOKENS
         response = self.client.chat(
             model=MODEL,
             messages=messages,
@@ -284,7 +326,7 @@ class DocumentReviewer:
             format="json",
             options={"num_ctx": NUM_CTX, "num_predict": predict},
         )
-        raw = response.message.content.strip()
+        raw = (response.message.content or "").strip()
 
         # Strip any residual <think>...</think> blocks as a defensive fallback
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
@@ -293,15 +335,19 @@ class DocumentReviewer:
         raw = _normalize_llm_json(raw)
 
         if not raw:
+            # Log any thinking the model produced to aid debugging.
+            thinking_text = getattr(response.message, "thinking", None) or ""
             logging.warning(
-                "Ollama reviewer returned empty content. Full response: %r",
+                "Ollama reviewer returned empty content. "
+                "Thinking length: %d chars. Full content: %r",
+                len(thinking_text),
                 response.message.content,
             )
             raise ValueError(
                 "Reviewer returned empty content — model may have run out of context tokens."
             )
 
-        # Strip markdown fences if present (defensive fallback)
+        # Strip markdown fences if present (defensive fallback for non-think path)
         if raw.startswith("```"):
             raw = raw.split("```", 2)[1]
             if raw.startswith("json"):

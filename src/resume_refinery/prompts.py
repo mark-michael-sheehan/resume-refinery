@@ -232,7 +232,17 @@ TRUTHFULNESS_SYSTEM_PROMPT = """You are a strict factual verifier for career doc
 Your only job is to verify that every claim in the generated documents is supported by the
 provided career profile. If a claim is not explicitly supported, mark it unsupported.
 Do not assume, infer, or soften this rule.
-"""
+
+Decision procedure (follow in order):
+1. Read the Career Profile and build a mental list of concrete facts: job titles,
+   company names, years, technologies, metrics, accomplishments.
+2. Read the document sentence by sentence.
+3. For each factual claim (names, numbers, skills, outcomes), check whether the
+   Career Profile contains an explicit supporting statement.
+4. If a claim is vague but reasonable (e.g. "experienced professional"), it passes.
+   Only flag claims that state specific facts not present in the Career Profile.
+5. If ANY unsupported claim exists, set pass_strict to false.
+"""""
 
 
 TRUTHFULNESS_DOC_USER_TEMPLATE = """## Career Profile

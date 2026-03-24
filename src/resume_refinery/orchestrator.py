@@ -270,7 +270,7 @@ class ResumeRefineryOrchestrator:
             self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
 
             # --- Run all three reviews ---
-            self._progress(progress, "  Truthfulness review (3 LLM calls, thinking enabled)...")
+            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
             try:
                 truth = self.verification_agent.review_truthfulness(docs, career)
             except Exception as exc:
