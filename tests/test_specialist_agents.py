@@ -729,11 +729,11 @@ def test_repair_unified_combines_all_feedback(career_profile, voice_profile, job
     assert docs.cover_letter == "unified-fixed"
     # resume passes all checks → not repaired
     assert docs.resume == "r"
-    # interview_guide has voice issue (moderate) → repaired
-    assert docs.interview_guide == "unified-fixed"
+    # interview_guide: voice + AI checks are skipped (personal prep), truth passes → not repaired
+    assert docs.interview_guide == "ig"
 
-    # Verify last call's feedback (interview_guide, since it was called last)
-    # cover_letter should have all three sections
+    # Only cover_letter was repaired (1 call)
+    assert mock_generator.generate_document.call_count == 1
     first_call_feedback = mock_generator.generate_document.call_args_list[0].kwargs["feedback"]
     assert "TRUTHFULNESS" in first_call_feedback
     assert "Invented quantum AI" in first_call_feedback

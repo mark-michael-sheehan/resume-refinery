@@ -162,6 +162,13 @@ class DocumentReviewer:
                 per_doc_issues[doc_type] = []
                 per_doc_suggestions[doc_type] = []
                 continue
+            if doc_type == "Interview Guide":
+                # Interview guides are personal prep — skip voice check
+                assessments[doc_type] = "(skipped — personal prep)"
+                per_doc_match[doc_type] = "strong"
+                per_doc_issues[doc_type] = []
+                per_doc_suggestions[doc_type] = []
+                continue
             user_msg = VOICE_REVIEW_DOC_USER_TEMPLATE.format(
                 voice_profile=voice.raw_content,
                 doc_type=doc_type,
@@ -224,6 +231,9 @@ class DocumentReviewer:
 
         for doc_type, content in doc_map:
             if not content:
+                continue
+            if doc_type == "Interview Guide":
+                # Interview guides are personal prep — skip AI detection
                 continue
             user_msg = AI_DETECTION_DOC_USER_TEMPLATE.format(
                 doc_type=doc_type,

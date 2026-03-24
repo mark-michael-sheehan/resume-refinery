@@ -527,8 +527,8 @@ class RepairAgent:
                             + "\n".join(f"- {s}" for s in new[:8])
                         )
 
-        # --- Voice ---
-        if voice_review:
+        # --- Voice (skip for interview guide — personal prep) ---
+        if voice_review and key != "interview_guide":
             voice_matches: dict[DocumentKey, str] = {
                 "cover_letter": voice_review.cover_letter_match,
                 "resume": voice_review.resume_match,
@@ -567,8 +567,8 @@ class RepairAgent:
                             + "\n".join(f"- {s}" for s in new[:8])
                         )
 
-        # --- AI detection ---
-        if ai_review:
+        # --- AI detection (skip for interview guide — personal prep) ---
+        if ai_review and key != "interview_guide":
             flag_map: dict[DocumentKey, list[str]] = {
                 "cover_letter": ai_review.cover_letter_flags,
                 "resume": ai_review.resume_flags,
