@@ -318,8 +318,9 @@ class ResumeRefineryOrchestrator:
 
     def _summarise_truth(self, truth: TruthfulnessResult, previous_suggestions: list[str] | None = None) -> str:
         if truth.all_supported:
-            return "[green]Truthfulness: ALL SUPPORTED[/green]"
-        parts = ["[red]Truthfulness: UNSUPPORTED CLAIMS DETECTED[/red]"]
+            parts = ["[green]Truthfulness: ALL SUPPORTED[/green]"]
+        else:
+            parts = ["[red]Truthfulness: UNSUPPORTED CLAIMS DETECTED[/red]"]
         for label, doc in [("Cover Letter", truth.cover_letter),
                            ("Resume", truth.resume),
                            ("Interview Guide", truth.interview_guide)]:
