@@ -8,9 +8,12 @@ import pytest
 from resume_refinery.models import (
     DocumentSet,
     DocumentTruthResult,
+    DraftingContext,
+    EvidencePack,
     ReviewBundle,
     TruthfulnessResult,
     VoiceReviewResult,
+    VoiceStyleGuide,
     AIDetectionResult,
 )
 from resume_refinery.session import SessionStore, _slugify
@@ -226,3 +229,74 @@ def test_slugify_special_chars():
 def test_slugify_long_string():
     result = _slugify("a" * 100)
     assert len(result) <= 40
+
+
+# ---------------------------------------------------------------------------
+# Context persistence (EvidencePack + VoiceStyleGuide)
+# ---------------------------------------------------------------------------
+
+
+def test_save_and_load_context(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set)
+
+    context = DraftingContext(
+        evidence_pack=EvidencePack(gaps=["Rust experience"], source_summary=["profile"]),
+        voice_style_guide=VoiceStyleGuide(core_adjectives=["direct", "analytical"]),
+    )
+    store.save_context(session, context)
+
+    loaded = store.load_context(session)
+    assert loaded is not None
+    assert loaded.evidence_pack.gaps == ["Rust experience"]
+    assert loaded.voice_style_guide.core_adjectives == ["direct", "analytical"]
+
+
+def test_load_context_when_none_exist(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set)
+
+    loaded = store.load_context(session)
+    assert loaded is None
+
+
+# ---------------------------------------------------------------------------
+# Repair pass snapshots
+# ---------------------------------------------------------------------------
+
+
+def test_save_and_load_repair_pass(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set)
+
+    pass0_docs = DocumentSet(cover_letter="pass 0 CL", resume="pass 0 resume", interview_guide="pass 0 guide")
+    pass1_docs = DocumentSet(cover_letter="pass 1 CL", resume="pass 1 resume", interview_guide="pass 1 guide")
+    store.save_repair_pass(session, 0, pass0_docs)
+    store.save_repair_pass(session, 1, pass1_docs)
+
+    loaded0 = store.load_repair_pass(session, 0)
+    loaded1 = store.load_repair_pass(session, 1)
+    assert loaded0 is not None
+    assert loaded0.cover_letter == "pass 0 CL"
+    assert loaded1 is not None
+    assert loaded1.resume == "pass 1 resume"
+
+
+def test_load_repair_pass_nonexistent(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set)
+
+    loaded = store.load_repair_pass(session, 99)
+    assert loaded is None

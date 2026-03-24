@@ -35,6 +35,8 @@ from .models import (
     CareerProfile,
     DocumentKey,
     DocumentSet,
+    DraftingContext,
+    EvidencePack,
     JobDescription,
     ReviewBundle,
     Session,
@@ -42,6 +44,7 @@ from .models import (
     VersionInfo,
     VoiceProfile,
     VoiceReviewResult,
+    VoiceStyleGuide,
 )
 
 
@@ -208,7 +211,58 @@ class SessionStore:
         truth = _load_model_opt(version_dir / "truth_review.json", TruthfulnessResult)
         return ReviewBundle(voice=voice, ai_detection=ai, truthfulness=truth)
 
-    # --- Inputs ------------------------------------------------------------
+    # --- Context (EvidencePack + VoiceStyleGuide) --------------------------
+
+    def save_context(self, session: Session, context: DraftingContext) -> None:
+        """Persist the EvidencePack and VoiceStyleGuide for the current version."""
+        version_dir = self.root / session.session_id / f"v{session.current_version}"
+        version_dir.mkdir(parents=True, exist_ok=True)
+        (version_dir / "evidence_pack.json").write_text(
+            context.evidence_pack.model_dump_json(indent=2), encoding="utf-8"
+        )
+        (version_dir / "voice_guide.json").write_text(
+            context.voice_style_guide.model_dump_json(indent=2), encoding="utf-8"
+        )
+
+    def load_context(self, session: Session, version: int | None = None) -> DraftingContext | None:
+        """Load persisted EvidencePack and VoiceStyleGuide for a version."""
+        v = version or session.current_version
+        version_dir = self.root / session.session_id / f"v{v}"
+        ep = _load_model_opt(version_dir / "evidence_pack.json", EvidencePack)
+        vg = _load_model_opt(version_dir / "voice_guide.json", VoiceStyleGuide)
+        if ep is None or vg is None:
+            return None
+        return DraftingContext(evidence_pack=ep, voice_style_guide=vg)
+
+    # --- Repair pass snapshots ---------------------------------------------
+
+    def save_repair_pass(
+        self, session: Session, pass_num: int, docs: DocumentSet
+    ) -> None:
+        """Snapshot documents after a repair pass for later auditing."""
+        version_dir = self.root / session.session_id / f"v{session.current_version}"
+        pass_dir = version_dir / f"repair_pass_{pass_num}"
+        pass_dir.mkdir(parents=True, exist_ok=True)
+        if docs.cover_letter:
+            (pass_dir / "cover_letter.md").write_text(docs.cover_letter, encoding="utf-8")
+        if docs.resume:
+            (pass_dir / "resume.md").write_text(docs.resume, encoding="utf-8")
+        if docs.interview_guide:
+            (pass_dir / "interview_guide.md").write_text(docs.interview_guide, encoding="utf-8")
+
+    def load_repair_pass(
+        self, session: Session, pass_num: int, version: int | None = None
+    ) -> DocumentSet | None:
+        """Load a repair-pass snapshot, or None if it doesn't exist."""
+        v = version or session.current_version
+        pass_dir = self.root / session.session_id / f"v{v}" / f"repair_pass_{pass_num}"
+        if not pass_dir.exists():
+            return None
+        return DocumentSet(
+            cover_letter=_read_opt(pass_dir / "cover_letter.md"),
+            resume=_read_opt(pass_dir / "resume.md"),
+            interview_guide=_read_opt(pass_dir / "interview_guide.md"),
+        )
 
     def load_inputs(self, session: Session) -> tuple[CareerProfile, VoiceProfile]:
         """Reload the original career and voice profiles from the session."""

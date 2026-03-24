@@ -86,8 +86,15 @@ class ResumeRefineryOrchestrator:
                 stream_callback("\n")
             docs.set(key, "".join(chunks).strip())
 
-        reviews = self._verify_and_repair(docs, career, voice, job, context, progress=progress)
+        repair_snapshots: list[tuple[int, DocumentSet]] = []
+        reviews = self._verify_and_repair(
+            docs, career, voice, job, context, progress=progress,
+            on_repair_pass=lambda p, d: repair_snapshots.append((p, d.model_copy(deep=True))),
+        )
         session = self.store.save_documents(session, docs)
+        self.store.save_context(session, context)
+        for pass_num, snap in repair_snapshots:
+            self.store.save_repair_pass(session, pass_num, snap)
         exported = self._export(session, docs)
 
         if skip_review:
@@ -147,6 +154,7 @@ class ResumeRefineryOrchestrator:
                 )
                 current_docs.set(key, regenerated)
 
+        repair_snapshots: list[tuple[int, DocumentSet]] = []
         reviews = self._verify_and_repair(
             current_docs,
             career,
@@ -155,6 +163,7 @@ class ResumeRefineryOrchestrator:
             context,
             feedback=feedback,
             progress=progress,
+            on_repair_pass=lambda p, d: repair_snapshots.append((p, d.model_copy(deep=True))),
         )
         session = self.store.save_documents(
             session,
@@ -162,6 +171,9 @@ class ResumeRefineryOrchestrator:
             feedback=feedback,
             docs_regenerated=[key for key in keys_to_regen if key is not None],
         )
+        self.store.save_context(session, context)
+        for pass_num, snap in repair_snapshots:
+            self.store.save_repair_pass(session, pass_num, snap)
         exported = self._export(session, current_docs)
 
         if skip_review:
@@ -227,6 +239,7 @@ class ResumeRefineryOrchestrator:
         feedback: str | None = None,
         progress: ProgressCallback | None = None,
         max_passes: int = MAX_REPAIR_PASSES,
+        on_repair_pass: Callable[[int, DocumentSet], None] | None = None,
     ) -> ReviewBundle:
         import logging
 
@@ -306,6 +319,10 @@ class ResumeRefineryOrchestrator:
                     + previous_ai_suggestions
                 ),
             )
+
+            # Snapshot documents after this repair pass for auditing.
+            if on_repair_pass is not None:
+                on_repair_pass(pass_num, docs)
 
             # Collect suggestions for next pass
             if truth:
