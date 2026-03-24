@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Annotated, Literal, Optional
+from pydantic import BaseModel, BeforeValidator, Field
+
+
+def _coerce_str_list(value: object) -> list[str]:
+    """Coerce a list to list[str], converting any non-string items via str()."""
+    if not isinstance(value, list):
+        return []
+    return [item if isinstance(item, str) else str(item) for item in value]
+
+
+StrList = Annotated[list[str], BeforeValidator(_coerce_str_list)]
 
 
 # ---------------------------------------------------------------------------
@@ -135,29 +145,29 @@ class VoiceReviewResult(BaseModel):
     cover_letter_assessment: str
     resume_assessment: str
     interview_guide_assessment: str
-    specific_issues: list[str] = Field(default_factory=list)
-    suggestions: list[str] = Field(default_factory=list)
+    specific_issues: StrList = Field(default_factory=list)
+    suggestions: StrList = Field(default_factory=list)
     # Per-document issues and suggestions for targeted repair
-    cover_letter_issues: list[str] = Field(default_factory=list)
-    resume_issues: list[str] = Field(default_factory=list)
-    interview_guide_issues: list[str] = Field(default_factory=list)
-    cover_letter_suggestions: list[str] = Field(default_factory=list)
-    resume_suggestions: list[str] = Field(default_factory=list)
-    interview_guide_suggestions: list[str] = Field(default_factory=list)
+    cover_letter_issues: StrList = Field(default_factory=list)
+    resume_issues: StrList = Field(default_factory=list)
+    interview_guide_issues: StrList = Field(default_factory=list)
+    cover_letter_suggestions: StrList = Field(default_factory=list)
+    resume_suggestions: StrList = Field(default_factory=list)
+    interview_guide_suggestions: StrList = Field(default_factory=list)
 
 
 class AIDetectionResult(BaseModel):
     risk_level: Literal["low", "medium", "high"]
-    cover_letter_flags: list[str] = Field(default_factory=list)
-    resume_flags: list[str] = Field(default_factory=list)
-    interview_guide_flags: list[str] = Field(default_factory=list)
-    suggestions: list[str] = Field(default_factory=list)
+    cover_letter_flags: StrList = Field(default_factory=list)
+    resume_flags: StrList = Field(default_factory=list)
+    interview_guide_flags: StrList = Field(default_factory=list)
+    suggestions: StrList = Field(default_factory=list)
 
 
 class DocumentTruthResult(BaseModel):
     pass_strict: bool
-    unsupported_claims: list[str] = Field(default_factory=list)
-    evidence_examples: list[str] = Field(default_factory=list)
+    unsupported_claims: StrList = Field(default_factory=list)
+    evidence_examples: StrList = Field(default_factory=list)
 
 
 class TruthfulnessResult(BaseModel):
@@ -165,7 +175,7 @@ class TruthfulnessResult(BaseModel):
     cover_letter: DocumentTruthResult
     resume: DocumentTruthResult
     interview_guide: DocumentTruthResult
-    suggestions: list[str] = Field(default_factory=list)
+    suggestions: StrList = Field(default_factory=list)
 
 
 class ReviewBundle(BaseModel):

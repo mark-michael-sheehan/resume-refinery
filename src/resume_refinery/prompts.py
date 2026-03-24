@@ -243,8 +243,8 @@ Return a JSON object with this shape:
 }}
 
 - risk_level: overall AI-detection risk for this document.
-- flags: specific phrases or passages that sound AI-generated (quote them).
-- suggestions: concrete rewrites or guidance to make flagged content sound human.
+- flags: specific phrases or passages that sound AI-generated (quote them as strings).
+- suggestions: concrete rewrites or guidance as plain text strings. Every item must be a string sentence, never a number.
 
 Return JSON only — no markdown fences, no explanation.
 """
