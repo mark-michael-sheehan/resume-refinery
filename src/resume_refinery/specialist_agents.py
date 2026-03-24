@@ -379,14 +379,26 @@ class DraftingAgent:
     def _career_context(self, career: CareerProfile, evidence_pack: EvidencePack) -> CareerProfile:
         summary_lines = [
             "## Evidence Pack",
+            "**Use the evidence pack below as your PRIMARY source for claims. "
+            "The full career profile is provided only for additional detail.**",
+            "",
             "### Top Job Requirements",
         ]
         summary_lines.extend(f"- {item.requirement}" for item in evidence_pack.job_requirements[:8])
-        summary_lines.append("\n### Matched Evidence")
-        summary_lines.extend(
-            f"- Requirement: {item.requirement} | Evidence: {item.evidence}"
-            for item in evidence_pack.matched_evidence[:12]
+
+        # Sort matched evidence by relevance score descending
+        sorted_evidence = sorted(
+            evidence_pack.matched_evidence[:12],
+            key=lambda e: e.relevance_score,
+            reverse=True,
         )
+        summary_lines.append("\n### Matched Evidence (highest relevance first)")
+        for item in sorted_evidence:
+            priority = "HIGH PRIORITY" if item.relevance_score >= 4 else "supporting"
+            summary_lines.append(
+                f"- [{priority}] Requirement: {item.requirement} | "
+                f"Evidence: {item.evidence} (relevance: {item.relevance_score}/5)"
+            )
         if evidence_pack.gaps:
             summary_lines.append("\n### Potential Gaps")
             summary_lines.extend(f"- {gap}" for gap in evidence_pack.gaps[:6])

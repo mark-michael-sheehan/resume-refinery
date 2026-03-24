@@ -22,22 +22,34 @@ Core principles:
 - HONESTY: Never fabricate experience or skills the applicant doesn't have.
 - STRATEGY: Emphasise the experiences and accomplishments most relevant to this role.
 - CONCISION: Every sentence earns its place.
+- IMPACT FRAMING: Every experience mentioned must answer the implicit question, \
+  "So what did this accomplish and why should the hiring manager care?" Prefer the \
+  format: [Action] → [Measurable Result] → [Business Outcome].
+- DIFFERENTIATION: Identify what makes this applicant uniquely valuable compared to a \
+  generic qualified candidate. Highlight unusual combinations of skills, distinctive \
+  accomplishments, or unconventional career paths that make them memorable.
 """
 
 COVER_LETTER_PROMPT = """Generate a cover letter for this applicant targeting this specific job.
 
 Requirements:
-- Open with a compelling, personalised hook — never "I am writing to apply for..."
+- Open with a single, specific, quantified accomplishment from the career profile that \
+  directly addresses the role's top-priority requirement. Never open with a generic \
+  statement about the company or the applicant's interest — never "I am writing to apply for..."
 - Connect 2–3 of the applicant's strongest relevant experiences to the role's key requirements
 - Show genuine knowledge of what the role demands
+- Reference at least 3 distinct, specific details from the job description (team size, \
+  tech stack, challenges mentioned, company mission) — not just the job title. Each \
+  paragraph should contain at least one explicit connection to the posting.
 - Close with a confident, specific call to action
 - Match the applicant's voice precisely from their voice profile
 - 3–4 paragraphs, roughly one page (about 350-500 words)
 - Every claim must be explicitly grounded in the career profile; do not infer missing facts
-- If the evidence pack lists "Potential Gaps" (requirements without matching evidence), \
-  do NOT fabricate experience to cover them. Instead, either omit those requirements or \
-  frame transferable skills honestly — e.g. "While I haven't worked directly with X, \
-  my experience with Y provides a strong foundation."
+- For potential gaps listed in the evidence pack, do NOT fabricate experience. Instead, \
+  briefly acknowledge the gap and pivot to a concrete transferable skill with evidence — \
+  e.g. "I haven't managed Kafka at 50B events/month, but I scaled our pipeline from 1M \
+  to 10M events/day using similar distributed patterns." Frame the learning curve as an \
+  asset, not a liability.
 - Output Markdown only — no preamble, no explanation
 """
 
@@ -47,13 +59,21 @@ Requirements:
 - Start with the applicant's name as an H1 heading, then contact info
 - Use H2 for section headers (Experience, Education, Projects, Skills)
 - Use H3 for job titles / project names
+- Include a dedicated "Technical Skills" or "Skills" section near the top that mirrors \
+  exact keywords and phrases from the job description for ATS compatibility
+- Use plain Markdown only — no tables, columns, or complex formatting that breaks ATS parsers
 - Reorder and emphasise experience most relevant to this role
 - Quantify achievements wherever the data exists in the profile
-- Incorporate key terms from the job description naturally
+- Mirror exact phrases from the job description where truthful, not just synonyms — ATS \
+  systems match on exact keywords
+- Match the tone and emphasis to the seniority level of the target role: for senior/staff+ \
+  roles, emphasize architectural decisions, cross-team influence, mentoring, and strategic \
+  impact; for mid-level roles, emphasize hands-on execution and growth trajectory
 - Aim for one page unless the profile clearly has 10+ years of content
-- If the evidence pack lists "Potential Gaps" (requirements without matching evidence), \
-  do NOT fabricate experience to fill them. Omit those requirements or honestly highlight \
-  transferable skills that partially address them.
+- For potential gaps listed in the evidence pack, do NOT fabricate experience. Instead, \
+  briefly pivot to a concrete transferable skill with evidence — e.g. "While I haven't \
+  worked directly with X, my experience with Y provides a strong foundation." Frame the \
+  learning curve as an asset, not a liability.
 - Output Markdown only — no preamble, no explanation
 """
 
@@ -64,8 +84,9 @@ Requirements:
 - For each focus point include 1-2 supporting evidence bullets pulled from the applicant's profile
 - A "Likely Questions" section with 8-10 likely questions for this specific role and company type
 - For each question: a tailored answer outline using the applicant's real experience
-- A "Potential Gaps" section noting any job requirements the profile doesn't fully cover, \
-  with suggested framing
+- A "Potential Gaps" section noting any job requirements the profile doesn't fully cover; \
+  for each gap, provide a concrete reframing strategy that pivots to transferable skills \
+  with evidence — do NOT suggest fabricating experience
 - 5 strong questions for the applicant to ask the interviewer
 - Every claim must be explicitly grounded in the career profile; do not infer missing facts
 - Output Markdown only — no preamble, no explanation
