@@ -28,7 +28,13 @@ from .specialist_agents import DraftingAgent, EvidenceAgent, RepairAgent, Verifi
 
 load_dotenv()
 
-MAX_REPAIR_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_REPAIR_PASSES", "2"))
+MAX_REPAIR_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_REPAIR_PASSES", "3"))
+
+# On later passes, relax voice/AI thresholds to help convergence.
+# Truthfulness always stays strict.
+_AI_FLAG_TOLERANCE_LATE = int(os.environ.get("RESUME_REFINERY_AI_FLAG_TOLERANCE", "2"))
+# 0-based pass index at which relaxed thresholds kick in (default: pass 2, i.e. the second pass).
+_RELAXED_PASS_START = int(os.environ.get("RESUME_REFINERY_RELAXED_PASS_START", "1"))
 
 ProgressCallback = Callable[[str], None]
 StreamCallback = Callable[[str], None]
@@ -266,13 +272,24 @@ class ResumeRefineryOrchestrator:
                 self._progress(progress, self._summarise_ai(ai_result, previous_ai_suggestions))
 
             # --- Check if all passing ---
+            # Truthfulness is always strict (no relaxation).
             truth_ok = truth is None or truth.all_supported
-            voice_ok = voice_result is None or voice_result.overall_match == "strong"
-            ai_ok = ai_result is None or not any([
-                ai_result.cover_letter_flags,
-                ai_result.resume_flags,
-                ai_result.interview_guide_flags,
-            ])
+
+            # On pass RELAXED_PASS_START+, relax voice and AI thresholds to help convergence.
+            is_late_pass = pass_num >= _RELAXED_PASS_START
+            if is_late_pass:
+                voice_ok = voice_result is None or voice_result.overall_match in ("strong", "moderate")
+                total_ai_flags = (
+                    len(ai_result.cover_letter_flags)
+                    + len(ai_result.resume_flags)
+                ) if ai_result else 0
+                ai_ok = ai_result is None or total_ai_flags <= _AI_FLAG_TOLERANCE_LATE
+            else:
+                voice_ok = voice_result is None or voice_result.overall_match == "strong"
+                ai_ok = ai_result is None or not any([
+                    ai_result.cover_letter_flags,
+                    ai_result.resume_flags,
+                ])
 
             if truth_ok and voice_ok and ai_ok:
                 break

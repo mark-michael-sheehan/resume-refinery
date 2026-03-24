@@ -618,9 +618,10 @@ class RepairAgent:
             )
 
         parts.append(
-            "Rewrite using only evidence from the career profile. "
-            "Match the voice profile. Avoid generic AI-sounding phrases. "
-            "Keep all factual content intact."
+            "PRIORITY ORDER: 1) Fix truthfulness issues FIRST — remove or directly evidence "
+            "every unsupported claim. 2) Then match the voice profile. 3) Then address "
+            "AI-detection flags. Never sacrifice truthfulness to improve voice or AI-detection. "
+            "Keep all supported factual content intact."
         )
         return parts
 
