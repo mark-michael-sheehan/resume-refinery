@@ -237,9 +237,10 @@ class SessionStore:
     # --- Repair pass snapshots ---------------------------------------------
 
     def save_repair_pass(
-        self, session: Session, pass_num: int, docs: DocumentSet
+        self, session: Session, pass_num: int, docs: DocumentSet,
+        reviews: ReviewBundle | None = None,
     ) -> None:
-        """Snapshot documents after a repair pass for later auditing."""
+        """Snapshot documents and reviews after a repair pass for auditing."""
         version_dir = self.root / session.session_id / f"v{session.current_version}"
         pass_dir = version_dir / f"repair_pass_{pass_num}"
         pass_dir.mkdir(parents=True, exist_ok=True)
@@ -249,20 +250,40 @@ class SessionStore:
             (pass_dir / "resume.md").write_text(docs.resume, encoding="utf-8")
         if docs.interview_guide:
             (pass_dir / "interview_guide.md").write_text(docs.interview_guide, encoding="utf-8")
+        if reviews:
+            if reviews.truthfulness:
+                (pass_dir / "truth_review.json").write_text(
+                    reviews.truthfulness.model_dump_json(indent=2), encoding="utf-8"
+                )
+            if reviews.voice:
+                (pass_dir / "voice_review.json").write_text(
+                    reviews.voice.model_dump_json(indent=2), encoding="utf-8"
+                )
+            if reviews.ai_detection:
+                (pass_dir / "ai_review.json").write_text(
+                    reviews.ai_detection.model_dump_json(indent=2), encoding="utf-8"
+                )
 
     def load_repair_pass(
         self, session: Session, pass_num: int, version: int | None = None
-    ) -> DocumentSet | None:
-        """Load a repair-pass snapshot, or None if it doesn't exist."""
+    ) -> tuple[DocumentSet | None, ReviewBundle | None]:
+        """Load a repair-pass snapshot, or (None, None) if it doesn't exist."""
         v = version or session.current_version
         pass_dir = self.root / session.session_id / f"v{v}" / f"repair_pass_{pass_num}"
         if not pass_dir.exists():
-            return None
-        return DocumentSet(
+            return None, None
+        docs = DocumentSet(
             cover_letter=_read_opt(pass_dir / "cover_letter.md"),
             resume=_read_opt(pass_dir / "resume.md"),
             interview_guide=_read_opt(pass_dir / "interview_guide.md"),
         )
+        truth = _load_model_opt(pass_dir / "truth_review.json", TruthfulnessResult)
+        voice = _load_model_opt(pass_dir / "voice_review.json", VoiceReviewResult)
+        ai = _load_model_opt(pass_dir / "ai_review.json", AIDetectionResult)
+        if truth is None and voice is None and ai is None:
+            return docs, None
+        reviews = ReviewBundle(truthfulness=truth, voice=voice, ai_detection=ai)
+        return docs, reviews
 
     def load_inputs(self, session: Session) -> tuple[CareerProfile, VoiceProfile]:
         """Reload the original career and voice profiles from the session."""

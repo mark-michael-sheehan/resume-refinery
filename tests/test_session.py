@@ -283,12 +283,14 @@ def test_save_and_load_repair_pass(tmp_path, career_profile, voice_profile, job_
     store.save_repair_pass(session, 0, pass0_docs)
     store.save_repair_pass(session, 1, pass1_docs)
 
-    loaded0 = store.load_repair_pass(session, 0)
-    loaded1 = store.load_repair_pass(session, 1)
-    assert loaded0 is not None
-    assert loaded0.cover_letter == "pass 0 CL"
-    assert loaded1 is not None
-    assert loaded1.resume == "pass 1 resume"
+    docs0, reviews0 = store.load_repair_pass(session, 0)
+    docs1, reviews1 = store.load_repair_pass(session, 1)
+    assert docs0 is not None
+    assert docs0.cover_letter == "pass 0 CL"
+    assert reviews0 is None
+    assert docs1 is not None
+    assert docs1.resume == "pass 1 resume"
+    assert reviews1 is None
 
 
 def test_load_repair_pass_nonexistent(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
@@ -298,5 +300,44 @@ def test_load_repair_pass_nonexistent(tmp_path, career_profile, voice_profile, j
     session = store.create(job_description, career_profile, voice_profile)
     session = store.save_documents(session, document_set)
 
-    loaded = store.load_repair_pass(session, 99)
-    assert loaded is None
+    docs, reviews = store.load_repair_pass(session, 99)
+    assert docs is None
+    assert reviews is None
+
+
+def test_save_and_load_repair_pass_with_reviews(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set)
+
+    docs = DocumentSet(cover_letter="CL text", resume="Resume text", interview_guide="Guide text")
+    truth = TruthfulnessResult(
+        all_supported=True,
+        cover_letter=DocumentTruthResult(pass_strict=True, suggestions=["looks good"]),
+        resume=DocumentTruthResult(pass_strict=True),
+        interview_guide=DocumentTruthResult(pass_strict=True),
+    )
+    voice = VoiceReviewResult(
+        overall_match="strong",
+        cover_letter_assessment="good",
+        resume_assessment="good",
+        interview_guide_assessment="good",
+    )
+    ai = AIDetectionResult(
+        risk_level="low",
+        cover_letter_suggestions=["cl suggestions"],
+        resume_suggestions=["resume suggestions"],
+    )
+    bundle = ReviewBundle(truthfulness=truth, voice=voice, ai_detection=ai)
+
+    store.save_repair_pass(session, 0, docs, reviews=bundle)
+
+    loaded_docs, loaded_reviews = store.load_repair_pass(session, 0)
+    assert loaded_docs is not None
+    assert loaded_docs.cover_letter == "CL text"
+    assert loaded_reviews is not None
+    assert loaded_reviews.truthfulness.all_supported is True
+    assert loaded_reviews.voice.overall_match == "strong"
+    assert loaded_reviews.ai_detection.cover_letter_suggestions == ["cl suggestions"]
