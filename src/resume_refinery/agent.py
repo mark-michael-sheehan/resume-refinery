@@ -162,4 +162,10 @@ class ResumeRefineryAgent:
         # Strip thinking blocks from the response.
         raw = response.message.content
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+        if not raw:
+            raise ValueError(
+                f"Document '{key}' generated empty content — the model may have "
+                "exhausted its context window on reasoning. Try raising "
+                "RESUME_REFINERY_NUM_CTX in your .env."
+            )
         return raw

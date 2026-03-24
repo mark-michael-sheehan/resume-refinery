@@ -76,7 +76,7 @@ class ResumeRefineryOrchestrator:
 
         docs = DocumentSet()
         for key, label in self._doc_labels().items():
-            self._progress(progress, f"Generating {label}...")
+            self._progress(progress, f"Generating {label} (model is thinking, output appears after reasoning)...")
             chunks: list[str] = []
             for chunk in self.drafting_agent.stream_document(key, career, voice, job, context):
                 chunks.append(chunk)
@@ -84,7 +84,14 @@ class ResumeRefineryOrchestrator:
                     stream_callback(chunk)
             if stream_callback:
                 stream_callback("\n")
-            docs.set(key, "".join(chunks).strip())
+            text = "".join(chunks).strip()
+            if not text:
+                raise ValueError(
+                    f"'{label}' generated empty content — the model may have "
+                    "exhausted its context window on reasoning. Try raising "
+                    "RESUME_REFINERY_NUM_CTX in your .env."
+                )
+            docs.set(key, text)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
         reviews = self._verify_and_repair(
@@ -135,7 +142,8 @@ class ResumeRefineryOrchestrator:
         for key in keys_to_regen:
             if key is None:
                 continue
-            self._progress(progress, f"Regenerating {key.replace('_', ' ')}...")
+            label = self._doc_labels()[key]
+            self._progress(progress, f"Regenerating {label} (model is thinking, output appears after reasoning)...")
             previous = current_docs.get(key)
             if stream_callback:
                 chunks: list[str] = []
@@ -146,7 +154,14 @@ class ResumeRefineryOrchestrator:
                     chunks.append(chunk)
                     stream_callback(chunk)
                 stream_callback("\n")
-                current_docs.set(key, "".join(chunks).strip())
+                text = "".join(chunks).strip()
+                if not text:
+                    raise ValueError(
+                        f"'{label}' generated empty content — the model may have "
+                        "exhausted its context window on reasoning. Try raising "
+                        "RESUME_REFINERY_NUM_CTX in your .env."
+                    )
+                current_docs.set(key, text)
             else:
                 regenerated = self.drafting_agent.generate_document(
                     key, career, voice, job, context,
@@ -255,6 +270,7 @@ class ResumeRefineryOrchestrator:
             self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
 
             # --- Run all three reviews ---
+            self._progress(progress, "  Truthfulness review (3 LLM calls, thinking enabled)...")
             try:
                 truth = self.verification_agent.review_truthfulness(docs, career)
             except Exception as exc:
@@ -262,6 +278,7 @@ class ResumeRefineryOrchestrator:
                 self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
                 truth = None
 
+            self._progress(progress, "  Voice review (2 LLM calls)...")
             try:
                 voice_result = self.verification_agent.review_voice(docs, voice)
             except Exception as exc:
@@ -269,6 +286,7 @@ class ResumeRefineryOrchestrator:
                 self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
                 voice_result = None
 
+            self._progress(progress, "  AI-detection review (2 LLM calls)...")
             try:
                 ai_result = self.verification_agent.review_ai_detection(docs)
             except Exception as exc:
@@ -308,7 +326,7 @@ class ResumeRefineryOrchestrator:
                 break
 
             # --- Unified repair ---
-            self._progress(progress, "Repairing documents...")
+            self._progress(progress, "  Repairing documents (up to 3 LLM calls, thinking enabled)...")
             self.repair_agent.repair_unified(
                 docs, truth, voice_result, ai_result,
                 career, voice, job, context,
