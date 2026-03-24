@@ -1,5 +1,6 @@
 """Tests for bounded specialist agents."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,24 +31,35 @@ from resume_refinery.specialist_agents import (
 # ---------------------------------------------------------------------------
 
 
+def _make_llm_resp(text: str) -> MagicMock:
+    msg = MagicMock()
+    msg.content = text
+    resp = MagicMock()
+    resp.message = msg
+    return resp
+
+
 def test_evidence_agent_extracts_requirements_and_matches(career_profile, job_description):
-    agent = EvidenceAgent()
+    req_json = json.dumps([
+        {"requirement": "Python expertise", "category": "skill"},
+        {"requirement": "Distributed systems experience", "category": "skill"},
+    ])
+    ev_json = json.dumps([
+        {"evidence": "Led distributed systems migration, cut deploy time 60%", "relevance_score": 5}
+    ])
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_llm_resp(req_json),
+        _make_llm_resp(ev_json),
+        _make_llm_resp(ev_json),
+    ]
+    agent = EvidenceAgent(client=mock_client)
     pack = agent.build_evidence_pack(career_profile, job_description)
 
     assert pack.job_requirements
-    assert any("distributed" in item.requirement.lower() or "python" in item.requirement.lower() for item in pack.job_requirements)
+    assert any("python" in item.requirement.lower() or "distributed" in item.requirement.lower() for item in pack.job_requirements)
     assert pack.matched_evidence
-    assert any("distributed systems" in item.evidence.lower() or "engineer" in item.evidence.lower() for item in pack.matched_evidence)
-
-
-def test_voice_agent_distills_style_guide(voice_profile):
-    agent = VoiceAgent()
-    guide = agent.build_style_guide(voice_profile)
-
-    assert guide.core_adjectives
-    assert any("direct" in item.lower() for item in guide.core_adjectives)
-    assert guide.style_rules
-    assert any("short declarative sentences" in item.lower() for item in guide.style_rules)
+    assert any("distributed" in item.evidence.lower() or "engineer" in item.evidence.lower() for item in pack.matched_evidence)
 
 
 def test_evidence_agent_identifies_gaps(career_profile):
@@ -58,15 +70,24 @@ def test_evidence_agent_identifies_gaps(career_profile):
         title="Quantum Engineer",
         company="QuantumCo",
     )
-    agent = EvidenceAgent()
+    req_json = json.dumps([
+        {"requirement": "Rust experience", "category": "skill"},
+        {"requirement": "Quantum computing", "category": "skill"},
+    ])
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_llm_resp(req_json),
+        _make_llm_resp(json.dumps([])),  # no evidence for Rust
+        _make_llm_resp(json.dumps([])),  # no evidence for Quantum
+    ]
+    agent = EvidenceAgent(client=mock_client)
     pack = agent.build_evidence_pack(career_profile, job)
 
-    # These niche requirements should not match the career profile
     assert len(pack.gaps) > 0
 
 
 def test_evidence_agent_fallback_requirements():
-    """When no requirement keywords are found, fallback to first lines."""
+    """When the LLM fails, keyword/line fallback should still produce requirements."""
     from resume_refinery.models import CareerProfile, JobDescription
     job = JobDescription(
         raw_content="# Data Scientist\nCompany: BigCo\n\nBuild models.\nImprove metrics.",
@@ -74,28 +95,60 @@ def test_evidence_agent_fallback_requirements():
         company="BigCo",
     )
     career = CareerProfile(raw_content="# Someone\nDoes stuff.")
-    agent = EvidenceAgent()
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = Exception("Connection refused")
+    agent = EvidenceAgent(client=mock_client)
     pack = agent.build_evidence_pack(career, job)
 
-    # Should still produce some requirements from fallback
     assert pack.job_requirements
 
 
 def test_evidence_agent_source_summary(career_profile, job_description):
-    agent = EvidenceAgent()
+    """source_summary is derived from career profile lines — no LLM needed."""
+    req_json = json.dumps([{"requirement": "Python", "category": "skill"}])
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_llm_resp(req_json),
+        _make_llm_resp(json.dumps([])),
+    ]
+    agent = EvidenceAgent(client=mock_client)
     pack = agent.build_evidence_pack(career_profile, job_description)
+
     assert pack.source_summary  # Non-empty
 
 
 def test_evidence_agent_limits_requirements():
-    """Should cap at 10 requirements."""
+    """LLM extraction already caps at 10 via [:10] slice."""
     from resume_refinery.models import CareerProfile, JobDescription
     lines = "\n".join(f"- Required: skill_{i} experience" for i in range(20))
     job = JobDescription(raw_content=f"# Job\n{lines}", title="Job", company="Co")
     career = CareerProfile(raw_content="# Name\nDoes things.")
-    agent = EvidenceAgent()
+    # Return 15 requirements from LLM — slice should cap at 10
+    big_reqs = json.dumps([{"requirement": f"skill_{i}", "category": "skill"} for i in range(15)])
+    mock_client = MagicMock()
+    # First call = extraction; subsequent calls = evidence matching (10 calls for 10 reqs)
+    mock_client.chat.side_effect = [_make_llm_resp(big_reqs)] + [
+        _make_llm_resp(json.dumps([])) for _ in range(10)
+    ]
+    agent = EvidenceAgent(client=mock_client)
     pack = agent.build_evidence_pack(career, job)
+
     assert len(pack.job_requirements) <= 10
+
+
+# ---------------------------------------------------------------------------
+# VoiceAgent
+# ---------------------------------------------------------------------------
+
+
+def test_voice_agent_distills_style_guide(voice_profile):
+    agent = VoiceAgent()
+    guide = agent.build_style_guide(voice_profile)
+
+    assert guide.core_adjectives
+    assert any("direct" in item.lower() for item in guide.core_adjectives)
+    assert guide.style_rules
+    assert any("short declarative sentences" in item.lower() for item in guide.style_rules)
 
 
 # ---------------------------------------------------------------------------
@@ -499,8 +552,6 @@ def test_feedback_includes_truth_suggestions(career_profile, voice_profile, job_
 # ---------------------------------------------------------------------------
 # LLM-powered EvidenceAgent tests
 # ---------------------------------------------------------------------------
-
-import json
 
 
 def _make_llm_response(response_text: str):

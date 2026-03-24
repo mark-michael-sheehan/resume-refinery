@@ -274,12 +274,15 @@ class DocumentReviewer:
                 {"role": "system", "content": system},
                 {"role": "user", "content": "/no_think\n" + user_msg},
             ]
+        # When thinking is enabled, don't cap num_predict — let the context
+        # window be the natural limit so thinking tokens don't starve content.
+        predict = -1 if think else MAX_TOKENS
         response = self.client.chat(
             model=MODEL,
             messages=messages,
             think=think,
             format="json",
-            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
+            options={"num_ctx": NUM_CTX, "num_predict": predict},
         )
         raw = response.message.content.strip()
 
