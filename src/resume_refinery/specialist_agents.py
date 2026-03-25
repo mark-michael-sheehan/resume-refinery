@@ -533,7 +533,18 @@ class RepairAgent:
                 {"role": "user", "content": user_msg},
             ],
             think=True,
-            format="json",
+            format={
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "find":    {"type": "string"},
+                        "replace": {"type": "string"},
+                        "reason":  {"type": "string"},
+                    },
+                    "required": ["find", "replace"],
+                },
+            },
             options={"num_ctx": _NUM_CTX, "num_predict": -1},
         )
         raw = (response.message.content or "").strip()
@@ -544,15 +555,16 @@ class RepairAgent:
         raw = _normalize_llm_json(raw)
         data = json.loads(raw)
 
-        # The LLM may return a bare array or {"edits": [...]}
+        # Schema forces an array, but be defensive in case the model ignores it.
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
             for k in ("edits", "changes", "replacements"):
                 if isinstance(data.get(k), list):
+                    logging.warning("Repair LLM returned object with '%s' key instead of bare array", k)
                     return data[k]
-            # Single edit wrapped in an object
             if "find" in data:
+                logging.warning("Repair LLM returned a single edit object instead of an array")
                 return [data]
         return []
 
