@@ -505,7 +505,19 @@ class RepairAgent:
             )
 
             edits = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
+            logging.debug(
+                "[repair:%s] LLM returned %d edit(s)",
+                key, len(edits),
+            )
             if edits:
+                for i, e in enumerate(edits):
+                    logging.debug(
+                        "[repair:%s] edit %d/%d — find=%r  replace=%r  reason=%r",
+                        key, i + 1, len(edits),
+                        e.get("find", "")[:120],
+                        e.get("replace", "")[:120],
+                        e.get("reason", "")[:120],
+                    )
                 repaired = apply_edits(doc_content, edits)
                 docs.set(key, repaired)
                 all_edits[key] = [
@@ -601,9 +613,14 @@ class RepairAgent:
             if not doc_truth.pass_strict:
                 has_issues = True
                 if doc_truth.unsupported_claims:
+                    n = len(doc_truth.unsupported_claims)
+                    logging.debug(
+                        "[repair:%s] truthfulness: %d unsupported claim(s) — passing ALL to repair",
+                        key, n,
+                    )
                     parts.append(
                         "TRUTHFULNESS — Unsupported claims (verbatim from document):\n"
-                        + "\n".join(f"- {c}" for c in doc_truth.unsupported_claims[:8])
+                        + "\n".join(f"- {c}" for c in doc_truth.unsupported_claims)
                     )
                 else:
                     parts.append(
@@ -613,7 +630,7 @@ class RepairAgent:
                 if doc_truth.evidence_examples:
                     parts.append(
                         "Supporting evidence from Career Profile:\n"
-                        + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8])
+                        + "\n".join(f"- {e}" for e in doc_truth.evidence_examples)
                     )
 
         # --- Voice (skip for interview guide — personal prep) ---
@@ -632,9 +649,13 @@ class RepairAgent:
                 }
                 issues = doc_issues_map[key] or voice_review.specific_issues
                 if issues:
+                    logging.debug(
+                        "[repair:%s] voice: %d off-voice issue(s) — passing ALL to repair",
+                        key, len(issues),
+                    )
                     parts.append(
                         "VOICE — Off-voice phrases (verbatim from document):\n"
-                        + "\n".join(f"- {i}" for i in issues[:8])
+                        + "\n".join(f"- {i}" for i in issues)
                     )
 
         # --- AI detection (skip for interview guide — personal prep) ---
@@ -647,12 +668,22 @@ class RepairAgent:
             flags = flag_map[key]
             if flags:
                 has_issues = True
+                logging.debug(
+                    "[repair:%s] ai-detection: %d flagged phrase(s) — passing ALL to repair",
+                    key, len(flags),
+                )
                 parts.append(
                     "AI DETECTION — Flagged phrases (verbatim from document):\n"
-                    + "\n".join(f'- "{f}"' for f in flags[:8])
+                    + "\n".join(f'- "{f}"' for f in flags)
                 )
 
         if not has_issues:
+            logging.debug("[repair:%s] no issues found — skipping repair for this document", key)
             return ""
 
-        return "\n\n".join(parts)
+        findings = "\n\n".join(parts)
+        logging.debug(
+            "[repair:%s] full review findings sent to LLM (%d chars):\n%s",
+            key, len(findings), findings,
+        )
+        return findings
