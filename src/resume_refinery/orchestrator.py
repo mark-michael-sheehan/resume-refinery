@@ -16,6 +16,7 @@ from .models import (
     DocumentSet,
     DraftingContext,
     OrchestrationResult,
+    RepairPassResult,
     ReviewBundle,
     Session,
     TruthfulnessResult,
@@ -94,7 +95,7 @@ class ResumeRefineryOrchestrator:
             docs.set(key, text)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
-        reviews = self._verify_and_repair(
+        reviews, repair_passes = self._verify_and_repair(
             docs, career, voice, job, context, progress=progress,
             on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
         )
@@ -115,6 +116,7 @@ class ResumeRefineryOrchestrator:
             session=session,
             documents=docs,
             reviews=persisted,
+            repair_passes=repair_passes,
             evidence_pack=context.evidence_pack,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
@@ -170,7 +172,7 @@ class ResumeRefineryOrchestrator:
                 current_docs.set(key, regenerated)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
-        reviews = self._verify_and_repair(
+        reviews, repair_passes = self._verify_and_repair(
             current_docs,
             career,
             voice,
@@ -202,6 +204,7 @@ class ResumeRefineryOrchestrator:
             session=session,
             documents=current_docs,
             reviews=persisted,
+            repair_passes=repair_passes,
             evidence_pack=context.evidence_pack,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
@@ -256,10 +259,11 @@ class ResumeRefineryOrchestrator:
         progress: ProgressCallback | None = None,
         max_passes: int = MAX_REPAIR_PASSES,
         on_repair_pass: Callable[[int, DocumentSet, ReviewBundle], None] | None = None,
-    ) -> ReviewBundle:
+    ) -> tuple[ReviewBundle, list[RepairPassResult]]:
         import logging
 
         previous_truth_suggestions: list[str] = []
+        repair_results: list[RepairPassResult] = []
 
         truth = None
         voice_result = None
@@ -327,7 +331,7 @@ class ResumeRefineryOrchestrator:
 
             # --- Unified repair ---
             self._progress(progress, "  Repairing documents (up to 3 LLM calls, thinking enabled)...")
-            self.repair_agent.repair_unified(
+            repair_pass = self.repair_agent.repair_unified(
                 docs, truth, voice_result, ai_result,
                 career, voice, job, context,
                 feedback=feedback,
@@ -335,6 +339,9 @@ class ResumeRefineryOrchestrator:
                     previous_truth_suggestions
                 ),
             )
+            repair_results.append(repair_pass)
+            if repair_pass.edits:
+                self._progress(progress, self._summarise_repair(repair_pass))
 
             # Snapshot documents and reviews after this repair pass for auditing.
             if on_repair_pass is not None:
@@ -356,7 +363,7 @@ class ResumeRefineryOrchestrator:
             truthfulness=truth,
             voice=voice_result,
             ai_detection=ai_result,
-        )
+        ), repair_results
 
     def _export(self, session: Session, docs: DocumentSet) -> dict[str, Path]:
         version_dir = self.store.session_dir(session.session_id) / f"v{session.current_version}"
@@ -412,6 +419,19 @@ class ResumeRefineryOrchestrator:
             flags = per_doc_flags.get(label, [])
             if flags:
                 parts.append(f"  {label}: {len(flags)} flag(s)")
+        return "\n".join(parts)
+
+    def _summarise_repair(self, repair_pass: RepairPassResult) -> str:
+        doc_labels = self._doc_labels()
+        parts = ["[bold]Repair edits applied:[/bold]"]
+        for key, edits in repair_pass.edits.items():
+            label = doc_labels.get(key, key)
+            parts.append(f"  {label}: {len(edits)} edit(s)")
+            for edit in edits:
+                parts.append(f'    [red]- "{edit.find}"[/red]')
+                parts.append(f'    [green]+ "{edit.replace}"[/green]')
+                if edit.reason:
+                    parts.append(f"      ({edit.reason})")
         return "\n".join(parts)
 
     def _doc_labels(self) -> dict[DocumentKey, str]:

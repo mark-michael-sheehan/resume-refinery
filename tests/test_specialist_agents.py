@@ -12,6 +12,7 @@ from resume_refinery.models import (
     DraftingContext,
     EvidencePack,
     JobRequirement,
+    RepairPassResult,
     ReviewBundle,
     TruthfulnessResult,
     VoiceReviewResult,
@@ -489,6 +490,45 @@ def test_repair_unified_applies_surgical_edits(career_profile, voice_profile, jo
     assert docs.interview_guide == "old ig"
     # _plan_edits called exactly once (only cover_letter had issues)
     assert agent._plan_edits.call_count == 1
+
+
+def test_repair_unified_returns_repair_pass_result(career_profile, voice_profile, job_description):
+    """repair_unified should return a RepairPassResult with the applied edits."""
+    agent = RepairAgent()
+
+    docs = DocumentSet(
+        cover_letter="I am a passionate innovator.",
+        resume="old resume",
+        interview_guide="old ig",
+    )
+    doc_fail = DocumentTruthResult(
+        pass_strict=False,
+        unsupported_claims=["passionate innovator"],
+    )
+    doc_pass = DocumentTruthResult(pass_strict=True)
+    truth = TruthfulnessResult(
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=doc_pass,
+        interview_guide=doc_pass,
+    )
+    context = _make_context()
+
+    agent._plan_edits = MagicMock(return_value=[
+        {"find": "passionate innovator", "replace": "experienced engineer", "reason": "truthfulness"},
+    ])
+
+    result = agent.repair_unified(
+        docs, truth, None, None,
+        career_profile, voice_profile, job_description, context,
+    )
+
+    assert isinstance(result, RepairPassResult)
+    assert "cover_letter" in result.edits
+    assert len(result.edits["cover_letter"]) == 1
+    assert result.edits["cover_letter"][0].find == "passionate innovator"
+    assert result.edits["cover_letter"][0].replace == "experienced engineer"
+    assert result.edits["cover_letter"][0].reason == "truthfulness"
 
 
 def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_description):

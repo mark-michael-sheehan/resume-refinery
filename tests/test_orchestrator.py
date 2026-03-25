@@ -10,6 +10,7 @@ from resume_refinery.models import (
     DocumentTruthResult,
     EvidencePack,
     JobRequirement,
+    RepairPassResult,
     ReviewBundle,
     TruthfulnessResult,
     VoiceReviewResult,
@@ -119,7 +120,7 @@ class FakeRepairAgent:
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
         docs.interview_guide = "interview_guide repaired"
-        return docs
+        return RepairPassResult()
 
 
 def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -368,7 +369,7 @@ def test_max_passes_zero_skips_all_reviews(tmp_path, monkeypatch, career_profile
         repair_agent=repair,
     )
 
-    result = orchestrator._verify_and_repair(
+    result, _ = orchestrator._verify_and_repair(
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
@@ -398,7 +399,7 @@ def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_p
         repair_agent=repair,
     )
 
-    result = orchestrator._verify_and_repair(
+    result, _ = orchestrator._verify_and_repair(
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
@@ -431,7 +432,7 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
         repair_agent=repair,
     )
 
-    result = orchestrator._verify_and_repair(
+    result, _ = orchestrator._verify_and_repair(
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
@@ -645,7 +646,7 @@ def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, car
         repair_agent=repair,
     )
 
-    result = orchestrator._verify_and_repair(
+    result, _ = orchestrator._verify_and_repair(
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),

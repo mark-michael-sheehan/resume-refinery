@@ -218,6 +218,8 @@ def _report_result(result, show_quality_reviews: bool) -> None:
     for path in result.exported_paths.values():
         console.print(f"  {Path(path).name}")
     _print_review_summary(result.reviews, show_quality_reviews=show_quality_reviews)
+    if result.repair_passes:
+        _print_repair_summary(result.repair_passes)
 
 
 def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
@@ -227,38 +229,77 @@ def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
     if show_quality_reviews and reviews.voice:
         r = reviews.voice
         match_color = {"strong": "green", "moderate": "yellow", "weak": "red"}[r.overall_match]
-        console.print(
-            Panel(
-                f"Overall match: [{match_color}]{r.overall_match.upper()}[/{match_color}]\n\n"
-                + (f"Issues:\n" + "\n".join(f"  • {i}" for i in r.specific_issues) if r.specific_issues else ""),
-                title="[bold]Voice Match Review[/bold]",
-            )
-        )
+        lines = [f"Overall match: [{match_color}]{r.overall_match.upper()}[/{match_color}]"]
+        for label, match, issues in [
+            ("Cover Letter", r.cover_letter_match, r.cover_letter_issues),
+            ("Resume", r.resume_match, r.resume_issues),
+            ("Interview Guide", r.interview_guide_match, r.interview_guide_issues),
+        ]:
+            mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
+            lines.append(f"\n[bold]{label}[/bold]: [{mc}]{match}[/{mc}]")
+            if issues:
+                for issue in issues:
+                    lines.append(f"  • {issue}")
+        console.print(Panel("\n".join(lines), title="[bold]Voice Match Review[/bold]"))
 
     if show_quality_reviews and reviews.ai_detection:
         r = reviews.ai_detection
         risk_color = {"low": "green", "medium": "yellow", "high": "red"}[r.risk_level]
-        all_flags = r.cover_letter_flags + r.resume_flags + r.interview_guide_flags
-        console.print(
-            Panel(
-                f"AI-content risk: [{risk_color}]{r.risk_level.upper()}[/{risk_color}]\n\n"
-                + (f"Flagged phrases:\n" + "\n".join(f'  • "{f}"' for f in all_flags[:6]) if all_flags else "No flags."),
-                title="[bold]AI-Detection Review[/bold]",
-            )
-        )
+        lines = [f"AI-content risk: [{risk_color}]{r.risk_level.upper()}[/{risk_color}]"]
+        for label, flags in [
+            ("Cover Letter", r.cover_letter_flags),
+            ("Resume", r.resume_flags),
+            ("Interview Guide", r.interview_guide_flags),
+        ]:
+            if flags:
+                lines.append(f"\n[bold]{label}[/bold]: {len(flags)} flag(s)")
+                for f in flags:
+                    lines.append(f'  • "{f}"')
+        if not any([r.cover_letter_flags, r.resume_flags, r.interview_guide_flags]):
+            lines.append("\nNo flags.")
+        console.print(Panel("\n".join(lines), title="[bold]AI-Detection Review[/bold]"))
 
 
 def _print_truth_summary(truth) -> None:
     color = "green" if truth.all_supported else "red"
-    lines = [
-        f"All claims supported: [{color}]{str(truth.all_supported).upper()}[/{color}]",
-        f"Cover Letter unsupported: {len(truth.cover_letter.unsupported_claims)}",
-        f"Resume unsupported: {len(truth.resume.unsupported_claims)}",
-        f"Interview Guide unsupported: {len(truth.interview_guide.unsupported_claims)}",
-    ]
-    if truth.suggestions:
-        lines.append("\nSuggestions:\n" + "\n".join(f"  • {s}" for s in truth.suggestions[:5]))
+    lines = [f"All claims supported: [{color}]{str(truth.all_supported).upper()}[/{color}]"]
+    for label, doc in [
+        ("Cover Letter", truth.cover_letter),
+        ("Resume", truth.resume),
+        ("Interview Guide", truth.interview_guide),
+    ]:
+        status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗[/red]"
+        lines.append(f"\n[bold]{label}[/bold]: {status}")
+        if doc.unsupported_claims:
+            for claim in doc.unsupported_claims:
+                lines.append(f"  • {claim}")
+        if doc.suggestions:
+            for s in doc.suggestions:
+                lines.append(f"  → {s}")
     console.print(Panel("\n".join(lines), title="[bold]Truthfulness Review[/bold]"))
+
+
+def _print_repair_summary(repair_passes) -> None:
+    doc_labels = {
+        "cover_letter": "Cover Letter",
+        "resume": "Resume",
+        "interview_guide": "Interview Guide",
+    }
+    for i, repair_pass in enumerate(repair_passes, 1):
+        if not repair_pass.edits:
+            continue
+        lines = []
+        for key, edits in repair_pass.edits.items():
+            label = doc_labels.get(key, key)
+            lines.append(f"[bold]{label}[/bold]: {len(edits)} edit(s)")
+            for edit in edits:
+                lines.append(f'  [red]− "{edit.find}"[/red]')
+                lines.append(f'  [green]+ "{edit.replace}"[/green]')
+                if edit.reason:
+                    lines.append(f"    ({edit.reason})")
+            lines.append("")
+        if lines:
+            console.print(Panel("\n".join(lines).rstrip(), title=f"[bold]Repair Pass {i}[/bold]"))
 
 
 def _open_folder(path: Path) -> None:

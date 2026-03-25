@@ -22,6 +22,8 @@ from .models import (
     EvidencePack,
     JobDescription,
     JobRequirement,
+    RepairEdit,
+    RepairPassResult,
     ReviewBundle,
     TruthfulnessResult,
     VoiceProfile,
@@ -478,10 +480,12 @@ class RepairAgent:
         context: DraftingContext,
         feedback: str | None = None,
         previous_suggestions: list[str] | None = None,
-    ) -> DocumentSet:
+    ) -> RepairPassResult:
         """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
         from .utils import apply_edits
+
+        all_edits: dict[str, list[RepairEdit]] = {}
 
         for key in ("cover_letter", "resume", "interview_guide"):
             review_findings = self._build_review_findings(
@@ -505,7 +509,15 @@ class RepairAgent:
             if edits:
                 repaired = apply_edits(doc_content, edits)
                 docs.set(key, repaired)
-        return docs
+                all_edits[key] = [
+                    RepairEdit(
+                        find=e.get("find", ""),
+                        replace=e.get("replace", ""),
+                        reason=e.get("reason", ""),
+                    )
+                    for e in edits
+                ]
+        return RepairPassResult(edits=all_edits)
 
     # ------------------------------------------------------------------
     # LLM call for edit planning

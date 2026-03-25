@@ -180,6 +180,17 @@ class ReviewBundle(BaseModel):
     truthfulness: Optional[TruthfulnessResult] = None
 
 
+class RepairEdit(BaseModel):
+    find: str
+    replace: str
+    reason: str = ""
+
+
+class RepairPassResult(BaseModel):
+    """Edits applied during a single repair pass, keyed by document."""
+    edits: dict[str, list[RepairEdit]] = Field(default_factory=dict)
+
+
 class VerificationReport(BaseModel):
     reviews: ReviewBundle
     passed_strict_truth: bool = False
@@ -189,6 +200,7 @@ class OrchestrationResult(BaseModel):
     session: Session
     documents: DocumentSet
     reviews: ReviewBundle = Field(default_factory=ReviewBundle)
+    repair_passes: list[RepairPassResult] = Field(default_factory=list)
     evidence_pack: Optional[EvidencePack] = None
     voice_style_guide: Optional[VoiceStyleGuide] = None
     exported_paths: dict[str, str] = Field(default_factory=dict)

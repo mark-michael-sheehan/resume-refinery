@@ -82,7 +82,7 @@ This will:
 3. Export DOCX files to `~/.resume_refinery/sessions/<session_id>/v1/`
 4. Run strict truthfulness verification and targeted repair passes
 5. Run voice-match and AI-detection reviews automatically
-6. Print a summary of truthfulness + review results
+6. Print per-document issues from each reviewer and find/replace edits applied per repair pass
 
 Skip voice/AI style reviews with `--skip-review`.
 

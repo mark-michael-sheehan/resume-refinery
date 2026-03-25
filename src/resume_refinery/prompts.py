@@ -405,7 +405,10 @@ REVIEWER CRITERIA (the reviewers will re-check your edits using these rules):
 
 Truthfulness reviewer rules:
 - Every specific factual claim (names, numbers, skills, outcomes) must be \
-  explicitly supported by the Career Profile.
+  explicitly supported by the Career Profile or Job Description.
+- Claims referencing job details (company name, role title, team context, \
+  technology stack mentioned in the posting) are valid if they appear in \
+  the Job Description.
 - Vague but reasonable phrasing (e.g. "experienced professional") passes.
 - If ANY unsupported specific claim exists, the document fails.
 
