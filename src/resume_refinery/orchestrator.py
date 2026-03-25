@@ -14,6 +14,7 @@ from .models import (
     CareerProfile,
     DocumentKey,
     DocumentSet,
+    DocumentTruthResult,
     DraftingContext,
     OrchestrationResult,
     RepairPassResult,
@@ -268,6 +269,13 @@ class ResumeRefineryOrchestrator:
         voice_result = None
         ai_result = None
 
+        # Per-reviewer suppression sets — accumulated across all repair passes.
+        # Each reviewer has its own independent set so a voice false positive
+        # cannot accidentally suppress a truthfulness finding (and vice versa).
+        suppressed_claims: set[str] = set()
+        suppressed_ai_phrases: set[str] = set()
+        suppressed_voice_issues: set[str] = set()
+
         for pass_num in range(max_passes):
             self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
 
@@ -295,6 +303,12 @@ class ResumeRefineryOrchestrator:
                 logging.warning("AI-detection review failed (%s)", exc)
                 self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
                 ai_result = None
+
+            # Filter out items accepted as false positives in earlier passes.
+            truth, voice_result, ai_result = self._apply_suppressions(
+                truth, voice_result, ai_result,
+                suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
+            )
 
             # --- Summarise all three ---
             if truth:
@@ -336,6 +350,10 @@ class ResumeRefineryOrchestrator:
                 feedback=feedback,
             )
             repair_results.append(repair_pass)
+            # Accumulate per-reviewer acceptances into suppression sets.
+            suppressed_claims.update(repair_pass.accepted_claims)
+            suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
+            suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
             if repair_pass.edits:
                 self._progress(progress, self._summarise_repair(repair_pass))
 
@@ -361,6 +379,68 @@ class ResumeRefineryOrchestrator:
     def _progress(self, callback: ProgressCallback | None, message: str) -> None:
         if callback is not None:
             callback(message)
+
+    # ------------------------------------------------------------------
+    # Per-reviewer false-positive suppression
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_suppressions(
+        truth: TruthfulnessResult | None,
+        voice_result: VoiceReviewResult | None,
+        ai_result: AIDetectionResult | None,
+        suppressed_claims: set[str],
+        suppressed_ai_phrases: set[str],
+        suppressed_voice_issues: set[str],
+    ) -> tuple[TruthfulnessResult | None, VoiceReviewResult | None, AIDetectionResult | None]:
+        """Return copies of review results with suppressed items removed.
+
+        Each reviewer has its own independent suppression set so that accepting
+        a voice false positive cannot silence a truthfulness finding (and
+        vice versa).
+        """
+        # --- Truthfulness ---
+        filtered_truth = truth
+        if truth and suppressed_claims:
+            def _filter_doc(doc: DocumentTruthResult) -> DocumentTruthResult:
+                remaining = [c for c in doc.unsupported_claims if c not in suppressed_claims]
+                return doc.model_copy(update={"unsupported_claims": remaining, "pass_strict": not remaining})
+            cl = _filter_doc(truth.cover_letter)
+            res = _filter_doc(truth.resume)
+            ig = _filter_doc(truth.interview_guide)
+            filtered_truth = truth.model_copy(update={
+                "cover_letter": cl,
+                "resume": res,
+                "interview_guide": ig,
+                "all_supported": cl.pass_strict and res.pass_strict and ig.pass_strict,
+            })
+
+        # --- AI detection ---
+        filtered_ai = ai_result
+        if ai_result and suppressed_ai_phrases:
+            cl_flags = [f for f in ai_result.cover_letter_flags if f not in suppressed_ai_phrases]
+            res_flags = [f for f in ai_result.resume_flags if f not in suppressed_ai_phrases]
+            ig_flags = [f for f in ai_result.interview_guide_flags if f not in suppressed_ai_phrases]
+            total = len(cl_flags) + len(res_flags) + len(ig_flags)
+            risk = "low" if total <= 1 else "medium" if total <= 3 else "high"
+            filtered_ai = ai_result.model_copy(update={
+                "cover_letter_flags": cl_flags,
+                "resume_flags": res_flags,
+                "interview_guide_flags": ig_flags,
+                "risk_level": risk,
+            })
+
+        # --- Voice ---
+        filtered_voice = voice_result
+        if voice_result and suppressed_voice_issues:
+            filtered_voice = voice_result.model_copy(update={
+                "cover_letter_issues": [i for i in voice_result.cover_letter_issues if i not in suppressed_voice_issues],
+                "resume_issues": [i for i in voice_result.resume_issues if i not in suppressed_voice_issues],
+                "interview_guide_issues": [i for i in voice_result.interview_guide_issues if i not in suppressed_voice_issues],
+                "specific_issues": [i for i in voice_result.specific_issues if i not in suppressed_voice_issues],
+            })
+
+        return filtered_truth, filtered_voice, filtered_ai
 
     # ------------------------------------------------------------------
     # Review-result summaries emitted via the progress callback

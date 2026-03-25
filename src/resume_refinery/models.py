@@ -187,6 +187,11 @@ class RepairEdit(BaseModel):
 class RepairPassResult(BaseModel):
     """Edits applied during a single repair pass, keyed by document."""
     edits: dict[str, list[RepairEdit]] = Field(default_factory=dict)
+    # Per-reviewer false-positive acceptances — phrases the repairer determined
+    # are reviewer false positives and should be suppressed in future passes.
+    accepted_claims: StrList = Field(default_factory=list)
+    accepted_ai_phrases: StrList = Field(default_factory=list)
+    accepted_voice_issues: StrList = Field(default_factory=list)
 
 
 class VerificationReport(BaseModel):

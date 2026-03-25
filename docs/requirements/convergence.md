@@ -53,3 +53,13 @@ ensure convergence.
 | CR-6.1 | The maximum number of review+repair passes is bounded by `RESUME_REFINERY_MAX_REPAIR_PASSES` (default 3). |
 | CR-6.2 | If all documents pass all reviewers on any pass, the loop exits early. |
 | CR-6.3 | If the loop exhausts all passes without convergence, the best version so far is kept and a warning is logged. |
+
+## CR-7 Per-Reviewer Suppression
+
+| ID | Requirement |
+|---|---|
+| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of three per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice). |
+| CR-7.2 | The orchestrator maintains three independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
+| CR-7.3 | Before each pass's gate check and repair call, raw reviewer results are filtered through the corresponding suppression set. Suppressed items are removed from flag/issue/claim lists; truthfulness `pass_strict` and `all_supported` are recalculated; AI `risk_level` is recalculated from the remaining flag count. Voice match levels are preserved as-is (they reflect holistic LLM judgment, not issue count). |
+| CR-7.4 | A phrase accepted in any pass is suppressed for all subsequent passes in the same run. Suppression sets do not persist beyond a single `create_session_run` or `refine_session_run` call. |
+| CR-7.5 | Each reviewer's suppression set is independent — accepting a voice false positive cannot suppress a truthfulness or AI-detection finding (and vice versa). |

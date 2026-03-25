@@ -314,6 +314,59 @@ def test_ai_review_exception_skips_loop(tmp_path, monkeypatch, career_profile, v
 
 
 # ---------------------------------------------------------------------------
+# Per-reviewer suppression
+# ---------------------------------------------------------------------------
+
+
+class AlwaysFlagsAIPhraseVerification(AlwaysPassVerificationAgent):
+    """Truth and voice always pass; AI detection always flags the same phrase."""
+
+    def review_ai_detection(self, docs):
+        return AIDetectionResult(
+            risk_level="medium",
+            cover_letter_flags=["accepted-phrase"],
+            resume_flags=[],
+            interview_guide_flags=[],
+        )
+
+
+class AcceptsAIPhraseRepairAgent:
+    """On first repair, accepts the flagged AI phrase instead of trying to fix it."""
+
+    def __init__(self):
+        self.unified_calls = 0
+
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None):
+        self.unified_calls += 1
+        return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
+
+
+def test_suppression_prevents_reflagged_phrase_from_blocking_convergence(
+    tmp_path, monkeypatch, career_profile, voice_profile, job_description
+):
+    """A phrase accepted by the repairer should be suppressed in subsequent passes."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    repair = AcceptsAIPhraseRepairAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysFlagsAIPhraseVerification(),
+        repair_agent=repair,
+    )
+
+    result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
+
+    # Pass 1: AI flag found → repair called → phrase accepted.
+    # Pass 2: same AI flag found but suppressed → gate passes → loop exits early.
+    assert repair.unified_calls == 1
+    # The final review reflects the suppressed (filtered) state
+    assert result.reviews.ai_detection is not None
+    assert result.reviews.ai_detection.cover_letter_flags == []
+
+
+# ---------------------------------------------------------------------------
 # Per-loop max_passes: 0 skips, 1 = review-only, independent control
 # ---------------------------------------------------------------------------
 

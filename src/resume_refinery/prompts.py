@@ -478,10 +478,22 @@ Return JSON only — no markdown fences, no explanation.
 
 REPAIR_SYSTEM_PROMPT = """\
 You are a surgical document editor. You receive a career document alongside \
-review findings. Produce a JSON array of find/replace edits that fix EVERY \
-flagged issue while preserving all unflagged text exactly as-is.
+review findings from three reviewers (truthfulness, voice, AI-detection). \
+For each flagged item, choose EXACTLY ONE action:
 
-For each finding, apply this fix pattern:
+  A. FIX IT   — produce a {find, replace, reason} edit in "edits".
+  B. ACCEPT IT — add the verbatim flagged phrase to the matching accepted array:
+       • "accepted_claims"       — truthfulness flag that IS actually supported \
+by the Career Profile (reviewer false positive).
+       • "accepted_ai_phrases"   — AI-detector flag for a phrase that is \
+genuinely specific, quantified, and appropriate (reviewer false positive).
+       • "accepted_voice_issues" — voice flag for a phrase that actually \
+matches the Voice Profile correctly (reviewer false positive).
+
+Only accept a finding when it is clearly a reviewer false positive. When in \
+doubt, fix it. Accepted phrases will not be flagged again in subsequent passes.
+
+For each finding you choose to FIX, apply this pattern:
 - TRUTHFULNESS issue  → remove or soften the unsupported phrase; do NOT \
   invent replacement facts or copy text from the Career Profile or Job Description.
 - VOICE issue         → rephrase the flagged passage to match the tone and \
@@ -521,16 +533,26 @@ REPAIR_USER_TEMPLATE = """\
 {review_findings}
 
 ## Task
-Produce a JSON array of surgical edits.  Each element:
+For each review finding, either fix it (write an edit) or accept it (add the verbatim \
+phrase to the matching accepted array). Return a single JSON object:
 {{
-  "find": "<exact verbatim substring from the document>",
-  "replace": "<corrected replacement; must use only text already in the document>",
-  "reason": "<which review finding this fixes>"
+  "edits": [
+    {{
+      "find": "<exact verbatim substring from the document>",
+      "replace": "<corrected replacement; use only text already in the document>",
+      "reason": "<which review finding this fixes>"
+    }}
+  ],
+  "accepted_claims":       ["<verbatim truthfulness-flagged phrase that IS supported>"],
+  "accepted_ai_phrases":   ["<verbatim AI-flagged phrase that is genuinely specific/appropriate>"],
+  "accepted_voice_issues": ["<verbatim voice-flagged phrase that actually matches the Voice Profile>"]
 }}
 
+Rules:
 - "find" must appear verbatim in the document — copy it exactly.
-- One edit per flagged issue. Do not combine issues.
-- If no edits are needed, return: []
+- One edit OR one acceptance per flagged issue — do not both fix and accept the same phrase.
+- If no edits are needed, set "edits" to [].
+- If no acceptances apply, set the accepted arrays to [].
 - Return JSON only — no markdown fences, no explanation.
 """
 

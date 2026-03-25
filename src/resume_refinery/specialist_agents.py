@@ -485,6 +485,9 @@ class RepairAgent:
         from .utils import apply_edits
 
         all_edits: dict[str, list[RepairEdit]] = {}
+        all_accepted_claims: list[str] = []
+        all_accepted_ai_phrases: list[str] = []
+        all_accepted_voice_issues: list[str] = []
 
         for key in ("cover_letter", "resume", "interview_guide"):
             review_findings = self._build_review_findings(
@@ -504,10 +507,16 @@ class RepairAgent:
                 review_findings=review_findings,
             )
 
-            edits = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
+            edits, acceptances = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
+            all_accepted_claims.extend(acceptances.get("accepted_claims", []))
+            all_accepted_ai_phrases.extend(acceptances.get("accepted_ai_phrases", []))
+            all_accepted_voice_issues.extend(acceptances.get("accepted_voice_issues", []))
             logging.debug(
-                "[repair:%s] LLM returned %d edit(s)",
+                "[repair:%s] LLM returned %d edit(s), %d/%d/%d accepted (claims/ai/voice)",
                 key, len(edits),
+                len(acceptances.get("accepted_claims", [])),
+                len(acceptances.get("accepted_ai_phrases", [])),
+                len(acceptances.get("accepted_voice_issues", [])),
             )
             if edits:
                 for i, e in enumerate(edits):
@@ -528,14 +537,25 @@ class RepairAgent:
                     )
                     for e in edits
                 ]
-        return RepairPassResult(edits=all_edits)
+        return RepairPassResult(
+            edits=all_edits,
+            accepted_claims=all_accepted_claims,
+            accepted_ai_phrases=all_accepted_ai_phrases,
+            accepted_voice_issues=all_accepted_voice_issues,
+        )
 
     # ------------------------------------------------------------------
     # LLM call for edit planning
     # ------------------------------------------------------------------
 
-    def _plan_edits(self, system: str, user_msg: str) -> list[dict]:
-        """Call the LLM and return a list of {find, replace, reason} dicts."""
+    def _plan_edits(self, system: str, user_msg: str) -> tuple[list[dict], dict[str, list[str]]]:
+        """Call the LLM and return (edits, acceptances).
+
+        edits: list of {find, replace, reason} dicts.
+        acceptances: dict with keys accepted_claims, accepted_ai_phrases,
+            accepted_voice_issues — verbatim phrases the repairer determined
+            are reviewer false positives that should be suppressed going forward.
+        """
         from .reviewers import _normalize_llm_json
 
         response = self.client.chat(
@@ -546,16 +566,25 @@ class RepairAgent:
             ],
             think=False,
             format={
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "find":    {"type": "string"},
-                        "replace": {"type": "string"},
-                        "reason":  {"type": "string"},
+                "type": "object",
+                "properties": {
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "find":    {"type": "string"},
+                                "replace": {"type": "string"},
+                                "reason":  {"type": "string"},
+                            },
+                            "required": ["find", "replace"],
+                        },
                     },
-                    "required": ["find", "replace"],
+                    "accepted_claims":       {"type": "array", "items": {"type": "string"}},
+                    "accepted_ai_phrases":   {"type": "array", "items": {"type": "string"}},
+                    "accepted_voice_issues": {"type": "array", "items": {"type": "string"}},
                 },
+                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues"],
             },
             options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
         )
@@ -563,22 +592,37 @@ class RepairAgent:
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
         if not raw:
             logging.warning("Repair LLM returned empty content")
-            return []
+            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": []}
         raw = _normalize_llm_json(raw)
+        _empty: dict[str, list[str]] = {
+            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": []
+        }
+
+        def _extract_acceptances(d: dict) -> dict[str, list[str]]:
+            return {
+                k: [x for x in d.get(k, []) if isinstance(x, str)]
+                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues")
+            }
+
         data = json.loads(raw)
 
-        # Schema forces an array, but be defensive in case the model ignores it.
-        if isinstance(data, list):
-            return data
         if isinstance(data, dict):
-            for k in ("edits", "changes", "replacements"):
+            edits = data.get("edits")
+            if isinstance(edits, list):
+                return edits, _extract_acceptances(data)
+            # Fallback: older bare-list keys the model may emit
+            for k in ("changes", "replacements"):
                 if isinstance(data.get(k), list):
-                    logging.warning("Repair LLM returned object with '%s' key instead of bare array", k)
-                    return data[k]
+                    logging.warning("Repair LLM returned object with '%s' key instead of 'edits'", k)
+                    return data[k], _extract_acceptances(data)
             if "find" in data:
-                logging.warning("Repair LLM returned a single edit object instead of an array")
-                return [data]
-        return []
+                logging.warning("Repair LLM returned a single edit object instead of object with 'edits'")
+                return [data], dict(_empty)
+        if isinstance(data, list):
+            # Backward compat: bare array (pre-schema)
+            logging.warning("Repair LLM returned a bare array instead of an object with 'edits'")
+            return data, dict(_empty)
+        return [], dict(_empty)
 
     # ------------------------------------------------------------------
     # Build review findings text from reviewer results
