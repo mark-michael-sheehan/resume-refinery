@@ -14,6 +14,7 @@ from .models import (
     AIDetectionResult,
     DocumentSet,
     DocumentTruthResult,
+    JobDescription,
     ReviewBundle,
     TruthfulnessResult,
     CareerProfile,
@@ -132,7 +133,7 @@ class DocumentReviewer:
             ai_detection=self.review_ai_detection(docs),
         )
 
-    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile) -> TruthfulnessResult:
+    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile, job: JobDescription) -> TruthfulnessResult:
         """Verify document claims are explicitly supported by the career profile.
 
         Each document is reviewed in its own call so the context window is never
@@ -152,6 +153,7 @@ class DocumentReviewer:
                 continue
             user_msg = TRUTHFULNESS_DOC_USER_TEMPLATE.format(
                 career_profile=career.raw_content,
+                job_description=job.raw_content,
                 doc_type=doc_type,
                 doc_content=content,
             )

@@ -218,8 +218,9 @@ class ResumeRefineryOrchestrator:
         session = self.store.get(session_id)
         career, voice = self.store.load_inputs(session)
         docs = self.store.load_documents(session, version=version)
-        context = self._build_context(career, voice, session.job_description, progress)
-        reviews = self.verification_agent.review_all(docs, career, voice)
+        job = session.job_description
+        context = self._build_context(career, voice, job, progress)
+        reviews = self.verification_agent.review_all(docs, career, voice, job)
         self.store.save_reviews(session, reviews)
         return OrchestrationResult(
             session=session,
@@ -272,7 +273,7 @@ class ResumeRefineryOrchestrator:
             # --- Run all three reviews ---
             self._progress(progress, "  Truthfulness review (3 LLM calls)...")
             try:
-                truth = self.verification_agent.review_truthfulness(docs, career)
+                truth = self.verification_agent.review_truthfulness(docs, career, job)
             except Exception as exc:
                 logging.warning("Truthfulness review failed (%s)", exc)
                 self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")

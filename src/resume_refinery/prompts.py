@@ -230,17 +230,19 @@ Return JSON only — no markdown fences, no explanation.
 
 TRUTHFULNESS_SYSTEM_PROMPT = """You are a strict factual verifier for career documents.
 Your only job is to verify that every claim in the generated documents is supported by the
-provided career profile. If a claim is not explicitly supported, mark it unsupported.
-Do not assume, infer, or soften this rule.
+provided career profile or job description. If a claim is not explicitly supported by either
+source, mark it unsupported. Do not assume, infer, or soften this rule.
 
 Decision procedure (follow in order):
-1. Read the Career Profile and build a mental list of concrete facts: job titles,
-   company names, years, technologies, metrics, accomplishments.
+1. Read the Career Profile and Job Description. Build a mental list of concrete facts:
+   job titles, company names, years, technologies, metrics, accomplishments (from the
+   Career Profile) and role details, team context, tech stack, company info (from the
+   Job Description).
 2. Read the document sentence by sentence.
 3. For each factual claim (names, numbers, skills, outcomes), check whether the
-   Career Profile contains an explicit supporting statement.
+   Career Profile or Job Description contains an explicit supporting statement.
 4. If a claim is vague but reasonable (e.g. "experienced professional"), it passes.
-   Only flag claims that state specific facts not present in the Career Profile.
+   Only flag claims that state specific facts not present in either source.
 5. If ANY unsupported claim exists, set pass_strict to false.
 """""
 
@@ -248,11 +250,14 @@ Decision procedure (follow in order):
 TRUTHFULNESS_DOC_USER_TEMPLATE = """## Career Profile
 {career_profile}
 
+## Job Description
+{job_description}
+
 ## {doc_type}
 {doc_content}
 
 ## Task
-Check every factual claim in the {doc_type} against the Career Profile above.
+Check every factual claim in the {doc_type} against the Career Profile and Job Description above.
 Return a JSON object with this shape:
 {{
   "pass_strict": boolean,
@@ -264,6 +269,9 @@ Return a JSON object with this shape:
 Rules:
 - Unsupported claims must quote the exact problematic phrase from the {doc_type}.
 - evidence_examples must quote exact phrases from the Career Profile that support claims.
+- Claims that reference details from the Job Description (e.g. company name, role title,
+  team context, or technology stack mentioned in the posting) are supported and must NOT be
+  flagged as unsupported.
 - suggestions should describe how to fix or remove unsupported claims.
 - pass_strict must be false if any unsupported claim exists.
 

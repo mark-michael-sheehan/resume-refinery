@@ -51,7 +51,7 @@ class FakeVerificationAgent:
         self.voice_calls = 0
         self.ai_calls = 0
 
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         self.truth_calls += 1
         passed = self.truth_calls > 1
         truth_doc = DocumentTruthResult(pass_strict=passed, unsupported_claims=[] if passed else ["unsupported claim"], evidence_examples=[])
@@ -86,7 +86,7 @@ class FakeVerificationAgent:
             suggestions=[] if risk == "low" else ["Remove generic superlatives"],
         )
 
-    def review_all(self, docs, career, voice):
+    def review_all(self, docs, career, voice, job):
         truth_doc = DocumentTruthResult(pass_strict=True, unsupported_claims=[], evidence_examples=[])
         return ReviewBundle(
             truthfulness=TruthfulnessResult(
@@ -211,7 +211,7 @@ def test_orchestrator_refine_session_run_updates_selected_doc(tmp_path, monkeypa
 class AlwaysPassVerificationAgent:
     """Reviews always pass on the very first call."""
 
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         passed_doc = DocumentTruthResult(pass_strict=True, unsupported_claims=[], evidence_examples=[])
         return TruthfulnessResult(
             all_supported=True,
@@ -231,9 +231,9 @@ class AlwaysPassVerificationAgent:
     def review_ai_detection(self, docs):
         return AIDetectionResult(risk_level="low")
 
-    def review_all(self, docs, career, voice):
+    def review_all(self, docs, career, voice, job):
         return ReviewBundle(
-            truthfulness=self.review_truthfulness(docs, career),
+            truthfulness=self.review_truthfulness(docs, career, job),
             voice=self.review_voice(docs, voice),
             ai_detection=self.review_ai_detection(docs),
         )
@@ -265,7 +265,7 @@ def test_no_repair_when_all_reviews_pass(tmp_path, monkeypatch, career_profile, 
 
 
 class TruthRaisesVerificationAgent(AlwaysPassVerificationAgent):
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         raise RuntimeError("LLM timeout")
 
 
@@ -331,7 +331,7 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
         self.voice_calls = 0
         self.ai_calls = 0
 
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         self.truth_calls += 1
         doc = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
         return TruthfulnessResult(
@@ -460,7 +460,7 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
 class TruthFailsVerificationAgent(AlwaysPassVerificationAgent):
     """Truth always fails; voice + AI always pass."""
 
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         doc = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
         return TruthfulnessResult(
             all_supported=False,

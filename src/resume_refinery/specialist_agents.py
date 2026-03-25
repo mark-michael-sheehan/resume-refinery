@@ -437,15 +437,15 @@ class VerificationAgent:
     def __init__(self, reviewer: DocumentReviewer | None = None) -> None:
         self.reviewer = reviewer or DocumentReviewer()
 
-    def review_all(self, docs: DocumentSet, career: CareerProfile, voice: VoiceProfile) -> ReviewBundle:
+    def review_all(self, docs: DocumentSet, career: CareerProfile, voice: VoiceProfile, job: JobDescription) -> ReviewBundle:
         return ReviewBundle(
-            truthfulness=self.reviewer.review_truthfulness(docs, career),
+            truthfulness=self.reviewer.review_truthfulness(docs, career, job),
             voice=self.reviewer.review_voice(docs, voice),
             ai_detection=self.reviewer.review_ai_detection(docs),
         )
 
-    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile) -> TruthfulnessResult:
-        return self.reviewer.review_truthfulness(docs, career)
+    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile, job: JobDescription) -> TruthfulnessResult:
+        return self.reviewer.review_truthfulness(docs, career, job)
 
     def review_voice(self, docs: DocumentSet, voice: VoiceProfile) -> VoiceReviewResult:
         return self.reviewer.review_voice(docs, voice)

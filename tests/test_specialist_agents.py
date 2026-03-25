@@ -280,7 +280,7 @@ def test_drafting_agent_voice_context_includes_guide(career_profile, voice_profi
 
 
 class FakeReviewer:
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         doc = DocumentTruthResult(pass_strict=True)
         return TruthfulnessResult(
             all_supported=True,
@@ -299,9 +299,9 @@ class FakeReviewer:
         return AIDetectionResult(risk_level="low")
 
 
-def test_verification_agent_review_all(document_set, career_profile, voice_profile):
+def test_verification_agent_review_all(document_set, career_profile, voice_profile, job_description):
     agent = VerificationAgent(reviewer=FakeReviewer())
-    bundle = agent.review_all(document_set, career_profile, voice_profile)
+    bundle = agent.review_all(document_set, career_profile, voice_profile, job_description)
 
     assert bundle.truthfulness is not None
     assert bundle.voice is not None
@@ -309,9 +309,9 @@ def test_verification_agent_review_all(document_set, career_profile, voice_profi
     assert bundle.truthfulness.all_supported is True
 
 
-def test_verification_agent_review_truthfulness(document_set, career_profile):
+def test_verification_agent_review_truthfulness(document_set, career_profile, job_description):
     agent = VerificationAgent(reviewer=FakeReviewer())
-    result = agent.review_truthfulness(document_set, career_profile)
+    result = agent.review_truthfulness(document_set, career_profile, job_description)
     assert result.all_supported is True
 
 

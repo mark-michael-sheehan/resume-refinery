@@ -91,7 +91,7 @@ def test_reviewer_strips_json_fences(mock_client_cls, document_set):
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
-def test_review_truthfulness_all_pass(mock_client_cls, document_set, career_profile):
+def test_review_truthfulness_all_pass(mock_client_cls, document_set, career_profile, job_description):
     payload = json.dumps({
         "pass_strict": True,
         "unsupported_claims": [],
@@ -103,7 +103,7 @@ def test_review_truthfulness_all_pass(mock_client_cls, document_set, career_prof
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
-    result = reviewer.review_truthfulness(document_set, career_profile)
+    result = reviewer.review_truthfulness(document_set, career_profile, job_description)
 
     assert isinstance(result, TruthfulnessResult)
     assert result.all_supported is True
@@ -113,7 +113,7 @@ def test_review_truthfulness_all_pass(mock_client_cls, document_set, career_prof
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
-def test_review_truthfulness_one_fails(mock_client_cls, document_set, career_profile):
+def test_review_truthfulness_one_fails(mock_client_cls, document_set, career_profile, job_description):
     pass_payload = json.dumps({
         "pass_strict": True,
         "unsupported_claims": [],
@@ -136,7 +136,7 @@ def test_review_truthfulness_one_fails(mock_client_cls, document_set, career_pro
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
-    result = reviewer.review_truthfulness(document_set, career_profile)
+    result = reviewer.review_truthfulness(document_set, career_profile, job_description)
 
     assert result.all_supported is False
     assert result.cover_letter.pass_strict is True
@@ -292,7 +292,7 @@ def test_review_voice_skips_missing_docs(mock_client_cls, voice_profile):
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
-def test_review_truthfulness_skips_missing_docs(mock_client_cls, career_profile):
+def test_review_truthfulness_skips_missing_docs(mock_client_cls, career_profile, job_description):
     docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide=None)
     payload = json.dumps({
         "pass_strict": True,
@@ -305,7 +305,7 @@ def test_review_truthfulness_skips_missing_docs(mock_client_cls, career_profile)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
-    result = reviewer.review_truthfulness(docs, career_profile)
+    result = reviewer.review_truthfulness(docs, career_profile, job_description)
 
     assert result.all_supported is True
     assert mock_client.chat.call_count == 1  # Only resume reviewed
