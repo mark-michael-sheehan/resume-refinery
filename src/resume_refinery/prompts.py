@@ -17,8 +17,9 @@ You will be given:
 Core principles:
 - AUTHENTICITY: Every sentence must sound like it came from this specific person, not \
   a generic AI assistant. Match their voice precisely.
-- SPECIFICITY: Reference concrete details from both the career profile and the job \
-  description. Never use generic filler.
+- SPECIFICITY: Reference concrete details from the career profile. Use the job \
+  description only for targeting and keyword alignment — never copy job posting \
+  structure, metadata, or recruiting language into any document.
 - HONESTY: Never fabricate experience or skills the applicant doesn't have.
 - STRATEGY: Emphasise the experiences and accomplishments most relevant to this role.
 - CONCISION: Every sentence earns its place.
@@ -28,6 +29,11 @@ Core principles:
 - DIFFERENTIATION: Identify what makes this applicant uniquely valuable compared to a \
   generic qualified candidate. Highlight unusual combinations of skills, distinctive \
   accomplishments, or unconventional career paths that make them memorable.
+- DOCUMENT BOUNDARIES: The generated document must contain ONLY the applicant's own \
+  experience, skills, and accomplishments. Never include job posting sections (Title, \
+  Company, Location, About the Role, Requirements, Qualifications, Responsibilities), \
+  salary information, or any text that reads like a job advertisement rather than the \
+  applicant's own narrative.
 """
 
 COVER_LETTER_PROMPT = """Generate a cover letter for this applicant targeting this specific job.
@@ -41,6 +47,9 @@ Requirements:
 - Reference at least 3 distinct, specific details from the job description (team size, \
   tech stack, challenges mentioned, company mission) — not just the job title. Each \
   paragraph should contain at least one explicit connection to the posting.
+- Do NOT copy or paraphrase job posting sections (Requirements, Qualifications, About) \
+  into the cover letter. Reference the role's context naturally within the applicant's \
+  own narrative.
 - Close with a confident, specific call to action
 - Match the applicant's voice precisely from their voice profile
 - 3–4 paragraphs, roughly one page (about 350-500 words)
@@ -73,8 +82,13 @@ Requirements:
 - Use plain Markdown only — no tables, columns, or complex formatting that breaks ATS parsers
 - Reorder and emphasise experience most relevant to this role
 - Quantify achievements wherever the data exists in the profile
-- Mirror exact phrases from the job description where truthful, not just synonyms — ATS \
-  systems match on exact keywords
+- Mirror exact keywords from the job description in Skills and bullet points where the \
+  applicant genuinely has that skill — ATS systems match on exact keywords. Only mirror \
+  keywords, not entire sentences or sections from the posting.
+- NEVER include job posting content in the resume. The resume must contain only the \
+  applicant's own experience, education, skills, and accomplishments. Do not reproduce \
+  the job title, company description, requirements list, or any other section from the \
+  job posting.
 - Match the tone and emphasis to the seniority level of the target role: for senior/staff+ \
   roles, emphasize architectural decisions, cross-team influence, mentoring, and strategic \
   impact; for mid-level roles, emphasize hands-on execution and growth trajectory
@@ -230,17 +244,33 @@ Your only job is to verify that every claim in the generated documents is suppor
 provided career profile or job description. If a claim is not explicitly supported by either
 source, mark it unsupported. Do not assume, infer, or soften this rule.
 
+Two kinds of valid support:
+- CAREER PROFILE: The applicant's own experience, skills, metrics, and accomplishments.
+- JOB DESCRIPTION: Company name, role title, team context, technology stack, company
+  mission, and any other detail from the job posting. When a document references these
+  details (e.g. the target company name, the role they are applying for, the team size
+  mentioned in the posting), that is SUPPORTED — do not flag it.
+
 Decision procedure (follow in order):
-1. Read the Career Profile and Job Description. Build a mental list of concrete facts:
-   job titles, company names, years, technologies, metrics, accomplishments (from the
-   Career Profile) and role details, team context, tech stack, company info (from the
-   Job Description).
-2. Read the document sentence by sentence.
-3. For each factual claim (names, numbers, skills, outcomes), check whether the
-   Career Profile or Job Description contains an explicit supporting statement.
-4. If a claim is vague but reasonable (e.g. "experienced professional"), it passes.
-   Only flag claims that state specific facts not present in either source.
+1. Read the Career Profile. Build a list of concrete facts: job titles, company names,
+   years, technologies, metrics, accomplishments.
+2. Read the Job Description. Build a second list: target company name, role title, team
+   context, tech stack, scale/metrics mentioned, company mission, responsibilities.
+3. Read the document sentence by sentence.
+4. For each factual claim, check whether EITHER list contains support:
+   - If the claim matches the Career Profile → supported.
+   - If the claim matches the Job Description → supported.
+   - If the claim is vague but reasonable (e.g. "experienced professional") → passes.
+   - Only flag claims that state specific facts not present in EITHER source.
 5. If ANY unsupported claim exists, set pass_strict to false.
+
+Common mistakes to AVOID:
+- Do NOT flag the target company name, role title, or team details just because they
+  come from the job posting rather than the career profile. Those are valid.
+- Do NOT require every claim to appear in the Career Profile. The Job Description is
+  an equally valid source for role-specific context.
+- Do NOT flag reasonable paraphrasing of supported facts. Only flag claims that
+  introduce specific details absent from both sources.
 """""
 
 
