@@ -455,10 +455,16 @@ class VerificationAgent:
 
 
 class RepairAgent:
-    """Performs bounded rewrites in response to verifier findings."""
+    """Produces surgical find/replace edits and applies them programmatically."""
 
     def __init__(self, drafting_agent: DraftingAgent | None = None) -> None:
+        # drafting_agent kept for backward compat but no longer used for repair.
         self.drafting_agent = drafting_agent or DraftingAgent()
+        self.client = ollama.Client(host=_BASE_URL)
+
+    # ------------------------------------------------------------------
+    # Public API (called by orchestrator)
+    # ------------------------------------------------------------------
 
     def repair_unified(
         self,
@@ -473,25 +479,77 @@ class RepairAgent:
         feedback: str | None = None,
         previous_suggestions: list[str] | None = None,
     ) -> DocumentSet:
-        """Unified repair: combine feedback from all reviewers and repair each doc once."""
+        """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
+        from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
+        from .utils import apply_edits
+
         for key in ("cover_letter", "resume", "interview_guide"):
-            parts = self._build_unified_feedback(
+            review_findings = self._build_review_findings(
                 key, truth, voice_review, ai_review, feedback, previous_suggestions,
             )
-            if not parts:
+            if not review_findings:
                 continue
-            previous = docs.get(key)
-            if not previous:
+            doc_content = docs.get(key)
+            if not doc_content:
                 continue
-            repair_feedback = "\n\n".join(parts)
-            regenerated = self.drafting_agent.generate_document(
-                key, career, voice, job, context,
-                feedback=repair_feedback, previous_version=previous,
+
+            user_msg = repair_user_message(
+                doc_content=doc_content,
+                career_profile=career.raw_content,
+                voice_profile=voice.raw_content,
+                job_description=job.raw_content,
+                review_findings=review_findings,
             )
-            docs.set(key, regenerated)
+
+            edits = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
+            if edits:
+                repaired = apply_edits(doc_content, edits)
+                docs.set(key, repaired)
         return docs
 
-    def _build_unified_feedback(
+    # ------------------------------------------------------------------
+    # LLM call for edit planning
+    # ------------------------------------------------------------------
+
+    def _plan_edits(self, system: str, user_msg: str) -> list[dict]:
+        """Call the LLM and return a list of {find, replace, reason} dicts."""
+        from .reviewers import _normalize_llm_json
+
+        response = self.client.chat(
+            model=_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+            think=True,
+            format="json",
+            options={"num_ctx": _NUM_CTX, "num_predict": -1},
+        )
+        raw = (response.message.content or "").strip()
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+        if not raw:
+            logging.warning("Repair LLM returned empty content")
+            return []
+        raw = _normalize_llm_json(raw)
+        data = json.loads(raw)
+
+        # The LLM may return a bare array or {"edits": [...]}
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for k in ("edits", "changes", "replacements"):
+                if isinstance(data.get(k), list):
+                    return data[k]
+            # Single edit wrapped in an object
+            if "find" in data:
+                return [data]
+        return []
+
+    # ------------------------------------------------------------------
+    # Build review findings text from reviewer results
+    # ------------------------------------------------------------------
+
+    def _build_review_findings(
         self,
         key: DocumentKey,
         truth: TruthfulnessResult | None,
@@ -499,12 +557,16 @@ class RepairAgent:
         ai_review: AIDetectionResult | None,
         feedback: str | None,
         previous_suggestions: list[str] | None,
-    ) -> list[str]:
+    ) -> str:
+        """Return a human-readable summary of review findings for *key*.
+
+        Returns empty string if no issues were found for this document.
+        """
         parts: list[str] = []
         has_issues = False
 
         if feedback:
-            parts.append(feedback)
+            parts.append(f"USER FEEDBACK:\n{feedback}")
 
         # --- Truthfulness ---
         if truth:
@@ -518,17 +580,17 @@ class RepairAgent:
                 has_issues = True
                 if doc_truth.unsupported_claims:
                     parts.append(
-                        "TRUTHFULNESS — Unsupported claims to remove or directly evidence:\n"
+                        "TRUTHFULNESS — Unsupported claims (verbatim from document):\n"
                         + "\n".join(f"- {c}" for c in doc_truth.unsupported_claims[:8])
                     )
                 else:
                     parts.append(
-                        "TRUTHFULNESS — The truthfulness check failed. Review every claim "
-                        "and ensure each is directly supported by evidence from the career profile."
+                        "TRUTHFULNESS — The truthfulness check failed but no specific "
+                        "claims were listed. Review every factual claim."
                     )
                 if doc_truth.evidence_examples:
                     parts.append(
-                        "Evidence examples to reference:\n"
+                        "Supporting evidence from Career Profile:\n"
                         + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8])
                     )
                 if doc_truth.suggestions:
@@ -546,38 +608,19 @@ class RepairAgent:
                 "resume": voice_review.resume_match,
                 "interview_guide": voice_review.interview_guide_match,
             }
-            if voice_matches[key] != "strong":
+            if voice_matches[key] not in ("strong",):
                 has_issues = True
-                assessments: dict[DocumentKey, str] = {
-                    "cover_letter": voice_review.cover_letter_assessment,
-                    "resume": voice_review.resume_assessment,
-                    "interview_guide": voice_review.interview_guide_assessment,
-                }
                 doc_issues_map: dict[DocumentKey, list[str]] = {
                     "cover_letter": voice_review.cover_letter_issues,
                     "resume": voice_review.resume_issues,
                     "interview_guide": voice_review.interview_guide_issues,
                 }
-                doc_suggestions_map: dict[DocumentKey, list[str]] = {
-                    "cover_letter": voice_review.cover_letter_suggestions,
-                    "resume": voice_review.resume_suggestions,
-                    "interview_guide": voice_review.interview_guide_suggestions,
-                }
-                parts.append(f"VOICE — Assessment: {assessments[key]}")
                 issues = doc_issues_map[key] or voice_review.specific_issues
                 if issues:
                     parts.append(
-                        "Voice issues to fix:\n"
+                        "VOICE — Off-voice phrases (verbatim from document):\n"
                         + "\n".join(f"- {i}" for i in issues[:8])
                     )
-                suggestions = doc_suggestions_map[key] or voice_review.suggestions
-                if suggestions:
-                    new = self._deduplicate(suggestions, previous_suggestions)
-                    if new:
-                        parts.append(
-                            "Voice suggestions:\n"
-                            + "\n".join(f"- {s}" for s in new[:8])
-                        )
 
         # --- AI detection (skip for interview guide — personal prep) ---
         if ai_review and key != "interview_guide":
@@ -586,240 +629,24 @@ class RepairAgent:
                 "resume": ai_review.resume_flags,
                 "interview_guide": ai_review.interview_guide_flags,
             }
-            ai_suggestions_map: dict[DocumentKey, list[str]] = {
-                "cover_letter": ai_review.cover_letter_suggestions,
-                "resume": ai_review.resume_suggestions,
-                "interview_guide": [],
-            }
             flags = flag_map[key]
             if flags:
                 has_issues = True
                 parts.append(
-                    "AI DETECTION — Flagged phrases:\n"
+                    "AI DETECTION — Flagged phrases (verbatim from document):\n"
                     + "\n".join(f'- "{f}"' for f in flags[:8])
                 )
-                # Use per-doc suggestions; fall back to aggregated for backward compat
-                ai_suggestions = ai_suggestions_map.get(key) or ai_review.suggestions
-                if ai_suggestions:
-                    new = self._deduplicate(ai_suggestions, previous_suggestions)
-                    if new:
-                        parts.append(
-                            "AI-detection suggestions:\n"
-                            + "\n".join(f"- {s}" for s in new[:8])
-                        )
 
         if not has_issues:
-            return []
+            return ""
 
         if previous_suggestions:
             parts.append(
-                "Previously attempted suggestions (already tried — try a different approach):\n"
+                "Previously attempted fixes (try a different approach):\n"
                 + "\n".join(f"- {s}" for s in previous_suggestions[:12])
             )
 
-        parts.append(
-            "REPAIR PROCEDURE (follow these phases in order during your thinking):\n"
-            "Phase 1 — TRUTHFULNESS: Identify every unsupported claim listed above. "
-            "For each one, either remove it or replace it with a fact directly from "
-            "the Career Profile. Do NOT rephrase surrounding text. Write out the "
-            "corrected draft.\n"
-            "Phase 2 — VOICE & AI: Apply voice and AI-detection fixes ONLY to "
-            "sentences that were NOT changed in Phase 1. If a voice/AI fix would "
-            "alter a factual claim, skip it.\n"
-            "Phase 3 — TRUTHFULNESS SELF-CHECK: Re-read your Phase 2 draft "
-            "sentence by sentence. For each sentence, verify the claim still "
-            "appears verbatim or is directly supported in the Career Profile. "
-            "If any new unsupported claim was introduced in Phase 2, revert that "
-            "sentence to the Phase 1 version.\n"
-            "Repeat Phases 2-3 until a full pass introduces ZERO new unsupported "
-            "claims. Usually 1-2 iterations suffice.\n"
-            "FINAL — OUTPUT: Emit the final document. It must pass truthfulness."
-        )
-        parts.append(
-            "MINIMAL EDITS ONLY: Make the smallest changes necessary to address the feedback "
-            "above. Preserve all text that is not specifically flagged. Do not restructure "
-            "paragraphs, rephrase sentences, or rewrite sections that already pass all checks. "
-            "If a flagged phrase can be fixed by changing a few words, do that — do not rewrite "
-            "the surrounding paragraph."
-        )
-        return parts
-
-    def repair_documents(
-        self,
-        docs: DocumentSet,
-        truth: TruthfulnessResult,
-        career: CareerProfile,
-        voice: VoiceProfile,
-        job: JobDescription,
-        context: DraftingContext,
-        feedback: str | None = None,
-        previous_suggestions: list[str] | None = None,
-    ) -> DocumentSet:
-        for key in self._docs_to_fix(truth):
-            previous = docs.get(key)
-            repair_feedback = self._feedback_for_doc(key, truth, feedback, previous_suggestions)
-            regenerated = self.drafting_agent.generate_document(
-                key,
-                career,
-                voice,
-                job,
-                context,
-                feedback=repair_feedback,
-                previous_version=previous,
-            )
-            docs.set(key, regenerated)
-        return docs
-
-    def _docs_to_fix(self, truth: TruthfulnessResult) -> list[DocumentKey]:
-        docs: list[DocumentKey] = []
-        if not truth.cover_letter.pass_strict:
-            docs.append("cover_letter")
-        if not truth.resume.pass_strict:
-            docs.append("resume")
-        if not truth.interview_guide.pass_strict:
-            docs.append("interview_guide")
-        return docs
-
-    def _feedback_for_doc(self, key: DocumentKey, truth: TruthfulnessResult, feedback: str | None, previous_suggestions: list[str] | None = None) -> str:
-        if key == "cover_letter":
-            doc_truth = truth.cover_letter
-        elif key == "resume":
-            doc_truth = truth.resume
-        else:
-            doc_truth = truth.interview_guide
-        parts = []
-        if feedback:
-            parts.append(feedback)
-        if doc_truth.unsupported_claims:
-            parts.append("Unsupported claims to remove or directly evidence:\n" + "\n".join(f"- {claim}" for claim in doc_truth.unsupported_claims[:8]))
-        elif not doc_truth.pass_strict:
-            # Strict check failed but no specific claims listed — give explicit guidance
-            parts.append("The truthfulness check failed but no specific unsupported claims were identified. "
-                         "Review every claim in the document and ensure each one is directly supported by "
-                         "concrete evidence from the career profile. Remove or rephrase any statements that "
-                         "embellish, generalize, or infer beyond what the evidence supports.")
-        if doc_truth.evidence_examples:
-            parts.append("Evidence examples to reference:\n" + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8]))
-        if doc_truth.suggestions:
-            # Deduplicate: only include suggestions not already attempted
-            new_suggestions = self._deduplicate(doc_truth.suggestions, previous_suggestions)
-            if new_suggestions:
-                parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in new_suggestions[:8]))
-        if previous_suggestions:
-            parts.append("Previously attempted suggestions (already tried — try a different approach):\n" + "\n".join(f"- {s}" for s in previous_suggestions[:8]))
-        parts.append("Rewrite strictly using only evidence from the career profile and evidence pack.")
         return "\n\n".join(parts)
-
-    def repair_voice(
-        self,
-        docs: DocumentSet,
-        voice_review: VoiceReviewResult,
-        career: CareerProfile,
-        voice: VoiceProfile,
-        job: JobDescription,
-        context: DraftingContext,
-        feedback: str | None = None,
-        previous_suggestions: list[str] | None = None,
-    ) -> DocumentSet:
-        """Re-generate only documents that don't already have a 'strong' voice match."""
-        doc_assessments: dict[DocumentKey, str] = {
-            "cover_letter": voice_review.cover_letter_assessment,
-            "resume": voice_review.resume_assessment,
-            "interview_guide": voice_review.interview_guide_assessment,
-        }
-        doc_matches: dict[DocumentKey, str] = {
-            "cover_letter": voice_review.cover_letter_match,
-            "resume": voice_review.resume_match,
-            "interview_guide": voice_review.interview_guide_match,
-        }
-        doc_issues: dict[DocumentKey, list[str]] = {
-            "cover_letter": voice_review.cover_letter_issues,
-            "resume": voice_review.resume_issues,
-            "interview_guide": voice_review.interview_guide_issues,
-        }
-        doc_suggestions: dict[DocumentKey, list[str]] = {
-            "cover_letter": voice_review.cover_letter_suggestions,
-            "resume": voice_review.resume_suggestions,
-            "interview_guide": voice_review.interview_guide_suggestions,
-        }
-        for key in ("cover_letter", "resume", "interview_guide"):
-            if doc_matches[key] == "strong":
-                continue  # already on-voice — skip
-            previous = docs.get(key)
-            if not previous:
-                continue
-            parts = []
-            if feedback:
-                parts.append(feedback)
-            parts.append(f"Voice-match assessment: {doc_assessments[key]}")
-            # Use per-doc issues/suggestions when available, fall back to aggregated
-            issues = doc_issues[key] or voice_review.specific_issues
-            suggestions = doc_suggestions[key] or voice_review.suggestions
-            if issues:
-                parts.append("Specific voice issues to fix:\n" + "\n".join(f"- {i}" for i in issues[:8]))
-            if suggestions:
-                new_suggestions = self._deduplicate(suggestions, previous_suggestions)
-                if new_suggestions:
-                    parts.append("Suggestions:\n" + "\n".join(f"- {s}" for s in new_suggestions[:8]))
-            if previous_suggestions:
-                parts.append("Previously attempted suggestions (already tried — try a different approach):\n" + "\n".join(f"- {s}" for s in previous_suggestions[:8]))
-            parts.append("Rewrite to match the voice profile more closely. Keep all factual content intact.")
-            repair_feedback = "\n\n".join(parts)
-            regenerated = self.drafting_agent.generate_document(
-                key, career, voice, job, context,
-                feedback=repair_feedback, previous_version=previous,
-            )
-            docs.set(key, regenerated)
-        return docs
-
-    def repair_ai_detection(
-        self,
-        docs: DocumentSet,
-        ai_review: AIDetectionResult,
-        career: CareerProfile,
-        voice: VoiceProfile,
-        job: JobDescription,
-        context: DraftingContext,
-        feedback: str | None = None,
-        previous_suggestions: list[str] | None = None,
-    ) -> DocumentSet:
-        """Re-generate documents flagged by the AI-detection review."""
-        flag_map: dict[DocumentKey, list[str]] = {
-            "cover_letter": ai_review.cover_letter_flags,
-            "resume": ai_review.resume_flags,
-            "interview_guide": ai_review.interview_guide_flags,
-        }
-        per_doc_suggestions: dict[DocumentKey, list[str]] = {
-            "cover_letter": ai_review.cover_letter_suggestions,
-            "resume": ai_review.resume_suggestions,
-            "interview_guide": [],
-        }
-        for key, flags in flag_map.items():
-            if not flags:
-                continue
-            previous = docs.get(key)
-            if not previous:
-                continue
-            parts = []
-            if feedback:
-                parts.append(feedback)
-            parts.append("AI-detection flagged the following phrases as generic or AI-sounding:\n" + "\n".join(f'- "{f}"' for f in flags[:8]))
-            # Use per-doc suggestions; fall back to aggregated suggestions for backward compat
-            suggestions = per_doc_suggestions.get(key) or ai_review.suggestions
-            if suggestions:
-                new_suggestions = self._deduplicate(suggestions, previous_suggestions)
-                if new_suggestions:
-                    parts.append("Reviewer suggestions:\n" + "\n".join(f"- {s}" for s in new_suggestions[:8]))
-            if previous_suggestions:
-                parts.append("Previously attempted suggestions (already tried — try a different approach):\n" + "\n".join(f"- {s}" for s in previous_suggestions[:8]))
-            parts.append("Rewrite these passages to sound more authentically human. Use the voice profile. Keep all factual content intact.")
-            repair_feedback = "\n\n".join(parts)
-            regenerated = self.drafting_agent.generate_document(
-                key, career, voice, job, context,
-                feedback=repair_feedback, previous_version=previous,
-            )
-            docs.set(key, regenerated)
-        return docs
 
     @staticmethod
     def _deduplicate(current: list[str], previous: list[str] | None) -> list[str]:

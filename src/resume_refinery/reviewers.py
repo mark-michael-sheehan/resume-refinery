@@ -324,7 +324,7 @@ class DocumentReviewer:
             messages=messages,
             think=think,
             format="json",
-            options={"num_ctx": NUM_CTX, "num_predict": predict},
+            options={"num_ctx": NUM_CTX, "num_predict": predict, "temperature": 0},
         )
         raw = (response.message.content or "").strip()
 

@@ -306,17 +306,18 @@ class ResumeRefineryOrchestrator:
             # Truthfulness is always strict (no relaxation).
             truth_ok = truth is None or truth.all_supported
 
-            # On pass RELAXED_PASS_START+, relax voice and AI thresholds to help convergence.
+            # Voice accepts "moderate" from pass 0 to avoid unnecessary rewrites
+            # that destabilise truthfulness.  On late passes, AI threshold relaxes.
+            voice_ok = voice_result is None or voice_result.overall_match in ("strong", "moderate")
+
             is_late_pass = pass_num >= _RELAXED_PASS_START
             if is_late_pass:
-                voice_ok = voice_result is None or voice_result.overall_match in ("strong", "moderate")
                 total_ai_flags = (
                     len(ai_result.cover_letter_flags)
                     + len(ai_result.resume_flags)
                 ) if ai_result else 0
                 ai_ok = ai_result is None or total_ai_flags <= _AI_FLAG_TOLERANCE_LATE
             else:
-                voice_ok = voice_result is None or voice_result.overall_match == "strong"
                 ai_ok = ai_result is None or not any([
                     ai_result.cover_letter_flags,
                     ai_result.resume_flags,
@@ -347,7 +348,11 @@ class ResumeRefineryOrchestrator:
                 )
                 on_repair_pass(pass_num, docs, pass_reviews)
 
-            # Collect suggestions for next pass
+            # Collect suggestions — keep only the most recent pass to avoid
+            # an ever-growing pile of conflicting instructions.
+            previous_truth_suggestions.clear()
+            previous_voice_suggestions.clear()
+            previous_ai_suggestions.clear()
             if truth:
                 for doc in (truth.cover_letter, truth.resume, truth.interview_guide):
                     previous_truth_suggestions.extend(doc.suggestions)

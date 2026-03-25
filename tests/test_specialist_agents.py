@@ -328,228 +328,6 @@ def test_verification_agent_review_ai_detection(document_set):
 
 
 # ---------------------------------------------------------------------------
-# RepairAgent
-# ---------------------------------------------------------------------------
-
-
-def test_repair_agent_repair_documents(career_profile, voice_profile, job_description):
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "repaired content"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    docs = DocumentSet(cover_letter="old cl", resume="old resume", interview_guide="old ig")
-    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim A"])
-    doc_pass = DocumentTruthResult(pass_strict=True)
-    truth = TruthfulnessResult(
-        all_supported=False,
-        cover_letter=doc_fail,
-        resume=doc_pass,
-        interview_guide=doc_fail,
-    )
-    context = _make_context()
-
-    agent.repair_documents(docs, truth, career_profile, voice_profile, job_description, context)
-
-    # cover_letter and interview_guide should be repaired; resume should stay
-    assert docs.cover_letter == "repaired content"
-    assert docs.resume == "old resume"
-    assert docs.interview_guide == "repaired content"
-    assert mock_generator.generate_document.call_count == 2
-
-
-def test_repair_agent_repair_voice(career_profile, voice_profile, job_description):
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "voice-fixed"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
-    voice_review = VoiceReviewResult(
-        overall_match="weak",
-        cover_letter_assessment="Off-voice",
-        resume_assessment="Off-voice",
-        interview_guide_assessment="Off-voice",
-        specific_issues=["too formal"],
-        suggestions=["Use contractions"],
-    )
-    context = _make_context()
-
-    agent.repair_voice(docs, voice_review, career_profile, voice_profile, job_description, context)
-
-    assert docs.cover_letter == "voice-fixed"
-    assert docs.resume == "voice-fixed"
-    assert docs.interview_guide == "voice-fixed"
-    assert mock_generator.generate_document.call_count == 3
-
-    # Verify feedback includes voice issues
-    feedback_arg = mock_generator.generate_document.call_args.kwargs["feedback"]
-    assert "too formal" in feedback_arg
-
-
-def test_repair_agent_repair_ai_detection(career_profile, voice_profile, job_description):
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "ai-fixed"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
-    ai_review = AIDetectionResult(
-        risk_level="high",
-        cover_letter_flags=["passionate about innovation"],
-        resume_flags=[],
-        interview_guide_flags=["demonstrated track record"],
-        suggestions=["Be specific"],
-    )
-    context = _make_context()
-
-    agent.repair_ai_detection(docs, ai_review, career_profile, voice_profile, job_description, context)
-
-    # Only cover_letter and interview_guide have flags → only those are repaired
-    assert docs.cover_letter == "ai-fixed"
-    assert docs.resume == "r"  # No flags → not repaired
-    assert docs.interview_guide == "ai-fixed"
-    assert mock_generator.generate_document.call_count == 2
-
-
-def test_repair_agent_repair_documents_no_failures(career_profile, voice_profile, job_description):
-    """When all docs pass strict truth, no repairs should happen."""
-    mock_generator = MagicMock()
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
-    doc_pass = DocumentTruthResult(pass_strict=True)
-    truth = TruthfulnessResult(
-        all_supported=True,
-        cover_letter=doc_pass, resume=doc_pass, interview_guide=doc_pass,
-    )
-    context = _make_context()
-
-    agent.repair_documents(docs, truth, career_profile, voice_profile, job_description, context)
-
-    assert mock_generator.generate_document.call_count == 0
-    assert docs.cover_letter == "cl"  # Unchanged
-
-
-def test_repair_agent_repair_ai_no_flags(career_profile, voice_profile, job_description):
-    """When no documents have AI flags, no repairs should happen."""
-    mock_generator = MagicMock()
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
-    ai_review = AIDetectionResult(
-        risk_level="low",
-        cover_letter_flags=[],
-        resume_flags=[],
-        interview_guide_flags=[],
-    )
-    context = _make_context()
-
-    agent.repair_ai_detection(docs, ai_review, career_profile, voice_profile, job_description, context)
-
-    assert mock_generator.generate_document.call_count == 0
-
-
-def test_repair_voice_skips_strong_docs(career_profile, voice_profile, job_description):
-    """When a doc's per-doc match is 'strong', repair_voice should skip it."""
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "voice-fixed"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
-    voice_review = VoiceReviewResult(
-        overall_match="moderate",
-        cover_letter_match="strong",      # should be skipped
-        resume_match="weak",              # should be repaired
-        interview_guide_match="strong",   # should be skipped
-        cover_letter_assessment="On-voice",
-        resume_assessment="Off-voice",
-        interview_guide_assessment="On-voice",
-        specific_issues=["too formal"],
-        suggestions=["Use contractions"],
-    )
-    context = _make_context()
-
-    agent.repair_voice(docs, voice_review, career_profile, voice_profile, job_description, context)
-
-    # Only resume regenerated
-    assert docs.cover_letter == "cl"  # unchanged (strong)
-    assert docs.resume == "voice-fixed"
-    assert docs.interview_guide == "ig"  # unchanged (strong)
-    assert mock_generator.generate_document.call_count == 1
-
-
-def test_feedback_for_doc_empty_claims_but_fails(career_profile, voice_profile, job_description):
-    """When pass_strict=False but unsupported_claims is empty, feedback should still be specific."""
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "repaired"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=[], evidence_examples=["Led migration project"])
-    truth = TruthfulnessResult(
-        all_supported=False,
-        cover_letter=doc_fail,
-        resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
-    )
-
-    feedback = agent._feedback_for_doc("cover_letter", truth, None)
-
-    # Should contain specific guidance even without unsupported_claims
-    assert "truthfulness check failed" in feedback.lower()
-    assert "Led migration project" in feedback  # evidence_examples surfaced
-    assert "Rewrite strictly" in feedback
-
-
-def test_feedback_for_doc_with_claims(career_profile, voice_profile, job_description):
-    """When unsupported_claims are present, they should appear in feedback."""
-    mock_generator = MagicMock()
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["Increased revenue by 500%"])
-    truth = TruthfulnessResult(
-        all_supported=False,
-        cover_letter=doc_fail,
-        resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
-    )
-
-    feedback = agent._feedback_for_doc("cover_letter", truth, None)
-
-    assert "Increased revenue by 500%" in feedback
-    assert "truthfulness check failed" not in feedback.lower()  # uses claims path, not empty-claims path
-
-
-def test_feedback_includes_truth_suggestions(career_profile, voice_profile, job_description):
-    """Per-document DocumentTruthResult.suggestions should be included in repair feedback."""
-    mock_generator = MagicMock()
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    doc_fail = DocumentTruthResult(
-        pass_strict=False,
-        unsupported_claims=["Led 50-person team"],
-        suggestions=["Stick to verifiable metrics", "Avoid leadership claims without evidence"],
-    )
-    truth = TruthfulnessResult(
-        all_supported=False,
-        cover_letter=doc_fail,
-        resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
-    )
-
-    feedback = agent._feedback_for_doc("cover_letter", truth, None)
-
-    assert "Stick to verifiable metrics" in feedback
-    assert "Avoid leadership claims without evidence" in feedback
-
-
-# ---------------------------------------------------------------------------
 # LLM-powered EvidenceAgent tests
 # ---------------------------------------------------------------------------
 
@@ -666,146 +444,57 @@ def test_repair_agent_deduplicate_no_previous():
     assert agent._deduplicate(["A", "B"], []) == ["A", "B"]
 
 
-def test_repair_documents_accepts_previous_suggestions(career_profile, voice_profile, job_description):
-    """repair_documents should accept and pass previous_suggestions without error."""
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "repaired"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
+# ---------------------------------------------------------------------------
+# RepairAgent  (surgical find/replace edits)
+# ---------------------------------------------------------------------------
 
-    docs = DocumentSet(cover_letter="old", resume="old", interview_guide="old")
+
+def test_repair_unified_applies_surgical_edits(career_profile, voice_profile, job_description):
+    """repair_unified should call _plan_edits and apply edits programmatically."""
+    agent = RepairAgent()
+
+    docs = DocumentSet(
+        cover_letter="I am a passionate innovator with quantum AI expertise.",
+        resume="old resume",
+        interview_guide="old ig",
+    )
     doc_fail = DocumentTruthResult(
         pass_strict=False,
-        unsupported_claims=["claim"],
-        suggestions=["Fix claim X", "Fix claim Y"],
+        unsupported_claims=["quantum AI expertise"],
     )
-    truth = TruthfulnessResult(
-        all_supported=False,
-        cover_letter=doc_fail,
-        resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
-    )
-    context = _make_context()
-
-    agent.repair_documents(
-        docs, truth, career_profile, voice_profile, job_description, context,
-        previous_suggestions=["Fix claim X"],
-    )
-
-    feedback = mock_generator.generate_document.call_args.kwargs["feedback"]
-    # "Fix claim X" was already attempted — should appear in "previously attempted"
-    assert "previously attempted" in feedback.lower()
-    # "Fix claim Y" is new — should appear in suggestions
-    assert "Fix claim Y" in feedback
-
-
-def test_repair_voice_uses_per_doc_issues(career_profile, voice_profile, job_description):
-    """repair_voice should use per-doc issues when available."""
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "fixed"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
-    voice_review = VoiceReviewResult(
-        overall_match="weak",
-        cover_letter_match="weak",
-        resume_match="strong",
-        interview_guide_match="strong",
-        cover_letter_assessment="Off-voice",
-        resume_assessment="Good",
-        interview_guide_assessment="Good",
-        specific_issues=["global issue"],
-        suggestions=["global suggestion"],
-        cover_letter_issues=["opener too formal"],
-        cover_letter_suggestions=["Use contractions in opener"],
-    )
-    context = _make_context()
-
-    agent.repair_voice(docs, voice_review, career_profile, voice_profile, job_description, context)
-
-    # Only cover_letter should be repaired (others are "strong")
-    assert docs.cover_letter == "fixed"
-    assert docs.resume == "r"
-    feedback = mock_generator.generate_document.call_args.kwargs["feedback"]
-    # Should use per-doc issues, not global
-    assert "opener too formal" in feedback
-    assert "Use contractions in opener" in feedback
-
-
-# ---------------------------------------------------------------------------
-# RepairAgent.repair_unified
-# ---------------------------------------------------------------------------
-
-
-def test_repair_unified_combines_all_feedback(career_profile, voice_profile, job_description):
-    """repair_unified should send combined feedback from all three reviewers in one call per doc."""
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "unified-fixed"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
-
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
-    doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["Invented quantum AI"])
     doc_pass = DocumentTruthResult(pass_strict=True)
     truth = TruthfulnessResult(
         all_supported=False,
         cover_letter=doc_fail,
         resume=doc_pass,
         interview_guide=doc_pass,
-        suggestions=["Remove unverifiable claims"],
-    )
-    voice_review = VoiceReviewResult(
-        overall_match="weak",
-        cover_letter_match="weak",
-        resume_match="strong",
-        interview_guide_match="moderate",
-        cover_letter_assessment="Off-voice",
-        resume_assessment="Good",
-        interview_guide_assessment="Slightly formal",
-        specific_issues=["too formal"],
-        suggestions=["Use contractions"],
-        cover_letter_issues=["opener too formal"],
-        cover_letter_suggestions=["Use a concrete hook"],
-    )
-    ai_review = AIDetectionResult(
-        risk_level="high",
-        cover_letter_flags=["passionate about innovation"],
-        resume_flags=[],
-        interview_guide_flags=[],
-        suggestions=["Be specific"],
     )
     context = _make_context()
 
+    # Mock _plan_edits to return a surgical edit
+    agent._plan_edits = MagicMock(return_value=[
+        {"find": "quantum AI expertise", "replace": "backend migration experience", "reason": "truthfulness"},
+    ])
+
     agent.repair_unified(
-        docs, truth, voice_review, ai_review,
+        docs, truth, None, None,
         career_profile, voice_profile, job_description, context,
     )
 
-    # cover_letter has truth + voice + AI issues → repaired
-    assert docs.cover_letter == "unified-fixed"
-    # resume passes all checks → not repaired
-    assert docs.resume == "r"
-    # interview_guide: voice + AI checks are skipped (personal prep), truth passes → not repaired
-    assert docs.interview_guide == "ig"
-
-    # Only cover_letter was repaired (1 call)
-    assert mock_generator.generate_document.call_count == 1
-    first_call_feedback = mock_generator.generate_document.call_args_list[0].kwargs["feedback"]
-    assert "TRUTHFULNESS" in first_call_feedback
-    assert "Invented quantum AI" in first_call_feedback
-    assert "VOICE" in first_call_feedback
-    assert "opener too formal" in first_call_feedback
-    assert "AI DETECTION" in first_call_feedback
-    assert "passionate about innovation" in first_call_feedback
+    # Only cover_letter was repaired
+    assert "backend migration experience" in docs.cover_letter
+    assert "quantum AI expertise" not in docs.cover_letter
+    # Other docs unchanged
+    assert docs.resume == "old resume"
+    assert docs.interview_guide == "old ig"
+    # _plan_edits called exactly once (only cover_letter had issues)
+    assert agent._plan_edits.call_count == 1
 
 
 def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_description):
     """When all reviewers pass for a doc, it should not be repaired."""
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "fixed"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
+    agent = RepairAgent()
+    agent._plan_edits = MagicMock(return_value=[])
 
     docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
     doc_pass = DocumentTruthResult(pass_strict=True)
@@ -830,7 +519,7 @@ def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_de
         career_profile, voice_profile, job_description, context,
     )
 
-    assert mock_generator.generate_document.call_count == 0
+    assert agent._plan_edits.call_count == 0
     assert docs.cover_letter == "cl"
     assert docs.resume == "r"
     assert docs.interview_guide == "ig"
@@ -838,34 +527,85 @@ def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_de
 
 def test_repair_unified_handles_none_reviews(career_profile, voice_profile, job_description):
     """repair_unified should handle None review results gracefully."""
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "fixed"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
+    agent = RepairAgent()
+    agent._plan_edits = MagicMock(return_value=[])
 
     docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
     context = _make_context()
 
-    # All None → no issues → no repairs
     agent.repair_unified(
         docs, None, None, None,
         career_profile, voice_profile, job_description, context,
     )
 
-    assert mock_generator.generate_document.call_count == 0
+    assert agent._plan_edits.call_count == 0
+
+
+def test_repair_unified_combines_all_findings(career_profile, voice_profile, job_description):
+    """Review findings from all three reviewers should be combined in the repair call."""
+    agent = RepairAgent()
+
+    docs = DocumentSet(
+        cover_letter="I am a passionate innovator with quantum AI.",
+        resume="r",
+        interview_guide="ig",
+    )
+    doc_fail = DocumentTruthResult(
+        pass_strict=False,
+        unsupported_claims=["quantum AI"],
+    )
+    truth = TruthfulnessResult(
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=DocumentTruthResult(pass_strict=True),
+        interview_guide=DocumentTruthResult(pass_strict=True),
+    )
+    voice_review = VoiceReviewResult(
+        overall_match="weak",
+        cover_letter_match="weak",
+        resume_match="strong",
+        interview_guide_match="strong",
+        cover_letter_assessment="Off-voice",
+        resume_assessment="Good",
+        interview_guide_assessment="Good",
+        cover_letter_issues=["opener too formal"],
+    )
+    ai_review = AIDetectionResult(
+        risk_level="high",
+        cover_letter_flags=["passionate innovator"],
+        resume_flags=[],
+        interview_guide_flags=[],
+    )
+    context = _make_context()
+
+    # Capture the user_msg sent to _plan_edits
+    agent._plan_edits = MagicMock(return_value=[
+        {"find": "passionate innovator with quantum AI", "replace": "software engineer with backend experience", "reason": "combined"},
+    ])
+
+    agent.repair_unified(
+        docs, truth, voice_review, ai_review,
+        career_profile, voice_profile, job_description, context,
+    )
+
+    # Verify _plan_edits was called and we can check the user_msg
+    assert agent._plan_edits.call_count == 1
+    # The user message is the second arg (index 1) of the call
+    call_args = agent._plan_edits.call_args
+    user_msg = call_args[0][1]  # positional arg 1
+    assert "quantum AI" in user_msg  # truthfulness finding
+    assert "opener too formal" in user_msg  # voice finding
+    assert "passionate innovator" in user_msg  # AI detection finding
 
 
 def test_repair_unified_includes_previous_suggestions(career_profile, voice_profile, job_description):
-    """Previously attempted suggestions should appear in the unified feedback."""
-    mock_generator = MagicMock()
-    mock_generator.generate_document.return_value = "fixed"
-    drafting = DraftingAgent(generator=mock_generator)
-    agent = RepairAgent(drafting_agent=drafting)
+    """Previously attempted suggestions should appear in review findings."""
+    agent = RepairAgent()
 
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    docs = DocumentSet(cover_letter="cl with claim X", resume="r", interview_guide="ig")
     doc_fail = DocumentTruthResult(
         pass_strict=False,
-        unsupported_claims=["claim"],
+        unsupported_claims=["claim X"],
         suggestions=["Fix claim X", "Fix claim Y"],
     )
     truth = TruthfulnessResult(
@@ -876,12 +616,112 @@ def test_repair_unified_includes_previous_suggestions(career_profile, voice_prof
     )
     context = _make_context()
 
+    agent._plan_edits = MagicMock(return_value=[
+        {"find": "claim X", "replace": "verified fact", "reason": "truthfulness"},
+    ])
+
     agent.repair_unified(
         docs, truth, None, None,
         career_profile, voice_profile, job_description, context,
         previous_suggestions=["Fix claim X"],
     )
 
-    feedback = mock_generator.generate_document.call_args.kwargs["feedback"]
-    assert "previously attempted" in feedback.lower()
-    assert "Fix claim Y" in feedback
+    call_args = agent._plan_edits.call_args
+    user_msg = call_args[0][1]
+    assert "previously attempted" in user_msg.lower()
+    # "Fix claim Y" is new and should be in the findings
+    assert "Fix claim Y" in user_msg
+
+
+def test_repair_plan_edits_parses_json_array():
+    """_plan_edits should parse a JSON array response from the LLM."""
+    agent = RepairAgent()
+    mock_response = MagicMock()
+    mock_response.message.content = json.dumps([
+        {"find": "old text", "replace": "new text", "reason": "fix"},
+    ])
+    agent.client = MagicMock()
+    agent.client.chat.return_value = mock_response
+
+    edits = agent._plan_edits("system", "user")
+
+    assert len(edits) == 1
+    assert edits[0]["find"] == "old text"
+    assert edits[0]["replace"] == "new text"
+
+
+def test_repair_plan_edits_handles_wrapped_object():
+    """_plan_edits should handle LLM response wrapped in {edits: [...]}."""
+    agent = RepairAgent()
+    mock_response = MagicMock()
+    mock_response.message.content = json.dumps({
+        "edits": [{"find": "a", "replace": "b", "reason": "fix"}]
+    })
+    agent.client = MagicMock()
+    agent.client.chat.return_value = mock_response
+
+    edits = agent._plan_edits("system", "user")
+
+    assert len(edits) == 1
+    assert edits[0]["find"] == "a"
+
+
+def test_repair_plan_edits_handles_empty_response():
+    """_plan_edits should return empty list on empty LLM response."""
+    agent = RepairAgent()
+    mock_response = MagicMock()
+    mock_response.message.content = ""
+    agent.client = MagicMock()
+    agent.client.chat.return_value = mock_response
+
+    edits = agent._plan_edits("system", "user")
+
+    assert edits == []
+
+
+def test_repair_build_review_findings_truthfulness():
+    """_build_review_findings should format truthfulness issues."""
+    agent = RepairAgent()
+    doc_fail = DocumentTruthResult(
+        pass_strict=False,
+        unsupported_claims=["quantum AI expertise"],
+        evidence_examples=["Led backend migration"],
+        suggestions=["Remove quantum claim"],
+    )
+    truth = TruthfulnessResult(
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=DocumentTruthResult(pass_strict=True),
+        interview_guide=DocumentTruthResult(pass_strict=True),
+    )
+
+    findings = agent._build_review_findings("cover_letter", truth, None, None, None, None)
+
+    assert "quantum AI expertise" in findings
+    assert "Led backend migration" in findings
+    assert "Remove quantum claim" in findings
+    assert "TRUTHFULNESS" in findings
+
+
+def test_repair_build_review_findings_empty_when_passing():
+    """_build_review_findings should return empty string when all checks pass."""
+    agent = RepairAgent()
+    doc_pass = DocumentTruthResult(pass_strict=True)
+    truth = TruthfulnessResult(
+        all_supported=True,
+        cover_letter=doc_pass, resume=doc_pass, interview_guide=doc_pass,
+    )
+    voice_review = VoiceReviewResult(
+        overall_match="strong",
+        cover_letter_match="strong",
+        resume_match="strong",
+        interview_guide_match="strong",
+        cover_letter_assessment="Good",
+        resume_assessment="Good",
+        interview_guide_assessment="Good",
+    )
+    ai_review = AIDetectionResult(risk_level="low")
+
+    findings = agent._build_review_findings("cover_letter", truth, voice_review, ai_review, None, None)
+
+    assert findings == ""
