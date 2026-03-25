@@ -478,8 +478,8 @@ Return JSON only — no markdown fences, no explanation.
 
 REPAIR_SYSTEM_PROMPT = """\
 You are a surgical document editor. You receive a career document alongside \
-review findings from three reviewers (truthfulness, voice, AI-detection). \
-For each flagged item, choose EXACTLY ONE action:
+review findings from three independent reviewers. For each flagged item, \
+choose EXACTLY ONE action:
 
   A. FIX IT   — produce a {find, replace, reason} edit in "edits".
   B. ACCEPT IT — add the verbatim flagged phrase to the matching accepted array:
@@ -493,6 +493,34 @@ matches the Voice Profile correctly (reviewer false positive).
 Only accept a finding when it is clearly a reviewer false positive. When in \
 doubt, fix it. Accepted phrases will not be flagged again in subsequent passes.
 
+REVIEWER CRITERIA (the reviewers will re-check your edits using these rules):
+
+Truthfulness reviewer rules:
+- Every specific factual claim (names, numbers, skills, outcomes) must be \
+  explicitly supported by the Career Profile or Job Description.
+- Claims referencing job details (company name, role title, team context, \
+  technology stack mentioned in the posting) are valid if they appear in \
+  the Job Description.
+- Vague but reasonable phrasing (e.g. "experienced professional") passes.
+- If ANY unsupported specific claim exists, the document fails.
+
+Voice reviewer rules:
+- 3+ characteristic phrases from the voice profile appearing naturally → "strong"
+- Tone broadly matches but characteristic phrasing is absent → "moderate"
+- Generic corporate writing with no voice markers → "weak"
+
+AI-detection reviewer rules:
+- Flag hollow superlatives with no quantification ("passionate", "dynamic", \
+  "results-driven" unless followed by specifics).
+- Flag generic claims without concrete examples ("strong communicator", \
+  "team player", "detail-oriented").
+- Flag structural tells: 3+ em-dashes, "Furthermore,"/"Moreover," transitions, \
+  sentences starting "I am" + adjective.
+- Flag hedging: "I believe", "I feel that", "arguably".
+- Flag filler sentences that add no information.
+- Do NOT flag industry terminology, quantified claims, or specific technical \
+  descriptions.
+
 For each finding you choose to FIX, apply this pattern:
 - TRUTHFULNESS issue  → remove or soften the unsupported phrase; do NOT \
   invent replacement facts or copy text from the Career Profile or Job Description.
@@ -505,18 +533,18 @@ EDIT RULES:
 1. Each edit must fix exactly one flagged issue.
 2. "find" must be a VERBATIM substring of the document — copy it \
    character-for-character.
-3. Keep edits as short as possible — target the flagged phrase, \
+3. "replace" must satisfy ALL three reviewer criteria above.
+4. Keep edits as short as possible — target the flagged phrase, \
    not the whole paragraph.
-4. Never alter text that was not flagged.
-5. To delete a flagged phrase, set "replace" to "".
-6. Truthfulness fixes take priority over voice/AI fixes.
-7. CRITICAL — Do NOT copy content from the Career Profile or Job Description \
+5. Never alter text that was not flagged.
+6. To delete a flagged phrase, set "replace" to "".
+7. If a truthfulness fix conflicts with a voice/AI fix, truthfulness wins.
+8. CRITICAL — Do NOT copy content from the Career Profile or Job Description \
    into replacements. Those sections are fact-check references only. \
    For truthfulness failures, REMOVE or SOFTEN the phrase only.
 """
 
 REPAIR_USER_TEMPLATE = """\
-/no_think
 ## Document to Edit
 {doc_content}
 
@@ -549,7 +577,11 @@ phrase to the matching accepted array). Return a single JSON object:
 }}
 
 Rules:
-- "find" must appear verbatim in the document — copy it exactly.
+- "find" must appear verbatim in the document.  Copy it exactly.
+- "replace" must not introduce any new factual claims, numbers, or experiences \
+  that are not already present in the document being edited.
+- Do NOT pull content from the Career Profile or Job Description sections above \
+  into your replacements — they are for fact-checking only.
 - One edit OR one acceptance per flagged issue — do not both fix and accept the same phrase.
 - If no edits are needed, set "edits" to [].
 - If no acceptances apply, set the accepted arrays to [].

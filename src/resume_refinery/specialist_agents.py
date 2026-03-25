@@ -564,7 +564,7 @@ class RepairAgent:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_msg},
             ],
-            think=False,
+            think=True,
             format={
                 "type": "object",
                 "properties": {
@@ -586,7 +586,7 @@ class RepairAgent:
                 },
                 "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues"],
             },
-            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS * 2},
         )
         raw = (response.message.content or "").strip()
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
@@ -609,20 +609,35 @@ class RepairAgent:
         if isinstance(data, dict):
             edits = data.get("edits")
             if isinstance(edits, list):
+                edits = self._filter_valid_edits(edits)
                 return edits, _extract_acceptances(data)
             # Fallback: older bare-list keys the model may emit
             for k in ("changes", "replacements"):
                 if isinstance(data.get(k), list):
                     logging.warning("Repair LLM returned object with '%s' key instead of 'edits'", k)
-                    return data[k], _extract_acceptances(data)
+                    return self._filter_valid_edits(data[k]), _extract_acceptances(data)
             if "find" in data:
                 logging.warning("Repair LLM returned a single edit object instead of object with 'edits'")
-                return [data], dict(_empty)
+                return self._filter_valid_edits([data]), dict(_empty)
         if isinstance(data, list):
             # Backward compat: bare array (pre-schema)
             logging.warning("Repair LLM returned a bare array instead of an object with 'edits'")
-            return data, dict(_empty)
+            return self._filter_valid_edits(data), dict(_empty)
         return [], dict(_empty)
+
+    @staticmethod
+    def _filter_valid_edits(edits: list[dict]) -> list[dict]:
+        """Drop malformed edit entries (missing or empty 'find')."""
+        valid = []
+        for e in edits:
+            if not isinstance(e, dict):
+                continue
+            find = e.get("find", "")
+            if not isinstance(find, str) or not find.strip():
+                logging.debug("Dropping malformed edit (empty/missing find): %s", e)
+                continue
+            valid.append(e)
+        return valid
 
     # ------------------------------------------------------------------
     # Build review findings text from reviewer results
