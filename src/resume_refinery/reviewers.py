@@ -269,7 +269,15 @@ class DocumentReviewer:
             )
             raw = self._call(AI_DETECTION_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
-            flags_by_doc[doc_type] = data.get("flags", [])
+            # Deduplicate flags — LLMs sometimes repeat the same phrase many times.
+            raw_flags = data.get("flags", [])
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for f in raw_flags:
+                if f not in seen:
+                    seen.add(f)
+                    deduped.append(f)
+            flags_by_doc[doc_type] = deduped
             if r := data.get("risk_level"):
                 risk_scores.append(r)
 

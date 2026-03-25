@@ -211,7 +211,9 @@ deliberate or weigh context; if a pattern matches, flag it:
 2. Generic claims that could describe any candidate: "strong communicator", "team player", \
    "detail-oriented" without a concrete example attached.
 3. Structural tells: 3+ em-dashes in a single document, "Furthermore," / "Moreover," \
-   transitions, and sentences starting with "I am" followed by an adjective.
+   transitions, and sentences starting with "I am" followed by a bare adjective \
+   (e.g. "I am passionate", "I am driven") — but NOT "I am a [job title]" or \
+   "I am responsible for" which are normal professional phrasing.
 4. Hedging language: "I believe", "I feel that", "arguably", "it could be said".
 5. Filler sentences that add no information if deleted.
 
@@ -398,7 +400,8 @@ Return a JSON object with this shape:
 - risk_level: "low" = 0–1 flags, "medium" = 2–3 flags, "high" = 4+ flags.
 - flags: quote the exact phrase from the document (as a string). Only include phrases \
   that match one of the 5 patterns. Do not flag quantified achievements or specific \
-  technical descriptions.
+  technical descriptions. Deduplicate — list each distinct flagged phrase only once. \
+  Limit to at most 15 flags total.
 
 Return JSON only — no markdown fences, no explanation.
 """
