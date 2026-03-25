@@ -60,14 +60,17 @@ Override with `RESUME_REFINERY_SESSIONS_DIR` env var.
     │   ├── voice_profile.md
     │   └── job_description.md
     ├── v1/
-    │   ├── cover_letter.md     ← Markdown source (intermediate)
-    │   ├── cover_letter.docx   ← Final Word document
+    │   ├── cover_letter.md         ← Markdown source (intermediate)
+    │   ├── cover_letter.docx       ← Final Word document
     │   ├── resume.md
     │   ├── resume.docx
     │   ├── interview_guide.md
     │   ├── interview_guide.docx
     │   ├── voice_review.json
-    │   └── ai_review.json
+    │   ├── ai_review.json
+    │   ├── exempted_phrases.json   ← Phrases/claims exempted during repair (only when any exemptions occurred)
+    │   └── repair_pass_0/         ← Snapshot after each repair pass (if repair ran)
+    │       └── ...
     └── v2/
         └── ...
 ```

@@ -37,6 +37,7 @@ from .models import (
     DocumentSet,
     DraftingContext,
     EvidencePack,
+    ExemptedPhrases,
     JobDescription,
     ReviewBundle,
     Session,
@@ -233,6 +234,16 @@ class SessionStore:
         if ep is None or vg is None:
             return None
         return DraftingContext(evidence_pack=ep, voice_style_guide=vg)
+
+    # --- Suppression / exempted phrases ------------------------------------
+
+    def save_suppressions(self, session: Session, phrases: ExemptedPhrases) -> None:
+        """Persist the cumulative set of repair-loop exempted phrases for the current version."""
+        version_dir = self.root / session.session_id / f"v{session.current_version}"
+        version_dir.mkdir(parents=True, exist_ok=True)
+        (version_dir / "exempted_phrases.json").write_text(
+            phrases.model_dump_json(indent=2), encoding="utf-8"
+        )
 
     # --- Repair pass snapshots ---------------------------------------------
 

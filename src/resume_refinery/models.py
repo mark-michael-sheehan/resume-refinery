@@ -194,6 +194,22 @@ class RepairPassResult(BaseModel):
     accepted_voice_issues: StrList = Field(default_factory=list)
 
 
+class ExemptedPhrases(BaseModel):
+    """Cumulative set of phrases/claims/issues accepted as false positives across all repair passes."""
+    claims: StrList = Field(
+        default_factory=list,
+        description="Truthfulness claims accepted as already supported by career evidence",
+    )
+    ai_phrases: StrList = Field(
+        default_factory=list,
+        description="AI-detection flags accepted as natural human-written language",
+    )
+    voice_issues: StrList = Field(
+        default_factory=list,
+        description="Voice-match issues accepted as reviewer false positives",
+    )
+
+
 class VerificationReport(BaseModel):
     reviews: ReviewBundle
     passed_strict_truth: bool = False

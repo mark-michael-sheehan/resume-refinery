@@ -16,6 +16,7 @@ from .models import (
     DocumentSet,
     DocumentTruthResult,
     DraftingContext,
+    ExemptedPhrases,
     OrchestrationResult,
     RepairPassResult,
     ReviewBundle,
@@ -96,7 +97,7 @@ class ResumeRefineryOrchestrator:
             docs.set(key, text)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
-        reviews, repair_passes = self._verify_and_repair(
+        reviews, repair_passes, exempted = self._verify_and_repair(
             docs, career, voice, job, context, progress=progress,
             on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
         )
@@ -104,6 +105,8 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         for pass_num, snap, pass_reviews in repair_snapshots:
             self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues:
+            self.store.save_suppressions(session, exempted)
         exported = self._export(session, docs)
 
         if skip_review:
@@ -173,7 +176,7 @@ class ResumeRefineryOrchestrator:
                 current_docs.set(key, regenerated)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
-        reviews, repair_passes = self._verify_and_repair(
+        reviews, repair_passes, exempted = self._verify_and_repair(
             current_docs,
             career,
             voice,
@@ -192,6 +195,8 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         for pass_num, snap, pass_reviews in repair_snapshots:
             self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues:
+            self.store.save_suppressions(session, exempted)
         exported = self._export(session, current_docs)
 
         if skip_review:
@@ -260,7 +265,7 @@ class ResumeRefineryOrchestrator:
         progress: ProgressCallback | None = None,
         max_passes: int = MAX_REPAIR_PASSES,
         on_repair_pass: Callable[[int, DocumentSet, ReviewBundle], None] | None = None,
-    ) -> tuple[ReviewBundle, list[RepairPassResult]]:
+    ) -> tuple[ReviewBundle, list[RepairPassResult], ExemptedPhrases]:
         import logging
 
         repair_results: list[RepairPassResult] = []
@@ -356,6 +361,9 @@ class ResumeRefineryOrchestrator:
             suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
             if repair_pass.edits:
                 self._progress(progress, self._summarise_repair(repair_pass))
+            # Emit explicit output for every item accepted as a false positive.
+            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues:
+                self._progress(progress, self._summarise_acceptances(repair_pass))
 
             # Snapshot documents and reviews after this repair pass for auditing.
             if on_repair_pass is not None:
@@ -370,7 +378,11 @@ class ResumeRefineryOrchestrator:
             truthfulness=truth,
             voice=voice_result,
             ai_detection=ai_result,
-        ), repair_results
+        ), repair_results, ExemptedPhrases(
+            claims=sorted(suppressed_claims),
+            ai_phrases=sorted(suppressed_ai_phrases),
+            voice_issues=sorted(suppressed_voice_issues),
+        )
 
     def _export(self, session: Session, docs: DocumentSet) -> dict[str, Path]:
         version_dir = self.store.session_dir(session.session_id) / f"v{session.current_version}"
@@ -501,6 +513,23 @@ class ResumeRefineryOrchestrator:
                 parts.append(f'    [green]+ "{edit.replace}"[/green]')
                 if edit.reason:
                     parts.append(f"      ({edit.reason})")
+        return "\n".join(parts)
+
+    def _summarise_acceptances(self, repair_pass: RepairPassResult) -> str:
+        """Build a Rich-tagged summary of all phrases/claims accepted as false positives."""
+        parts = ["[bold cyan]Repair agent accepted the following as false positives (will be exempted from future passes):[/bold cyan]"]
+        if repair_pass.accepted_claims:
+            parts.append("  [cyan]Truthfulness claims (accepted as supported by career evidence):[/cyan]")
+            for claim in repair_pass.accepted_claims:
+                parts.append(f'    [cyan]✓ "{claim}"[/cyan]')
+        if repair_pass.accepted_ai_phrases:
+            parts.append("  [cyan]AI-detection flags (accepted as natural human language):[/cyan]")
+            for phrase in repair_pass.accepted_ai_phrases:
+                parts.append(f'    [cyan]✓ "{phrase}"[/cyan]')
+        if repair_pass.accepted_voice_issues:
+            parts.append("  [cyan]Voice-match issues (accepted as reviewer false positives):[/cyan]")
+            for issue in repair_pass.accepted_voice_issues:
+                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
         return "\n".join(parts)
 
     def _doc_labels(self) -> dict[DocumentKey, str]:
