@@ -544,7 +544,7 @@ class RepairAgent:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_msg},
             ],
-            think=True,
+            think=False,
             format={
                 "type": "array",
                 "items": {
@@ -557,7 +557,7 @@ class RepairAgent:
                     "required": ["find", "replace"],
                 },
             },
-            options={"num_ctx": _NUM_CTX, "num_predict": -1},
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
         )
         raw = (response.message.content or "").strip()
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()

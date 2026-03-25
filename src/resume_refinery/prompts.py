@@ -475,56 +475,33 @@ Return JSON only — no markdown fences, no explanation.
 
 REPAIR_SYSTEM_PROMPT = """\
 You are a surgical document editor. You receive a career document alongside \
-review findings from three independent reviewers.  Your job is to produce a \
-JSON array of find/replace edits that fix EVERY flagged issue while \
-preserving all unflagged text exactly as-is.
+review findings. Produce a JSON array of find/replace edits that fix EVERY \
+flagged issue while preserving all unflagged text exactly as-is.
 
-REVIEWER CRITERIA (the reviewers will re-check your edits using these rules):
-
-Truthfulness reviewer rules:
-- Every specific factual claim (names, numbers, skills, outcomes) must be \
-  explicitly supported by the Career Profile or Job Description.
-- Claims referencing job details (company name, role title, team context, \
-  technology stack mentioned in the posting) are valid if they appear in \
-  the Job Description.
-- Vague but reasonable phrasing (e.g. "experienced professional") passes.
-- If ANY unsupported specific claim exists, the document fails.
-
-Voice reviewer rules:
-- 3+ characteristic phrases from the voice profile appearing naturally → "strong"
-- Tone broadly matches but characteristic phrasing is absent → "moderate"
-- Generic corporate writing with no voice markers → "weak"
-
-AI-detection reviewer rules:
-- Flag hollow superlatives with no quantification ("passionate", "dynamic", \
-  "results-driven" unless followed by specifics).
-- Flag generic claims without concrete examples ("strong communicator", \
-  "team player", "detail-oriented").
-- Flag structural tells: 3+ em-dashes, "Furthermore,"/"Moreover," transitions, \
-  sentences starting "I am" + adjective.
-- Flag hedging: "I believe", "I feel that", "arguably".
-- Flag filler sentences that add no information.
-- Do NOT flag industry terminology, quantified claims, or specific technical \
-  descriptions.
+For each finding, apply this fix pattern:
+- TRUTHFULNESS issue  → remove or soften the unsupported phrase; do NOT \
+  invent replacement facts or copy text from the Career Profile or Job Description.
+- VOICE issue         → rephrase the flagged passage to match the tone and \
+  phrasing style visible in the Voice Profile.
+- AI DETECTION issue  → remove the flagged phrase or replace it with a \
+  specific, quantified version using only details already present in the document.
 
 EDIT RULES:
 1. Each edit must fix exactly one flagged issue.
-2. The "find" value must be a VERBATIM substring of the document — copy it \
+2. "find" must be a VERBATIM substring of the document — copy it \
    character-for-character.
-3. The "replace" value must satisfy ALL three reviewer criteria above.
-4. Never alter text that was not flagged. Keep edits as short as possible — \
-   target the flagged phrase, not the whole paragraph.
+3. Keep edits as short as possible — target the flagged phrase, \
+   not the whole paragraph.
+4. Never alter text that was not flagged.
 5. To delete a flagged phrase, set "replace" to "".
-6. If a truthfulness fix conflicts with a voice/AI fix, truthfulness wins.
+6. Truthfulness fixes take priority over voice/AI fixes.
 7. CRITICAL — Do NOT copy content from the Career Profile or Job Description \
-   into the document. The Career Profile and Job Description are provided as \
-   FACT-CHECK REFERENCES ONLY — to verify whether a claim is supported, not \
-   as a source of new text to insert. For truthfulness failures, REMOVE or \
-   SOFTEN the unsupported phrase; do not substitute it with career profile \
-   details.
+   into replacements. Those sections are fact-check references only. \
+   For truthfulness failures, REMOVE or SOFTEN the phrase only.
 """
 
 REPAIR_USER_TEMPLATE = """\
+/no_think
 ## Document to Edit
 {doc_content}
 
@@ -544,19 +521,13 @@ REPAIR_USER_TEMPLATE = """\
 Produce a JSON array of surgical edits.  Each element:
 {{
   "find": "<exact verbatim substring from the document>",
-  "replace": "<corrected text that satisfies all reviewer criteria>",
+  "replace": "<corrected replacement; must use only text already in the document>",
   "reason": "<which review finding this fixes>"
 }}
 
-Rules:
-- "find" must appear verbatim in the document.  Copy it exactly.
-- "replace" must not introduce any new factual claims, numbers, or experiences
-  that are not already present in the document being edited.
-- Do NOT pull content from the Career Profile or Job Description sections above
-  into your replacements — they are for fact-checking only.
-- Include one edit per flagged issue.  Do not combine multiple issues into \
-  one edit.
-- If no edits are needed, return an empty array: []
+- "find" must appear verbatim in the document — copy it exactly.
+- One edit per flagged issue. Do not combine issues.
+- If no edits are needed, return: []
 - Return JSON only — no markdown fences, no explanation.
 """
 
@@ -568,7 +539,7 @@ def repair_user_message(
     job_description: str,
     review_findings: str,
 ) -> str:
-    """Build the user message for a surgical-repair call."""
+    """Build the user message for a surgical-repair call (no-think mode)."""
     return REPAIR_USER_TEMPLATE.format(
         doc_content=doc_content,
         career_profile=career_profile,
