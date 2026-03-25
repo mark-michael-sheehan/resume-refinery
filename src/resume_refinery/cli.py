@@ -273,10 +273,7 @@ def _print_truth_summary(truth) -> None:
         if doc.unsupported_claims:
             for claim in doc.unsupported_claims:
                 lines.append(f"  • {claim}")
-        if doc.suggestions:
-            for s in doc.suggestions:
-                lines.append(f"  → {s}")
-    console.print(Panel("\n".join(lines), title="[bold]Truthfulness Review[/bold]"))
+    console.print(Panel(\"\\n\".join(lines), title=\"[bold]Truthfulness Review[/bold]\"))
 
 
 def _print_repair_summary(repair_passes) -> None:

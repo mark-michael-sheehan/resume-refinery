@@ -289,8 +289,7 @@ Return a JSON object with this shape:
 {{
   "pass_strict": boolean,
   "unsupported_claims": [string],
-  "evidence_examples": [string],
-  "suggestions": [string]
+  "evidence_examples": [string]
 }}
 
 Rules:
@@ -299,7 +298,7 @@ Rules:
 - Claims that reference details from the Job Description (e.g. company name, role title,
   team context, or technology stack mentioned in the posting) are supported and must NOT be
   flagged as unsupported.
-- suggestions should describe how to fix or remove unsupported claims.
+- Do NOT suggest fixes — only identify and quote unsupported claims.
 - pass_strict must be false if any unsupported claim exists.
 
 Return JSON only — no markdown fences, no explanation.

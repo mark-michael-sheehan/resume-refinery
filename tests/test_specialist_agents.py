@@ -423,29 +423,6 @@ def test_evidence_agent_falls_back_on_llm_failure(career_profile, job_descriptio
 
 
 # ---------------------------------------------------------------------------
-# RepairAgent dedup and previous_suggestions
-# ---------------------------------------------------------------------------
-
-
-def test_repair_agent_deduplicate():
-    """_deduplicate should remove suggestions already in previous list."""
-    agent = RepairAgent()
-    current = ["Fix claim A", "Rewrite intro", "Add metrics"]
-    previous = ["Fix claim A", "add metrics"]  # case-insensitive dedup
-
-    result = agent._deduplicate(current, previous)
-
-    assert result == ["Rewrite intro"]
-
-
-def test_repair_agent_deduplicate_no_previous():
-    """With no previous suggestions, all current should be returned."""
-    agent = RepairAgent()
-    assert agent._deduplicate(["A", "B"], None) == ["A", "B"]
-    assert agent._deduplicate(["A", "B"], []) == ["A", "B"]
-
-
-# ---------------------------------------------------------------------------
 # RepairAgent  (surgical find/replace edits)
 # ---------------------------------------------------------------------------
 
@@ -638,41 +615,6 @@ def test_repair_unified_combines_all_findings(career_profile, voice_profile, job
     assert "passionate innovator" in user_msg  # AI detection finding
 
 
-def test_repair_unified_includes_previous_suggestions(career_profile, voice_profile, job_description):
-    """Previously attempted suggestions should appear in review findings."""
-    agent = RepairAgent()
-
-    docs = DocumentSet(cover_letter="cl with claim X", resume="r", interview_guide="ig")
-    doc_fail = DocumentTruthResult(
-        pass_strict=False,
-        unsupported_claims=["claim X"],
-        suggestions=["Fix claim X", "Fix claim Y"],
-    )
-    truth = TruthfulnessResult(
-        all_supported=False,
-        cover_letter=doc_fail,
-        resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
-    )
-    context = _make_context()
-
-    agent._plan_edits = MagicMock(return_value=[
-        {"find": "claim X", "replace": "verified fact", "reason": "truthfulness"},
-    ])
-
-    agent.repair_unified(
-        docs, truth, None, None,
-        career_profile, voice_profile, job_description, context,
-        previous_suggestions=["Fix claim X"],
-    )
-
-    call_args = agent._plan_edits.call_args
-    user_msg = call_args[0][1]
-    assert "previously attempted" in user_msg.lower()
-    # "Fix claim Y" is new and should be in the findings
-    assert "Fix claim Y" in user_msg
-
-
 def test_repair_plan_edits_parses_json_array():
     """_plan_edits should parse a JSON array response from the LLM."""
     agent = RepairAgent()
@@ -726,7 +668,6 @@ def test_repair_build_review_findings_truthfulness():
         pass_strict=False,
         unsupported_claims=["quantum AI expertise"],
         evidence_examples=["Led backend migration"],
-        suggestions=["Remove quantum claim"],
     )
     truth = TruthfulnessResult(
         all_supported=False,
@@ -735,11 +676,10 @@ def test_repair_build_review_findings_truthfulness():
         interview_guide=DocumentTruthResult(pass_strict=True),
     )
 
-    findings = agent._build_review_findings("cover_letter", truth, None, None, None, None)
+    findings = agent._build_review_findings("cover_letter", truth, None, None, None)
 
     assert "quantum AI expertise" in findings
     assert "Led backend migration" in findings
-    assert "Remove quantum claim" in findings
     assert "TRUTHFULNESS" in findings
 
 
@@ -762,6 +702,6 @@ def test_repair_build_review_findings_empty_when_passing():
     )
     ai_review = AIDetectionResult(risk_level="low")
 
-    findings = agent._build_review_findings("cover_letter", truth, voice_review, ai_review, None, None)
+    findings = agent._build_review_findings("cover_letter", truth, voice_review, ai_review, None)
 
     assert findings == ""

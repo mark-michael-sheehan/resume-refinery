@@ -93,7 +93,6 @@ def test_review_truthfulness_all_pass(mock_client_cls, document_set, career_prof
         "pass_strict": True,
         "unsupported_claims": [],
         "evidence_examples": ["Led backend migration"],
-        "suggestions": [],
     })
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response(payload)
@@ -115,13 +114,11 @@ def test_review_truthfulness_one_fails(mock_client_cls, document_set, career_pro
         "pass_strict": True,
         "unsupported_claims": [],
         "evidence_examples": [],
-        "suggestions": [],
     })
     fail_payload = json.dumps({
         "pass_strict": False,
         "unsupported_claims": ["Led a team of 50"],
         "evidence_examples": [],
-        "suggestions": ["Remove '50' or reduce to actual team size"],
     })
     mock_client = MagicMock()
     # First call (cover letter) passes, second (resume) fails, third (interview guide) passes
@@ -294,7 +291,6 @@ def test_review_truthfulness_skips_missing_docs(mock_client_cls, career_profile,
         "pass_strict": True,
         "unsupported_claims": [],
         "evidence_examples": [],
-        "suggestions": [],
     })
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response(payload)

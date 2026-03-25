@@ -479,7 +479,6 @@ class RepairAgent:
         job: JobDescription,
         context: DraftingContext,
         feedback: str | None = None,
-        previous_suggestions: list[str] | None = None,
     ) -> RepairPassResult:
         """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
@@ -489,7 +488,7 @@ class RepairAgent:
 
         for key in ("cover_letter", "resume", "interview_guide"):
             review_findings = self._build_review_findings(
-                key, truth, voice_review, ai_review, feedback, previous_suggestions,
+                key, truth, voice_review, ai_review, feedback,
             )
             if not review_findings:
                 continue
@@ -568,7 +567,6 @@ class RepairAgent:
         voice_review: VoiceReviewResult | None,
         ai_review: AIDetectionResult | None,
         feedback: str | None,
-        previous_suggestions: list[str] | None,
     ) -> str:
         """Return a human-readable summary of review findings for *key*.
 
@@ -605,13 +603,6 @@ class RepairAgent:
                         "Supporting evidence from Career Profile:\n"
                         + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8])
                     )
-                if doc_truth.suggestions:
-                    new = self._deduplicate(doc_truth.suggestions, previous_suggestions)
-                    if new:
-                        parts.append(
-                            "Truthfulness suggestions:\n"
-                            + "\n".join(f"- {s}" for s in new[:8])
-                        )
 
         # --- Voice (skip for interview guide — personal prep) ---
         if voice_review and key != "interview_guide":
@@ -652,18 +643,4 @@ class RepairAgent:
         if not has_issues:
             return ""
 
-        if previous_suggestions:
-            parts.append(
-                "Previously attempted fixes (try a different approach):\n"
-                + "\n".join(f"- {s}" for s in previous_suggestions[:12])
-            )
-
         return "\n\n".join(parts)
-
-    @staticmethod
-    def _deduplicate(current: list[str], previous: list[str] | None) -> list[str]:
-        """Return suggestions from *current* not already in *previous*."""
-        if not previous:
-            return current
-        seen = {s.strip().lower() for s in previous}
-        return [s for s in current if s.strip().lower() not in seen]

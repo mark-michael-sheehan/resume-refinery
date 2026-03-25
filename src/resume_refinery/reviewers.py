@@ -163,7 +163,6 @@ class DocumentReviewer:
                 pass_strict=data.get("pass_strict", True),
                 unsupported_claims=data.get("unsupported_claims", []),
                 evidence_examples=data.get("evidence_examples", []),
-                suggestions=data.get("suggestions", []),
             )
 
         cl = results["Cover Letter"]

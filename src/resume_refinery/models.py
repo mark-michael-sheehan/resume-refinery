@@ -163,7 +163,6 @@ class DocumentTruthResult(BaseModel):
     pass_strict: bool
     unsupported_claims: StrList = Field(default_factory=list)
     evidence_examples: StrList = Field(default_factory=list)
-    suggestions: StrList = Field(default_factory=list)
 
 
 class TruthfulnessResult(BaseModel):
@@ -171,7 +170,6 @@ class TruthfulnessResult(BaseModel):
     cover_letter: DocumentTruthResult
     resume: DocumentTruthResult
     interview_guide: DocumentTruthResult
-    suggestions: StrList = Field(default_factory=list)
 
 
 class ReviewBundle(BaseModel):

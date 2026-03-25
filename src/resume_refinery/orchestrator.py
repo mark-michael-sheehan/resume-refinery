@@ -262,7 +262,6 @@ class ResumeRefineryOrchestrator:
     ) -> tuple[ReviewBundle, list[RepairPassResult]]:
         import logging
 
-        previous_truth_suggestions: list[str] = []
         repair_results: list[RepairPassResult] = []
 
         truth = None
@@ -299,7 +298,7 @@ class ResumeRefineryOrchestrator:
 
             # --- Summarise all three ---
             if truth:
-                self._progress(progress, self._summarise_truth(truth, previous_truth_suggestions))
+                self._progress(progress, self._summarise_truth(truth))
             if voice_result:
                 self._progress(progress, self._summarise_voice(voice_result))
             if ai_result:
@@ -335,9 +334,6 @@ class ResumeRefineryOrchestrator:
                 docs, truth, voice_result, ai_result,
                 career, voice, job, context,
                 feedback=feedback,
-                previous_suggestions=(
-                    previous_truth_suggestions
-                ),
             )
             repair_results.append(repair_pass)
             if repair_pass.edits:
@@ -351,13 +347,6 @@ class ResumeRefineryOrchestrator:
                     ai_detection=ai_result,
                 )
                 on_repair_pass(pass_num, docs, pass_reviews)
-
-            # Collect suggestions — keep only the most recent pass to avoid
-            # an ever-growing pile of conflicting instructions.
-            previous_truth_suggestions.clear()
-            if truth:
-                for doc in (truth.cover_letter, truth.resume, truth.interview_guide):
-                    previous_truth_suggestions.extend(doc.suggestions)
 
         return ReviewBundle(
             truthfulness=truth,
@@ -377,7 +366,7 @@ class ResumeRefineryOrchestrator:
     # Review-result summaries emitted via the progress callback
     # ------------------------------------------------------------------
 
-    def _summarise_truth(self, truth: TruthfulnessResult, previous_suggestions: list[str] | None = None) -> str:
+    def _summarise_truth(self, truth: TruthfulnessResult) -> str:
         if truth.all_supported:
             parts = ["[green]Truthfulness: ALL SUPPORTED[/green]"]
         else:
@@ -387,13 +376,6 @@ class ResumeRefineryOrchestrator:
                            ("Interview Guide", truth.interview_guide)]:
             status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗ ({len(doc.unsupported_claims)} unsupported)[/red]"
             parts.append(f"  {label}: {status}")
-            if doc.suggestions:
-                for s in doc.suggestions:
-                    parts.append(f"    • {s}")
-        if previous_suggestions:
-            parts.append("  Previously attempted:")
-            for s in previous_suggestions:
-                parts.append(f"    ◦ {s}")
         return "\n".join(parts)
 
     def _summarise_voice(self, voice: VoiceReviewResult) -> str:

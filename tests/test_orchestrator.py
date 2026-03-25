@@ -61,7 +61,6 @@ class FakeVerificationAgent:
             cover_letter=truth_doc,
             resume=truth_doc,
             interview_guide=truth_doc,
-            suggestions=[],
         )
 
     def review_voice(self, docs, voice):
@@ -93,7 +92,6 @@ class FakeVerificationAgent:
                 cover_letter=truth_doc,
                 resume=truth_doc,
                 interview_guide=truth_doc,
-                suggestions=[],
             ),
             voice=VoiceReviewResult(
                 overall_match="strong",
@@ -115,7 +113,7 @@ class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, previous_suggestions=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None):
         self.unified_calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
