@@ -30,6 +30,22 @@ Built as a deterministic workflow orchestrator with bounded specialist agents.
 
 ---
 
+## Prerequisites
+
+1. **Python 3.11+**
+2. **[Ollama](https://ollama.com/)** installed and running locally. Verify with:
+   ```bash
+   ollama --version
+   ```
+3. **Pull the default model** (or whichever model you configure in `.env`):
+   ```bash
+   ollama pull qwen3.5:9b
+   ```
+   Ollama must be serving before you run Resume Refinery. Start it with `ollama serve`
+   if it isn't running as a system service.
+
+---
+
 ## Setup
 
 ```bash
