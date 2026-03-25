@@ -47,7 +47,7 @@
 
 | ID | Requirement |
 |---|---|
-| FR-6.1 | **Truthfulness reviewer** — Every factual claim in a document must be directly supported by evidence in the career profile. Claims not found in the profile are flagged as unsupported. |
+| FR-6.1 | **Truthfulness reviewer** — Every factual claim in a document must be directly supported by evidence in the career profile or the job description. Claims not found in either source are flagged as unsupported. |
 | FR-6.2 | **Voice reviewer** — Documents must match the writing style described in the voice profile. Per-document match strength is rated as "strong", "moderate", or "weak". |
 | FR-6.3 | **AI detection reviewer** — Documents are scanned for phrases that commonly trigger AI-detection tools. Flagged phrases are listed per document. |
 | FR-6.4 | All reviewers use JSON-formatted output, temperature 0, and thinking disabled to maximise determinism. |

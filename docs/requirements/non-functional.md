@@ -11,7 +11,7 @@
 
 | ID | Requirement |
 |---|---|
-| NFR-2.1 | Every factual statement in generated documents MUST be directly traceable to the career profile. |
+| NFR-2.1 | Every factual statement in generated documents MUST be directly traceable to the career profile or the job description. |
 | NFR-2.2 | The system must never fabricate, embellish, or extrapolate achievements beyond what the career profile states. |
 | NFR-2.3 | Truthfulness is the highest-priority review gate and never relaxes. |
 

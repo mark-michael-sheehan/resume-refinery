@@ -19,7 +19,7 @@ ensure convergence.
 |---|---|
 | CR-2.1 | All reviewers pin `temperature=0` to minimise non-determinism between passes. |
 | CR-2.2 | Reviewers use `think=False` and `format="json"` so that raw output is parseable without stripping thinking tags. |
-| CR-2.3 | The truthfulness reviewer is the strictest gate — it NEVER relaxes. Voice and AI detection may relax on later passes (see CR-3). |
+| CR-2.3 | The truthfulness reviewer is the strictest gate — it NEVER relaxes. It receives both the career profile and the job description as grounding sources. Voice and AI detection may relax on later passes (see CR-3). |
 
 ## CR-3 Acceptance Thresholds
 

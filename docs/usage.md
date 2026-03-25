@@ -118,7 +118,7 @@ resume-refinery review acme-cloud_staff-engineer_2026-03-20
 resume-refinery review acme-cloud_staff-engineer_2026-03-20 --version 1
 ```
 
-Runs strict truthfulness, voice-match, and AI-detection reviewers on the current (or specified) version.
+Runs strict truthfulness (against career profile and job description), voice-match, and AI-detection reviewers on the current (or specified) version.
 
 ---
 

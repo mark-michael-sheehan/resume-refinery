@@ -88,8 +88,10 @@ is especially valuable for the review passes, where the model needs to reason ca
 about voice match and AI-detection signals before producing a JSON result.
 
 **Verification gates:** Truthfulness, voice match, and AI-detection are treated as
-separate verification concerns. Truth checks run before final acceptance, and repair
-passes target only failing documents.
+separate verification concerns. The truthfulness reviewer receives the career profile
+and job description as grounding sources; voice and AI-detection reviewers operate
+only on the documents and voice profile. Truth checks run before final acceptance,
+and repair passes target only failing documents.
 
 **Raw content over structured parsing:** Input files are passed to Claude as raw text.
 This is intentional — flexible, user-friendly input formats are more important than
