@@ -30,7 +30,6 @@ def test_review_voice_returns_result(mock_client_cls, document_set, voice_profil
         "overall_match": "strong",
         "assessment": "Great voice match.",
         "issues": [],
-        "suggestions": [],
     })
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response(payload)
@@ -51,7 +50,6 @@ def test_review_ai_detection_returns_result(mock_client_cls, document_set):
     payload = json.dumps({
         "risk_level": "low",
         "flags": [],
-        "suggestions": [],
     })
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response(payload)
@@ -70,7 +68,6 @@ def test_reviewer_strips_json_fences(mock_client_cls, document_set):
     payload = json.dumps({
         "risk_level": "medium",
         "flags": ["test flag"],
-        "suggestions": [],
     })
     fenced = f"```json\n{payload}\n```"
     mock_client = MagicMock()
@@ -201,7 +198,7 @@ def test_call_empty_response_raises(mock_client_cls):
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_call_strips_think_blocks(mock_client_cls):
-    payload = json.dumps({"risk_level": "low", "flags": [], "suggestions": []})
+    payload = json.dumps({"risk_level": "low", "flags": []})
     wrapped = f"<think>reasoning here</think>{payload}"
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response(wrapped)
@@ -221,8 +218,8 @@ def test_call_strips_think_blocks(mock_client_cls):
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_voice_review_worst_of_aggregation(mock_client_cls, document_set, voice_profile):
     """Overall match should be the worst (minimum) across cover letter & resume."""
-    strong = json.dumps({"overall_match": "strong", "assessment": "Good", "issues": [], "suggestions": []})
-    weak = json.dumps({"overall_match": "weak", "assessment": "Poor", "issues": ["too formal"], "suggestions": []})
+    strong = json.dumps({"overall_match": "strong", "assessment": "Good", "issues": []})
+    weak = json.dumps({"overall_match": "weak", "assessment": "Poor", "issues": ["too formal"]})
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
         _make_mock_response(strong),   # cover letter
@@ -246,8 +243,8 @@ def test_voice_review_worst_of_aggregation(mock_client_cls, document_set, voice_
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_ai_detection_worst_of_risk(mock_client_cls, document_set):
     """Overall risk should be the worst (maximum) across cover letter & resume."""
-    low = json.dumps({"risk_level": "low", "flags": [], "suggestions": []})
-    high = json.dumps({"risk_level": "high", "flags": ["passionate about innovation"], "suggestions": []})
+    low = json.dumps({"risk_level": "low", "flags": []})
+    high = json.dumps({"risk_level": "high", "flags": ["passionate about innovation"]})
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
         _make_mock_response(low),    # cover letter
@@ -276,7 +273,6 @@ def test_review_voice_skips_missing_docs(mock_client_cls, voice_profile):
         "overall_match": "moderate",
         "assessment": "Okay match",
         "issues": [],
-        "suggestions": [],
     })
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response(payload)
@@ -316,7 +312,7 @@ def test_review_truthfulness_skips_missing_docs(mock_client_cls, career_profile,
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_ai_detection_skips_missing_docs(mock_client_cls):
     docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide="guide content")
-    payload = json.dumps({"risk_level": "medium", "flags": ["generic phrase"], "suggestions": []})
+    payload = json.dumps({"risk_level": "medium", "flags": ["generic phrase"]})
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response(payload)
     mock_client_cls.return_value = mock_client
@@ -340,8 +336,8 @@ def test_review_ai_detection_skips_missing_docs(mock_client_cls):
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_voice_review_stores_per_doc_match(mock_client_cls, document_set, voice_profile):
     """Per-doc overall_match values from the LLM are stored in the result."""
-    strong = json.dumps({"overall_match": "strong", "assessment": "On-voice", "issues": [], "suggestions": []})
-    weak = json.dumps({"overall_match": "weak", "assessment": "Off-voice", "issues": [], "suggestions": []})
+    strong = json.dumps({"overall_match": "strong", "assessment": "On-voice", "issues": []})
+    weak = json.dumps({"overall_match": "weak", "assessment": "Off-voice", "issues": []})
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
         _make_mock_response(strong),    # cover letter
@@ -409,24 +405,22 @@ def test_different_model_no_warning(mock_client_cls, caplog):
 
 
 # ---------------------------------------------------------------------------
-# Voice review: per-doc issues and suggestions
+# Voice review: per-doc issues
 # ---------------------------------------------------------------------------
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
-def test_voice_review_stores_per_doc_issues_and_suggestions(mock_client_cls, document_set, voice_profile):
-    """Per-doc issues and suggestions from the LLM are stored in the result."""
+def test_voice_review_stores_per_doc_issues(mock_client_cls, document_set, voice_profile):
+    """Per-doc issues from the LLM are stored in the result."""
     cl = json.dumps({
         "overall_match": "weak",
         "assessment": "Off-voice",
         "issues": ["opener too formal"],
-        "suggestions": ["Use a casual hook"],
     })
     resume = json.dumps({
         "overall_match": "strong",
         "assessment": "Good",
         "issues": [],
-        "suggestions": [],
     })
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
@@ -441,12 +435,9 @@ def test_voice_review_stores_per_doc_issues_and_suggestions(mock_client_cls, doc
 
     # Per-doc fields
     assert result.cover_letter_issues == ["opener too formal"]
-    assert result.cover_letter_suggestions == ["Use a casual hook"]
     assert result.resume_issues == []
-    assert result.resume_suggestions == []
     # Interview guide is skipped — empty defaults
     assert result.interview_guide_issues == []
-    assert result.interview_guide_suggestions == []
     # Aggregated fields contain only CL + Resume items
     assert "opener too formal" in result.specific_issues
 

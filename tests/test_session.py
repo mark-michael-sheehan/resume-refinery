@@ -327,8 +327,6 @@ def test_save_and_load_repair_pass_with_reviews(tmp_path, career_profile, voice_
     )
     ai = AIDetectionResult(
         risk_level="low",
-        cover_letter_suggestions=["cl suggestions"],
-        resume_suggestions=["resume suggestions"],
     )
     bundle = ReviewBundle(truthfulness=truth, voice=voice, ai_detection=ai)
 
@@ -340,4 +338,4 @@ def test_save_and_load_repair_pass_with_reviews(tmp_path, career_profile, voice_
     assert loaded_reviews is not None
     assert loaded_reviews.truthfulness.all_supported is True
     assert loaded_reviews.voice.overall_match == "strong"
-    assert loaded_reviews.ai_detection.cover_letter_suggestions == ["cl suggestions"]
+    assert loaded_reviews.ai_detection.risk_level == "low"

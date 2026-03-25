@@ -163,7 +163,6 @@ Decision rules (apply literally, do not deliberate):
 - If the tone broadly matches but characteristic phrasing is absent → "moderate"
 - If the document reads like generic corporate writing with no voice markers → "weak"
 - Flag ONLY phrases you can quote from the document. Do not flag absence of phrases.
-- Every suggestion must name the exact phrase to change and what to change it to.
 """
 
 VOICE_REVIEW_USER_TEMPLATE = """## Voice Profile
@@ -185,7 +184,6 @@ Evaluate how well each document reflects the voice profile. Return a JSON object
 - "resume_assessment": string (1-2 sentences)
 - "interview_guide_assessment": string (1-2 sentences)
 - "specific_issues": list of specific phrases or passages that feel off-voice
-- "suggestions": list of concrete changes to better match the voice profile
 
 Return JSON only — no markdown fences, no explanation.
 """
@@ -222,7 +220,6 @@ Identify content that sounds AI-generated, generic, or hollow. Return a JSON obj
 - "cover_letter_flags": list of specific phrases or passages (quote them)
 - "resume_flags": list of specific phrases or passages (quote them)
 - "interview_guide_flags": list of specific phrases or passages (quote them)
-- "suggestions": list of concrete rewrites or guidance
 
 Return JSON only — no markdown fences, no explanation.
 """
@@ -293,14 +290,12 @@ Return a JSON object with this shape:
 {{
   "overall_match": "strong" | "moderate" | "weak",
   "assessment": string,
-  "issues": [string],
-  "suggestions": [string]
+  "issues": [string]
 }}
 
 - overall_match: use the decision rules above — do not hedge between categories.
 - assessment: 1–2 sentences. State which voice markers are present or missing.
 - issues: quote specific phrases from the {doc_type} that feel off-voice.
-- suggestions: for each issue, state what to replace it with. Be concrete, not vague.
 
 Do NOT flag content simply because it is professional. Only flag content that \
 contradicts the voice profile or sounds like a different person wrote it.
@@ -319,16 +314,13 @@ exact matches — do not flag content that is merely professional or well-writte
 Return a JSON object with this shape:
 {{
   "risk_level": "low" | "medium" | "high",
-  "flags": [string],
-  "suggestions": [string]
+  "flags": [string]
 }}
 
 - risk_level: "low" = 0–1 flags, "medium" = 2–3 flags, "high" = 4+ flags.
 - flags: quote the exact phrase from the document (as a string). Only include phrases \
   that match one of the 5 patterns. Do not flag quantified achievements or specific \
   technical descriptions.
-- suggestions: for each flag, provide a concrete rewrite as a plain text string. \
-  Every item must be a string sentence, never a number.
 
 Return JSON only — no markdown fences, no explanation.
 """

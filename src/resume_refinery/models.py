@@ -146,14 +146,10 @@ class VoiceReviewResult(BaseModel):
     resume_assessment: str
     interview_guide_assessment: str
     specific_issues: StrList = Field(default_factory=list)
-    suggestions: StrList = Field(default_factory=list)
-    # Per-document issues and suggestions for targeted repair
+    # Per-document issues for targeted repair
     cover_letter_issues: StrList = Field(default_factory=list)
     resume_issues: StrList = Field(default_factory=list)
     interview_guide_issues: StrList = Field(default_factory=list)
-    cover_letter_suggestions: StrList = Field(default_factory=list)
-    resume_suggestions: StrList = Field(default_factory=list)
-    interview_guide_suggestions: StrList = Field(default_factory=list)
 
 
 class AIDetectionResult(BaseModel):
@@ -161,9 +157,6 @@ class AIDetectionResult(BaseModel):
     cover_letter_flags: StrList = Field(default_factory=list)
     resume_flags: StrList = Field(default_factory=list)
     interview_guide_flags: StrList = Field(default_factory=list)
-    suggestions: StrList = Field(default_factory=list)
-    cover_letter_suggestions: StrList = Field(default_factory=list)
-    resume_suggestions: StrList = Field(default_factory=list)
 
 
 class DocumentTruthResult(BaseModel):

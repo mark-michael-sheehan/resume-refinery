@@ -190,9 +190,7 @@ class DocumentReviewer:
 
         assessments: dict[str, str] = {}
         all_issues: list[str] = []
-        all_suggestions: list[str] = []
         per_doc_issues: dict[str, list[str]] = {}
-        per_doc_suggestions: dict[str, list[str]] = {}
         match_scores: list[str] = []
         per_doc_match: dict[str, str] = {}
 
@@ -201,14 +199,12 @@ class DocumentReviewer:
                 assessments[doc_type] = "(not generated)"
                 per_doc_match[doc_type] = "strong"  # nothing to review
                 per_doc_issues[doc_type] = []
-                per_doc_suggestions[doc_type] = []
                 continue
             if doc_type == "Interview Guide":
                 # Interview guides are personal prep — skip voice check
                 assessments[doc_type] = "(skipped — personal prep)"
                 per_doc_match[doc_type] = "strong"
                 per_doc_issues[doc_type] = []
-                per_doc_suggestions[doc_type] = []
                 continue
             user_msg = VOICE_REVIEW_DOC_USER_TEMPLATE.format(
                 voice_profile=voice.raw_content,
@@ -219,11 +215,8 @@ class DocumentReviewer:
             data = json.loads(raw)
             assessments[doc_type] = data.get("assessment", "")
             doc_issues = data.get("issues", [])
-            doc_suggestions = data.get("suggestions", [])
             per_doc_issues[doc_type] = doc_issues
-            per_doc_suggestions[doc_type] = doc_suggestions
             all_issues.extend(doc_issues)
-            all_suggestions.extend(doc_suggestions)
             doc_match = data.get("overall_match", "moderate")
             per_doc_match[doc_type] = doc_match
             match_scores.append(doc_match)
@@ -242,13 +235,9 @@ class DocumentReviewer:
             resume_assessment=assessments.get("Resume", "(not reviewed)"),
             interview_guide_assessment=assessments.get("Interview Guide", "(not reviewed)"),
             specific_issues=all_issues,
-            suggestions=all_suggestions,
             cover_letter_issues=per_doc_issues.get("Cover Letter", []),
             resume_issues=per_doc_issues.get("Resume", []),
             interview_guide_issues=per_doc_issues.get("Interview Guide", []),
-            cover_letter_suggestions=per_doc_suggestions.get("Cover Letter", []),
-            resume_suggestions=per_doc_suggestions.get("Resume", []),
-            interview_guide_suggestions=per_doc_suggestions.get("Interview Guide", []),
         )
 
     def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:
@@ -263,11 +252,6 @@ class DocumentReviewer:
         ]
 
         flags_by_doc: dict[str, list[str]] = {
-            "Cover Letter": [],
-            "Resume": [],
-            "Interview Guide": [],
-        }
-        suggestions_by_doc: dict[str, list[str]] = {
             "Cover Letter": [],
             "Resume": [],
             "Interview Guide": [],
@@ -287,7 +271,6 @@ class DocumentReviewer:
             raw = self._call(AI_DETECTION_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             flags_by_doc[doc_type] = data.get("flags", [])
-            suggestions_by_doc[doc_type] = data.get("suggestions", [])
             if r := data.get("risk_level"):
                 risk_scores.append(r)
 
@@ -301,8 +284,6 @@ class DocumentReviewer:
             cover_letter_flags=flags_by_doc["Cover Letter"],
             resume_flags=flags_by_doc["Resume"],
             interview_guide_flags=flags_by_doc["Interview Guide"],
-            cover_letter_suggestions=suggestions_by_doc["Cover Letter"],
-            resume_suggestions=suggestions_by_doc["Resume"],
         )
 
     def _call(self, system: str, user_msg: str, *, think: bool = False) -> str:

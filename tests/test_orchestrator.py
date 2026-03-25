@@ -72,7 +72,6 @@ class FakeVerificationAgent:
             resume_assessment="Consistent.",
             interview_guide_assessment="Slightly formal.",
             specific_issues=[] if match == "strong" else ["opener feels generic"],
-            suggestions=[] if match == "strong" else ["Use a concrete hook"],
         )
 
     def review_ai_detection(self, docs):
@@ -83,7 +82,6 @@ class FakeVerificationAgent:
             cover_letter_flags=[] if risk == "low" else ["results-driven"],
             resume_flags=[],
             interview_guide_flags=[],
-            suggestions=[] if risk == "low" else ["Remove generic superlatives"],
         )
 
     def review_all(self, docs, career, voice, job):
@@ -102,14 +100,12 @@ class FakeVerificationAgent:
                 resume_assessment="Good",
                 interview_guide_assessment="Good",
                 specific_issues=[],
-                suggestions=[],
             ),
             ai_detection=AIDetectionResult(
                 risk_level="low",
                 cover_letter_flags=[],
                 resume_flags=[],
                 interview_guide_flags=[],
-                suggestions=[],
             ),
         )
 

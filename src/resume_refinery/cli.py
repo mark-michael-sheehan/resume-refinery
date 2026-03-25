@@ -230,8 +230,7 @@ def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
         console.print(
             Panel(
                 f"Overall match: [{match_color}]{r.overall_match.upper()}[/{match_color}]\n\n"
-                + (f"Issues:\n" + "\n".join(f"  • {i}" for i in r.specific_issues) if r.specific_issues else "")
-                + ("\n\nSuggestions:\n" + "\n".join(f"  • {s}" for s in r.suggestions) if r.suggestions else ""),
+                + (f"Issues:\n" + "\n".join(f"  • {i}" for i in r.specific_issues) if r.specific_issues else ""),
                 title="[bold]Voice Match Review[/bold]",
             )
         )
@@ -243,8 +242,7 @@ def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
         console.print(
             Panel(
                 f"AI-content risk: [{risk_color}]{r.risk_level.upper()}[/{risk_color}]\n\n"
-                + (f"Flagged phrases:\n" + "\n".join(f'  • "{f}"' for f in all_flags[:6]) if all_flags else "No flags.")
-                + ("\n\nSuggestions:\n" + "\n".join(f"  • {s}" for s in r.suggestions) if r.suggestions else ""),
+                + (f"Flagged phrases:\n" + "\n".join(f'  • "{f}"' for f in all_flags[:6]) if all_flags else "No flags."),
                 title="[bold]AI-Detection Review[/bold]",
             )
         )
