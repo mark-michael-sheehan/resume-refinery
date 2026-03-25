@@ -376,31 +376,38 @@ class ResumeRefineryOrchestrator:
                            ("Interview Guide", truth.interview_guide)]:
             status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗ ({len(doc.unsupported_claims)} unsupported)[/red]"
             parts.append(f"  {label}: {status}")
+            if not doc.pass_strict:
+                for claim in doc.unsupported_claims:
+                    parts.append(f"    • {claim}")
         return "\n".join(parts)
 
     def _summarise_voice(self, voice: VoiceReviewResult) -> str:
         color = {"strong": "green", "moderate": "yellow", "weak": "red"}[voice.overall_match]
         parts = [f"[{color}]Voice match: {voice.overall_match.upper()}[/{color}]"]
-        for label, match in [
-            ("Cover Letter", voice.cover_letter_match),
-            ("Resume", voice.resume_match),
-            ("Interview Guide", voice.interview_guide_match),
+        for label, match, issues in [
+            ("Cover Letter", voice.cover_letter_match, voice.cover_letter_issues),
+            ("Resume", voice.resume_match, voice.resume_issues),
+            ("Interview Guide", voice.interview_guide_match, voice.interview_guide_issues),
         ]:
             mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
             parts.append(f"  {label}: [{mc}]{match}[/{mc}]")
+            if match != "strong" and issues:
+                for issue in issues:
+                    parts.append(f"    • {issue}")
         return "\n".join(parts)
 
     def _summarise_ai(self, ai: AIDetectionResult) -> str:
         color = {"low": "green", "medium": "yellow", "high": "red"}[ai.risk_level]
         parts = [f"[{color}]AI-detection risk: {ai.risk_level.upper()}[/{color}]"]
-        per_doc_flags: dict[str, list[str]] = {
-            "Cover Letter": ai.cover_letter_flags,
-            "Resume": ai.resume_flags,
-        }
-        for label in ("Cover Letter", "Resume"):
-            flags = per_doc_flags.get(label, [])
+        for label, flags in [
+            ("Cover Letter", ai.cover_letter_flags),
+            ("Resume", ai.resume_flags),
+            ("Interview Guide", ai.interview_guide_flags),
+        ]:
             if flags:
                 parts.append(f"  {label}: {len(flags)} flag(s)")
+                for flag in flags:
+                    parts.append(f'    • "{flag}"')
         return "\n".join(parts)
 
     def _summarise_repair(self, repair_pass: RepairPassResult) -> str:
