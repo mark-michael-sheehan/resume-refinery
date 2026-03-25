@@ -241,8 +241,15 @@ Return JSON only — no markdown fences, no explanation.
 
 TRUTHFULNESS_SYSTEM_PROMPT = """You are a strict factual verifier for career documents.
 Your only job is to verify that every claim in the generated documents is supported by the
-provided career profile or job description. If a claim is not explicitly supported by either
+provided reference sources. If a claim is not explicitly supported by either reference
 source, mark it unsupported. Do not assume, infer, or soften this rule.
+
+IMPORTANT — What the reference sources are for:
+- The Career Profile and Job Description are VERIFICATION REFERENCES ONLY.
+  They tell you what is true about the applicant and the role.
+  They are NOT a list of content that must appear in the document.
+  Do NOT flag anything as unsupported just because it isn't in those sources —
+  only flag claims that state specific facts that CONTRADICT or are ABSENT FROM both.
 
 Two kinds of valid support:
 - CAREER PROFILE: The applicant's own experience, skills, metrics, and accomplishments.
@@ -274,13 +281,13 @@ Common mistakes to AVOID:
 """""
 
 
-TRUTHFULNESS_DOC_USER_TEMPLATE = """## Career Profile
+TRUTHFULNESS_DOC_USER_TEMPLATE = """## Career Profile [VERIFICATION REFERENCE — for fact-checking only, not a content source]
 {career_profile}
 
-## Job Description
+## Job Description [VERIFICATION REFERENCE — for fact-checking only, not a content source]
 {job_description}
 
-## {doc_type}
+## {doc_type} [THE DOCUMENT BEING VERIFIED]
 {doc_content}
 
 ## Task
@@ -467,19 +474,25 @@ EDIT RULES:
    target the flagged phrase, not the whole paragraph.
 5. To delete a flagged phrase, set "replace" to "".
 6. If a truthfulness fix conflicts with a voice/AI fix, truthfulness wins.
+7. CRITICAL — Do NOT copy content from the Career Profile or Job Description \
+   into the document. The Career Profile and Job Description are provided as \
+   FACT-CHECK REFERENCES ONLY — to verify whether a claim is supported, not \
+   as a source of new text to insert. For truthfulness failures, REMOVE or \
+   SOFTEN the unsupported phrase; do not substitute it with career profile \
+   details.
 """
 
 REPAIR_USER_TEMPLATE = """\
 ## Document to Edit
 {doc_content}
 
-## Career Profile
+## Career Profile [FACT-CHECK REFERENCE — do not copy text from this into the document]
 {career_profile}
 
-## Voice Profile
+## Voice Profile [STYLE REFERENCE — match tone and phrasing style only]
 {voice_profile}
 
-## Job Description
+## Job Description [FACT-CHECK REFERENCE — do not copy text from this into the document]
 {job_description}
 
 ## Review Findings
@@ -495,7 +508,10 @@ Produce a JSON array of surgical edits.  Each element:
 
 Rules:
 - "find" must appear verbatim in the document.  Copy it exactly.
-- "replace" must not introduce any new unsupported factual claims.
+- "replace" must not introduce any new factual claims, numbers, or experiences
+  that are not already present in the document being edited.
+- Do NOT pull content from the Career Profile or Job Description sections above
+  into your replacements — they are for fact-checking only.
 - Include one edit per flagged issue.  Do not combine multiple issues into \
   one edit.
 - If no edits are needed, return an empty array: []
