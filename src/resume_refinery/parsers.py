@@ -13,16 +13,25 @@ from pathlib import Path
 from .models import CareerProfile, JobDescription, VoiceProfile
 
 
+def _read_file_content(path: Path) -> str:
+    """Read a file's text content, supporting .docx and plain-text formats."""
+    if path.suffix.lower() == ".docx":
+        from docx import Document  # type: ignore[import-untyped]
+
+        doc = Document(str(path))
+        return "\n".join(para.text for para in doc.paragraphs)
+    return path.read_text(encoding="utf-8")
+
+
 def load_voice_profile(path: str | Path) -> VoiceProfile:
-    """Read a voice profile markdown file."""
-    content = Path(path).read_text(encoding="utf-8")
+    """Read a voice profile markdown or Word file."""
+    content = _read_file_content(Path(path))
     return parse_voice_profile_content(content)
 
 
 def load_career_profile(path: str | Path) -> CareerProfile:
-    """Read a career profile markdown file and extract basic contact info."""
-    content = Path(path).read_text(encoding="utf-8")
-
+    """Read a career profile markdown or Word file and extract basic contact info."""
+    content = _read_file_content(Path(path))
     return parse_career_profile_content(content)
 
 
@@ -49,9 +58,8 @@ def parse_career_profile_content(content: str) -> CareerProfile:
 
 
 def load_job_description(path: str | Path) -> JobDescription:
-    """Read a job description markdown/text file and extract title + company."""
-    content = Path(path).read_text(encoding="utf-8")
-
+    """Read a job description markdown/text/Word file and extract title + company."""
+    content = _read_file_content(Path(path))
     return parse_job_description_content(content)
 
 

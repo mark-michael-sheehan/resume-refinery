@@ -153,6 +153,45 @@ def test_parse_job_description_content():
     assert jd.company == "WidgetCo"
 
 
+# ---------------------------------------------------------------------------
+# .docx loading
+# ---------------------------------------------------------------------------
+
+
+def _make_docx(path: Path, paragraphs: list[str]) -> None:
+    """Create a minimal .docx file with the given paragraph texts."""
+    from docx import Document  # type: ignore[import-untyped]
+
+    doc = Document()
+    for text in paragraphs:
+        doc.add_paragraph(text)
+    doc.save(str(path))
+
+
+def test_load_voice_profile_docx(tmp_path):
+    f = tmp_path / "voice.docx"
+    _make_docx(f, ["Direct.", "Precise."])
+    vp = load_voice_profile(f)
+    assert "Direct." in vp.raw_content
+
+
+def test_load_career_profile_docx(tmp_path):
+    f = tmp_path / "career.docx"
+    _make_docx(f, ["# Jordan Lee", "jordan@example.com", "Austin, TX"])
+    cp = load_career_profile(f)
+    assert cp.email == "jordan@example.com"
+    assert "Jordan" in cp.raw_content
+
+
+def test_load_job_description_docx(tmp_path):
+    f = tmp_path / "job.docx"
+    _make_docx(f, ["Title: ML Engineer", "Company: BigCo", "We need a great engineer."])
+    jd = load_job_description(f)
+    assert jd.title == "ML Engineer"
+    assert jd.company == "BigCo"
+    assert "great engineer" in jd.raw_content
+
+
 def test_parse_job_description_content_no_fields():
     jd = parse_job_description_content("We need someone great with no structure.")
     assert jd.title is None
