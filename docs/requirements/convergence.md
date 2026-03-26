@@ -19,7 +19,7 @@ ensure convergence.
 |---|---|
 | CR-2.1 | All reviewers pin `temperature=0` to minimise non-determinism between passes. |
 | CR-2.2 | Reviewers use `think=False` and `format="json"` so that raw output is parseable without stripping thinking tags. |
-| CR-2.3 | The truthfulness reviewer is the strictest gate — it NEVER relaxes. Voice and AI detection may relax on later passes (see CR-3). |
+| CR-2.3 | The truthfulness reviewer is the strictest gate — it NEVER relaxes. It receives both the career profile and the job description as grounding sources. Voice and AI detection may relax on later passes (see CR-3). |
 
 ## CR-3 Acceptance Thresholds
 
@@ -53,3 +53,15 @@ ensure convergence.
 | CR-6.1 | The maximum number of review+repair passes is bounded by `RESUME_REFINERY_MAX_REPAIR_PASSES` (default 3). |
 | CR-6.2 | If all documents pass all reviewers on any pass, the loop exits early. |
 | CR-6.3 | If the loop exhausts all passes without convergence, the best version so far is kept and a warning is logged. |
+
+## CR-7 Per-Reviewer Suppression
+
+| ID | Requirement |
+|---|---|
+| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of three per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice). |
+| CR-7.2 | The orchestrator maintains three independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
+| CR-7.3 | Before each pass's gate check and repair call, raw reviewer results are filtered through the corresponding suppression set. Suppressed items are removed from flag/issue/claim lists; truthfulness `pass_strict` and `all_supported` are recalculated; AI `risk_level` is recalculated from the remaining flag count. Voice match levels are preserved as-is (they reflect holistic LLM judgment, not issue count). |
+| CR-7.4 | A phrase accepted in any pass is suppressed for all subsequent passes in the same run. Suppression sets do not persist beyond a single `create_session_run` or `refine_session_run` call. |
+| CR-7.5 | Each reviewer's suppression set is independent — accepting a voice false positive cannot suppress a truthfulness or AI-detection finding (and vice versa). |
+| CR-7.6 | Whenever the repair agent adds items to any acceptance list, the orchestrator emits an explicit progress message naming each accepted phrase/claim/issue and the reviewer it came from, before proceeding to the next pass. |
+| CR-7.7 | At the end of each `create_session_run` or `refine_session_run` call, if any items were exempted, the cumulative suppression sets are persisted to `exempted_phrases.json` in the active version directory as an `ExemptedPhrases` model (fields: `claims`, `ai_phrases`, `voice_issues`). No file is written when no items were exempted. |

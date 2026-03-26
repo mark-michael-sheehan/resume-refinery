@@ -22,8 +22,23 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
-store = SessionStore()
-orchestrator = ResumeRefineryOrchestrator(store=store)
+
+_store: SessionStore | None = None
+_orchestrator: ResumeRefineryOrchestrator | None = None
+
+
+def _get_store() -> SessionStore:
+    global _store
+    if _store is None:
+        _store = SessionStore()
+    return _store
+
+
+def _get_orchestrator() -> ResumeRefineryOrchestrator:
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = ResumeRefineryOrchestrator(store=_get_store())
+    return _orchestrator
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +63,7 @@ def new(
     voice = load_voice_profile(voice_profile)
     job = load_job_description(job_description)
 
-    result = orchestrator.create_session_run(
+    result = _get_orchestrator().create_session_run(
         career,
         voice,
         job,
@@ -91,15 +106,19 @@ def refine(
             console.print(f"[red]Unknown document: {doc}[/red]")
             raise typer.Exit(1)
     key = doc if doc else None
-    result = orchestrator.refine_session_run(
-        session_id,
-        feedback,
-        doc=key,  # type: ignore[arg-type]
-        skip_review=skip_review,
-        allow_unverified=allow_unverified,
-        progress=_progress,
-        stream_callback=_stream_chunk,
-    )
+    try:
+        result = _get_orchestrator().refine_session_run(
+            session_id,
+            feedback,
+            doc=key,  # type: ignore[arg-type]
+            skip_review=skip_review,
+            allow_unverified=allow_unverified,
+            progress=_progress,
+            stream_callback=_stream_chunk,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     _report_result(result, show_quality_reviews=not skip_review)
     if result.strict_truth_failed:
         console.print(
@@ -119,7 +138,11 @@ def review(
     version: Annotated[Optional[int], typer.Option("--version", "-v")] = None,
 ):
     """Re-run voice-match and AI-detection reviews on a session's documents."""
-    result = orchestrator.review_session_run(session_id, version=version, progress=_progress)
+    try:
+        result = _get_orchestrator().review_session_run(session_id, version=version, progress=_progress)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     _print_review_summary(result.reviews, show_quality_reviews=True)
 
 
@@ -131,7 +154,7 @@ def review(
 @app.command(name="list")
 def list_sessions():
     """List all sessions."""
-    sessions = store.list_sessions()
+    sessions = _get_store().list_sessions()
     if not sessions:
         console.print("[dim]No sessions found.[/dim]")
         return
@@ -166,7 +189,11 @@ def show(
     open_dir: bool = typer.Option(False, "--open", "-o", help="Open the session folder"),
 ):
     """Show session details and optionally open its folder."""
-    session = store.get(session_id)
+    try:
+        session = _get_store().get(session_id)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     v = version or session.current_version
 
     console.print(Panel(f"[bold]{session_id}[/bold]", title="Session"))
@@ -187,12 +214,12 @@ def show(
             console.print(f"       regenerated: {', '.join(vi.docs_regenerated)}")
 
     # Show review summary for chosen version
-    reviews = store.load_reviews(session, version=v)
+    reviews = _get_store().load_reviews(session, version=v)
     if reviews.voice or reviews.ai_detection or reviews.truthfulness:
         console.print()
         _print_review_summary(reviews)
 
-    session_dir = store.session_dir(session_id)
+    session_dir = _get_store().session_dir(session_id)
     console.print(f"\n[dim]Location:[/dim] {session_dir / f'v{v}'}")
 
     if open_dir:
@@ -214,10 +241,12 @@ def _stream_chunk(chunk: str) -> None:
 
 
 def _report_result(result, show_quality_reviews: bool) -> None:
-    console.print(f"\n[bold green]v{result.session.current_version} saved:[/bold green] {store.session_dir(result.session.session_id) / f'v{result.session.current_version}'}")
+    console.print(f"\n[bold green]v{result.session.current_version} saved:[/bold green] {_get_store().session_dir(result.session.session_id) / f'v{result.session.current_version}'}")
     for path in result.exported_paths.values():
         console.print(f"  {Path(path).name}")
     _print_review_summary(result.reviews, show_quality_reviews=show_quality_reviews)
+    if result.repair_passes:
+        _print_repair_summary(result.repair_passes)
 
 
 def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
@@ -227,40 +256,74 @@ def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
     if show_quality_reviews and reviews.voice:
         r = reviews.voice
         match_color = {"strong": "green", "moderate": "yellow", "weak": "red"}[r.overall_match]
-        console.print(
-            Panel(
-                f"Overall match: [{match_color}]{r.overall_match.upper()}[/{match_color}]\n\n"
-                + (f"Issues:\n" + "\n".join(f"  • {i}" for i in r.specific_issues) if r.specific_issues else "")
-                + ("\n\nSuggestions:\n" + "\n".join(f"  • {s}" for s in r.suggestions) if r.suggestions else ""),
-                title="[bold]Voice Match Review[/bold]",
-            )
-        )
+        lines = [f"Overall match: [{match_color}]{r.overall_match.upper()}[/{match_color}]"]
+        for label, match, issues in [
+            ("Cover Letter", r.cover_letter_match, r.cover_letter_issues),
+            ("Resume", r.resume_match, r.resume_issues),
+            ("Interview Guide", r.interview_guide_match, r.interview_guide_issues),
+        ]:
+            mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
+            lines.append(f"\n[bold]{label}[/bold]: [{mc}]{match}[/{mc}]")
+            if issues:
+                for issue in issues:
+                    lines.append(f"  • {issue}")
+        console.print(Panel("\n".join(lines), title="[bold]Voice Match Review[/bold]"))
 
     if show_quality_reviews and reviews.ai_detection:
         r = reviews.ai_detection
         risk_color = {"low": "green", "medium": "yellow", "high": "red"}[r.risk_level]
-        all_flags = r.cover_letter_flags + r.resume_flags + r.interview_guide_flags
-        console.print(
-            Panel(
-                f"AI-content risk: [{risk_color}]{r.risk_level.upper()}[/{risk_color}]\n\n"
-                + (f"Flagged phrases:\n" + "\n".join(f'  • "{f}"' for f in all_flags[:6]) if all_flags else "No flags.")
-                + ("\n\nSuggestions:\n" + "\n".join(f"  • {s}" for s in r.suggestions) if r.suggestions else ""),
-                title="[bold]AI-Detection Review[/bold]",
-            )
-        )
+        lines = [f"AI-content risk: [{risk_color}]{r.risk_level.upper()}[/{risk_color}]"]
+        for label, flags in [
+            ("Cover Letter", r.cover_letter_flags),
+            ("Resume", r.resume_flags),
+            ("Interview Guide", r.interview_guide_flags),
+        ]:
+            if flags:
+                lines.append(f"\n[bold]{label}[/bold]: {len(flags)} flag(s)")
+                for f in flags:
+                    lines.append(f'  • "{f}"')
+        if not any([r.cover_letter_flags, r.resume_flags, r.interview_guide_flags]):
+            lines.append("\nNo flags.")
+        console.print(Panel("\n".join(lines), title="[bold]AI-Detection Review[/bold]"))
 
 
 def _print_truth_summary(truth) -> None:
     color = "green" if truth.all_supported else "red"
-    lines = [
-        f"All claims supported: [{color}]{str(truth.all_supported).upper()}[/{color}]",
-        f"Cover Letter unsupported: {len(truth.cover_letter.unsupported_claims)}",
-        f"Resume unsupported: {len(truth.resume.unsupported_claims)}",
-        f"Interview Guide unsupported: {len(truth.interview_guide.unsupported_claims)}",
-    ]
-    if truth.suggestions:
-        lines.append("\nSuggestions:\n" + "\n".join(f"  • {s}" for s in truth.suggestions[:5]))
+    lines = [f"All claims supported: [{color}]{str(truth.all_supported).upper()}[/{color}]"]
+    for label, doc in [
+        ("Cover Letter", truth.cover_letter),
+        ("Resume", truth.resume),
+        ("Interview Guide", truth.interview_guide),
+    ]:
+        status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗[/red]"
+        lines.append(f"\n[bold]{label}[/bold]: {status}")
+        if doc.unsupported_claims:
+            for claim in doc.unsupported_claims:
+                lines.append(f"  • {claim}")
     console.print(Panel("\n".join(lines), title="[bold]Truthfulness Review[/bold]"))
+
+
+def _print_repair_summary(repair_passes) -> None:
+    doc_labels = {
+        "cover_letter": "Cover Letter",
+        "resume": "Resume",
+        "interview_guide": "Interview Guide",
+    }
+    for i, repair_pass in enumerate(repair_passes, 1):
+        if not repair_pass.edits:
+            continue
+        lines = []
+        for key, edits in repair_pass.edits.items():
+            label = doc_labels.get(key, key)
+            lines.append(f"[bold]{label}[/bold]: {len(edits)} edit(s)")
+            for edit in edits:
+                lines.append(f'  [red]− "{edit.find}"[/red]')
+                lines.append(f'  [green]+ "{edit.replace}"[/green]')
+                if edit.reason:
+                    lines.append(f"    ({edit.reason})")
+            lines.append("")
+        if lines:
+            console.print(Panel("\n".join(lines).rstrip(), title=f"[bold]Repair Pass {i}[/bold]"))
 
 
 def _open_folder(path: Path) -> None:

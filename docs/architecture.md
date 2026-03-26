@@ -60,16 +60,115 @@ Override with `RESUME_REFINERY_SESSIONS_DIR` env var.
     │   ├── voice_profile.md
     │   └── job_description.md
     ├── v1/
-    │   ├── cover_letter.md     ← Markdown source (intermediate)
-    │   ├── cover_letter.docx   ← Final Word document
+    │   ├── cover_letter.md         ← Markdown source (intermediate)
+    │   ├── cover_letter.docx       ← Final Word document
     │   ├── resume.md
     │   ├── resume.docx
     │   ├── interview_guide.md
     │   ├── interview_guide.docx
     │   ├── voice_review.json
-    │   └── ai_review.json
+    │   ├── ai_review.json
+    │   ├── exempted_phrases.json   ← Phrases/claims exempted during repair (only when any exemptions occurred)
+    │   └── repair_pass_0/         ← Snapshot after each repair pass (if repair ran)
+    │       └── ...
     └── v2/
         └── ...
+```
+
+## Review and Artifact JSON Schemas
+
+Each version directory can contain the following JSON files. All are emitted by the
+orchestrator and correspond to Pydantic models in `models.py`.
+
+### `truth_review.json` — `TruthfulnessResult`
+
+```json
+{
+  "all_supported": false,
+  "cover_letter": {
+    "pass_strict": true,
+    "unsupported_claims": [],
+    "evidence_examples": ["Reduced infra costs by $180K/year (career profile, Acme Corp)"]
+  },
+  "resume": {
+    "pass_strict": false,
+    "unsupported_claims": ["Led a team of 12 engineers"],
+    "evidence_examples": []
+  },
+  "interview_guide": {
+    "pass_strict": true,
+    "unsupported_claims": [],
+    "evidence_examples": []
+  }
+}
+```
+
+### `voice_review.json` — `VoiceReviewResult`
+
+```json
+{
+  "overall_match": "moderate",
+  "cover_letter_match": "strong",
+  "resume_match": "moderate",
+  "interview_guide_match": "moderate",
+  "cover_letter_assessment": "Matches the direct, analytical tone well.",
+  "resume_assessment": "Slightly more formal than the voice profile suggests.",
+  "interview_guide_assessment": "Good conversational tone.",
+  "specific_issues": ["Resume bullet 3 uses passive voice"],
+  "cover_letter_issues": [],
+  "resume_issues": ["Resume bullet 3 uses passive voice"],
+  "interview_guide_issues": []
+}
+```
+
+### `ai_review.json` — `AIDetectionResult`
+
+```json
+{
+  "risk_level": "medium",
+  "cover_letter_flags": ["results-driven", "passionate about"],
+  "resume_flags": [],
+  "interview_guide_flags": []
+}
+```
+
+### `exempted_phrases.json` — `ExemptedPhrases`
+
+Only written when the repair agent accepted at least one item as a false positive.
+
+```json
+{
+  "claims": ["Led cross-functional initiatives"],
+  "ai_phrases": ["results-driven"],
+  "voice_issues": []
+}
+```
+
+### `evidence_pack.json` — `EvidencePack`
+
+```json
+{
+  "job_requirements": [
+    {"requirement": "distributed systems", "category": "skill", "source_excerpt": "..."}
+  ],
+  "matched_evidence": [
+    {"requirement": "distributed systems", "evidence": "Built event-driven pipeline...", "source_excerpt": "...", "relevance_score": 4}
+  ],
+  "gaps": ["No Kubernetes experience mentioned"],
+  "source_summary": ["Reduced infra costs by $180K/year"]
+}
+```
+
+### `voice_guide.json` — `VoiceStyleGuide`
+
+```json
+{
+  "core_adjectives": ["direct", "analytical"],
+  "style_rules": ["Short declarative sentences", "Avoid adverbs"],
+  "preferred_phrases": ["I built", "We shipped"],
+  "phrases_to_avoid": ["passionate about", "results-driven"],
+  "writing_samples": ["Sample paragraph from voice profile..."]
+}
 ```
 
 ## Design Decisions
@@ -88,8 +187,10 @@ is especially valuable for the review passes, where the model needs to reason ca
 about voice match and AI-detection signals before producing a JSON result.
 
 **Verification gates:** Truthfulness, voice match, and AI-detection are treated as
-separate verification concerns. Truth checks run before final acceptance, and repair
-passes target only failing documents.
+separate verification concerns. The truthfulness reviewer receives the career profile
+and job description as grounding sources; voice and AI-detection reviewers operate
+only on the documents and voice profile. Truth checks run before final acceptance,
+and repair passes target only failing documents.
 
 **Raw content over structured parsing:** Input files are passed to Claude as raw text.
 This is intentional — flexible, user-friendly input formats are more important than

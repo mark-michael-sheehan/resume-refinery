@@ -27,27 +27,6 @@ class VoiceProfile(BaseModel):
     raw_content: str = Field(description="Full contents of the voice profile file")
 
 
-class WorkExperience(BaseModel):
-    title: str
-    company: str
-    dates: str = Field(description="e.g. 'Jan 2021 – Present'")
-    bullets: list[str] = Field(default_factory=list)
-
-
-class Education(BaseModel):
-    degree: str
-    institution: str
-    year: Optional[str] = None
-    details: list[str] = Field(default_factory=list)
-
-
-class Project(BaseModel):
-    name: str
-    description: str
-    outcome: Optional[str] = None
-    technologies: list[str] = Field(default_factory=list)
-
-
 class CareerProfile(BaseModel):
     """The user's professional history, loaded from a markdown file."""
 
@@ -146,14 +125,10 @@ class VoiceReviewResult(BaseModel):
     resume_assessment: str
     interview_guide_assessment: str
     specific_issues: StrList = Field(default_factory=list)
-    suggestions: StrList = Field(default_factory=list)
-    # Per-document issues and suggestions for targeted repair
+    # Per-document issues for targeted repair
     cover_letter_issues: StrList = Field(default_factory=list)
     resume_issues: StrList = Field(default_factory=list)
     interview_guide_issues: StrList = Field(default_factory=list)
-    cover_letter_suggestions: StrList = Field(default_factory=list)
-    resume_suggestions: StrList = Field(default_factory=list)
-    interview_guide_suggestions: StrList = Field(default_factory=list)
 
 
 class AIDetectionResult(BaseModel):
@@ -161,16 +136,12 @@ class AIDetectionResult(BaseModel):
     cover_letter_flags: StrList = Field(default_factory=list)
     resume_flags: StrList = Field(default_factory=list)
     interview_guide_flags: StrList = Field(default_factory=list)
-    suggestions: StrList = Field(default_factory=list)
-    cover_letter_suggestions: StrList = Field(default_factory=list)
-    resume_suggestions: StrList = Field(default_factory=list)
 
 
 class DocumentTruthResult(BaseModel):
     pass_strict: bool
     unsupported_claims: StrList = Field(default_factory=list)
     evidence_examples: StrList = Field(default_factory=list)
-    suggestions: StrList = Field(default_factory=list)
 
 
 class TruthfulnessResult(BaseModel):
@@ -178,7 +149,6 @@ class TruthfulnessResult(BaseModel):
     cover_letter: DocumentTruthResult
     resume: DocumentTruthResult
     interview_guide: DocumentTruthResult
-    suggestions: StrList = Field(default_factory=list)
 
 
 class ReviewBundle(BaseModel):
@@ -187,15 +157,43 @@ class ReviewBundle(BaseModel):
     truthfulness: Optional[TruthfulnessResult] = None
 
 
-class VerificationReport(BaseModel):
-    reviews: ReviewBundle
-    passed_strict_truth: bool = False
+class RepairEdit(BaseModel):
+    find: str
+    replace: str
+    reason: str = ""
+
+
+class RepairPassResult(BaseModel):
+    """Edits applied during a single repair pass, keyed by document."""
+    edits: dict[str, list[RepairEdit]] = Field(default_factory=dict)
+    # Per-reviewer false-positive acceptances — phrases the repairer determined
+    # are reviewer false positives and should be suppressed in future passes.
+    accepted_claims: StrList = Field(default_factory=list)
+    accepted_ai_phrases: StrList = Field(default_factory=list)
+    accepted_voice_issues: StrList = Field(default_factory=list)
+
+
+class ExemptedPhrases(BaseModel):
+    """Cumulative set of phrases/claims/issues accepted as false positives across all repair passes."""
+    claims: StrList = Field(
+        default_factory=list,
+        description="Truthfulness claims accepted as already supported by career evidence",
+    )
+    ai_phrases: StrList = Field(
+        default_factory=list,
+        description="AI-detection flags accepted as natural human-written language",
+    )
+    voice_issues: StrList = Field(
+        default_factory=list,
+        description="Voice-match issues accepted as reviewer false positives",
+    )
 
 
 class OrchestrationResult(BaseModel):
     session: Session
     documents: DocumentSet
     reviews: ReviewBundle = Field(default_factory=ReviewBundle)
+    repair_passes: list[RepairPassResult] = Field(default_factory=list)
     evidence_pack: Optional[EvidencePack] = None
     voice_style_guide: Optional[VoiceStyleGuide] = None
     exported_paths: dict[str, str] = Field(default_factory=dict)

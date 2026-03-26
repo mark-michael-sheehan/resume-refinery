@@ -73,7 +73,6 @@ def voice_review() -> VoiceReviewResult:
         resume_assessment="Quantified well; matches direct tone.",
         interview_guide_assessment="Slightly formal compared to profile.",
         specific_issues=["'results-driven' opener feels off-voice"],
-        suggestions=["Replace opener with a concrete hook from their experience"],
     )
 
 
@@ -84,7 +83,6 @@ def ai_detection() -> AIDetectionResult:
         cover_letter_flags=["'passionate about innovation'"],
         resume_flags=[],
         interview_guide_flags=["'demonstrated track record'"],
-        suggestions=["Replace hollow phrases with specific examples"],
     )
 
 

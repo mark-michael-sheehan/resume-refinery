@@ -80,3 +80,67 @@ def test_apply_edits_deletion():
     edits = [{"find": "this_phrase ", "replace": ""}]
     result = apply_edits(doc, edits, fail_threshold=0)
     assert result == "Remove from the text."
+
+
+def test_apply_edits_contained_overlap():
+    """When one edit's find range is inside another's, the contained edit is dropped."""
+    doc = "I am a quick brown fox jumping."
+    edits = [
+        {"find": "quick brown fox", "replace": "fast red dog"},
+        {"find": "brown", "replace": "crimson"},
+    ]
+    # "brown" at pos 13 is inside "quick brown fox" at pos 8 (end 23).
+    # The contained edit is dropped; only the broader edit applies.
+    result = apply_edits(doc, edits, fail_threshold=1)
+    assert result == "I am a fast red dog jumping."
+
+
+def test_apply_edits_partial_overlap():
+    """Partially overlapping edits: the later-starting one is dropped."""
+    doc = "AABBCCDD"
+    edits = [
+        {"find": "AABB", "replace": "XX"},
+        {"find": "BBCC", "replace": "YY"},
+    ]
+    # "AABB" at 0 (end 4), "BBCC" at 2 (end 6) — overlap at positions 2-3.
+    result = apply_edits(doc, edits, fail_threshold=1)
+    assert result == "XXCCDD"
+
+
+def test_apply_edits_duplicate_find_text():
+    """Two edits with the same find text: each applies to successive occurrences."""
+    doc = "hello world hello"
+    edits = [
+        {"find": "hello", "replace": "HI"},
+        {"find": "hello", "replace": "BYE"},
+    ]
+    # Both map to position 0 in the original.  Sequential re-find:
+    # edit 1 replaces the first "hello" → "HI world hello"
+    # edit 2 re-finds "hello" → matches the second occurrence.
+    result = apply_edits(doc, edits, fail_threshold=0)
+    assert result == "HI world BYE"
+
+
+def test_apply_edits_adjacent_non_overlapping():
+    """Adjacent edits (end-of-A == start-of-B) should both be applied."""
+    doc = "AAABBB"
+    edits = [
+        {"find": "AAA", "replace": "XX"},
+        {"find": "BBB", "replace": "YY"},
+    ]
+    result = apply_edits(doc, edits, fail_threshold=0)
+    assert result == "XXYY"
+
+
+def test_apply_edits_overlap_counted_as_failure():
+    """Dropped overlapping edits count toward the failure threshold."""
+    doc = "one two three"
+    edits = [
+        {"find": "one two", "replace": "X"},
+        {"find": "two", "replace": "Y"},  # overlapping, will be dropped
+        {"find": "MISSING", "replace": "Z"},  # not found
+    ]
+    # 2 failures (overlap + missing) with threshold 1 → should raise
+    with pytest.raises(EditApplicationError) as exc_info:
+        apply_edits(doc, edits, fail_threshold=1)
+    assert len(exc_info.value.failed) == 2

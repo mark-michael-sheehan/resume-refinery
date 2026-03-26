@@ -92,9 +92,7 @@ class ResumeRefineryAgent:
             ],
             stream=True,
             think=True,
-            # num_predict=-1: let context window be the limit so thinking
-            # tokens don't starve actual content output.
-            options={"num_ctx": NUM_CTX, "num_predict": -1},
+            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
         )
         # Stream chunks, suppressing <think>...</think> blocks from output.
         in_think = False
@@ -157,7 +155,7 @@ class ResumeRefineryAgent:
                 {"role": "user", "content": user_msg},
             ],
             think=True,
-            options={"num_ctx": NUM_CTX, "num_predict": -1},
+            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS},
         )
         # Strip thinking blocks from the response.
         raw = response.message.content

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Callable, Optional
@@ -14,8 +15,11 @@ from .models import (
     CareerProfile,
     DocumentKey,
     DocumentSet,
+    DocumentTruthResult,
     DraftingContext,
+    ExemptedPhrases,
     OrchestrationResult,
+    RepairPassResult,
     ReviewBundle,
     Session,
     TruthfulnessResult,
@@ -94,27 +98,37 @@ class ResumeRefineryOrchestrator:
             docs.set(key, text)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
-        reviews = self._verify_and_repair(
-            docs, career, voice, job, context, progress=progress,
-            on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
-        )
+        if skip_review:
+            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
+            try:
+                truth = self.verification_agent.review_truthfulness(docs, career, job)
+            except Exception as exc:
+                logging.warning("Truthfulness review failed (%s)", exc)
+                truth = None
+            reviews: ReviewBundle = ReviewBundle(truthfulness=truth)
+            repair_passes: list[RepairPassResult] = []
+            exempted = ExemptedPhrases()
+        else:
+            reviews, repair_passes, exempted = self._verify_and_repair(
+                docs, career, voice, job, context, progress=progress,
+                on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
+            )
         session = self.store.save_documents(session, docs)
         self.store.save_context(session, context)
         for pass_num, snap, pass_reviews in repair_snapshots:
             self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues:
+            self.store.save_suppressions(session, exempted)
         exported = self._export(session, docs)
 
-        if skip_review:
-            persisted = ReviewBundle(truthfulness=reviews.truthfulness)
-        else:
-            persisted = reviews
-        self.store.save_reviews(session, persisted)
+        self.store.save_reviews(session, reviews)
 
         strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
         return OrchestrationResult(
             session=session,
             documents=docs,
-            reviews=persisted,
+            reviews=reviews,
+            repair_passes=repair_passes,
             evidence_pack=context.evidence_pack,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
@@ -170,16 +184,27 @@ class ResumeRefineryOrchestrator:
                 current_docs.set(key, regenerated)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
-        reviews = self._verify_and_repair(
-            current_docs,
-            career,
-            voice,
-            job,
-            context,
-            feedback=feedback,
-            progress=progress,
-            on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
-        )
+        if skip_review:
+            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
+            try:
+                truth = self.verification_agent.review_truthfulness(current_docs, career, job)
+            except Exception as exc:
+                logging.warning("Truthfulness review failed (%s)", exc)
+                truth = None
+            reviews: ReviewBundle = ReviewBundle(truthfulness=truth)
+            repair_passes: list[RepairPassResult] = []
+            exempted = ExemptedPhrases()
+        else:
+            reviews, repair_passes, exempted = self._verify_and_repair(
+                current_docs,
+                career,
+                voice,
+                job,
+                context,
+                feedback=feedback,
+                progress=progress,
+                on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
+            )
         session = self.store.save_documents(
             session,
             current_docs,
@@ -189,19 +214,18 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         for pass_num, snap, pass_reviews in repair_snapshots:
             self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues:
+            self.store.save_suppressions(session, exempted)
         exported = self._export(session, current_docs)
 
-        if skip_review:
-            persisted = ReviewBundle(truthfulness=reviews.truthfulness)
-        else:
-            persisted = reviews
-        self.store.save_reviews(session, persisted)
+        self.store.save_reviews(session, reviews)
 
         strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
         return OrchestrationResult(
             session=session,
             documents=current_docs,
-            reviews=persisted,
+            reviews=reviews,
+            repair_passes=repair_passes,
             evidence_pack=context.evidence_pack,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
@@ -218,8 +242,9 @@ class ResumeRefineryOrchestrator:
         session = self.store.get(session_id)
         career, voice = self.store.load_inputs(session)
         docs = self.store.load_documents(session, version=version)
-        context = self._build_context(career, voice, session.job_description, progress)
-        reviews = self.verification_agent.review_all(docs, career, voice)
+        job = session.job_description
+        context = self._build_context(career, voice, job, progress)
+        reviews = self.verification_agent.review_all(docs, career, voice, job)
         self.store.save_reviews(session, reviews)
         return OrchestrationResult(
             session=session,
@@ -255,16 +280,21 @@ class ResumeRefineryOrchestrator:
         progress: ProgressCallback | None = None,
         max_passes: int = MAX_REPAIR_PASSES,
         on_repair_pass: Callable[[int, DocumentSet, ReviewBundle], None] | None = None,
-    ) -> ReviewBundle:
+    ) -> tuple[ReviewBundle, list[RepairPassResult], ExemptedPhrases]:
         import logging
 
-        previous_truth_suggestions: list[str] = []
-        previous_voice_suggestions: list[str] = []
-        previous_ai_suggestions: list[str] = []
+        repair_results: list[RepairPassResult] = []
 
         truth = None
         voice_result = None
         ai_result = None
+
+        # Per-reviewer suppression sets — accumulated across all repair passes.
+        # Each reviewer has its own independent set so a voice false positive
+        # cannot accidentally suppress a truthfulness finding (and vice versa).
+        suppressed_claims: set[str] = set()
+        suppressed_ai_phrases: set[str] = set()
+        suppressed_voice_issues: set[str] = set()
 
         for pass_num in range(max_passes):
             self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
@@ -272,7 +302,7 @@ class ResumeRefineryOrchestrator:
             # --- Run all three reviews ---
             self._progress(progress, "  Truthfulness review (3 LLM calls)...")
             try:
-                truth = self.verification_agent.review_truthfulness(docs, career)
+                truth = self.verification_agent.review_truthfulness(docs, career, job)
             except Exception as exc:
                 logging.warning("Truthfulness review failed (%s)", exc)
                 self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
@@ -294,13 +324,19 @@ class ResumeRefineryOrchestrator:
                 self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
                 ai_result = None
 
+            # Filter out items accepted as false positives in earlier passes.
+            truth, voice_result, ai_result = self._apply_suppressions(
+                truth, voice_result, ai_result,
+                suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
+            )
+
             # --- Summarise all three ---
             if truth:
-                self._progress(progress, self._summarise_truth(truth, previous_truth_suggestions))
+                self._progress(progress, self._summarise_truth(truth))
             if voice_result:
-                self._progress(progress, self._summarise_voice(voice_result, previous_voice_suggestions))
+                self._progress(progress, self._summarise_voice(voice_result))
             if ai_result:
-                self._progress(progress, self._summarise_ai(ai_result, previous_ai_suggestions))
+                self._progress(progress, self._summarise_ai(ai_result))
 
             # --- Check if all passing ---
             # Truthfulness is always strict (no relaxation).
@@ -328,16 +364,21 @@ class ResumeRefineryOrchestrator:
 
             # --- Unified repair ---
             self._progress(progress, "  Repairing documents (up to 3 LLM calls, thinking enabled)...")
-            self.repair_agent.repair_unified(
+            repair_pass = self.repair_agent.repair_unified(
                 docs, truth, voice_result, ai_result,
                 career, voice, job, context,
                 feedback=feedback,
-                previous_suggestions=(
-                    previous_truth_suggestions
-                    + previous_voice_suggestions
-                    + previous_ai_suggestions
-                ),
             )
+            repair_results.append(repair_pass)
+            # Accumulate per-reviewer acceptances into suppression sets.
+            suppressed_claims.update(repair_pass.accepted_claims)
+            suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
+            suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
+            if repair_pass.edits:
+                self._progress(progress, self._summarise_repair(repair_pass))
+            # Emit explicit output for every item accepted as a false positive.
+            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues:
+                self._progress(progress, self._summarise_acceptances(repair_pass))
 
             # Snapshot documents and reviews after this repair pass for auditing.
             if on_repair_pass is not None:
@@ -348,24 +389,14 @@ class ResumeRefineryOrchestrator:
                 )
                 on_repair_pass(pass_num, docs, pass_reviews)
 
-            # Collect suggestions — keep only the most recent pass to avoid
-            # an ever-growing pile of conflicting instructions.
-            previous_truth_suggestions.clear()
-            previous_voice_suggestions.clear()
-            previous_ai_suggestions.clear()
-            if truth:
-                for doc in (truth.cover_letter, truth.resume, truth.interview_guide):
-                    previous_truth_suggestions.extend(doc.suggestions)
-            if voice_result and voice_result.suggestions:
-                previous_voice_suggestions.extend(voice_result.suggestions)
-            if ai_result:
-                previous_ai_suggestions.extend(ai_result.cover_letter_suggestions)
-                previous_ai_suggestions.extend(ai_result.resume_suggestions)
-
         return ReviewBundle(
             truthfulness=truth,
             voice=voice_result,
             ai_detection=ai_result,
+        ), repair_results, ExemptedPhrases(
+            claims=sorted(suppressed_claims),
+            ai_phrases=sorted(suppressed_ai_phrases),
+            voice_issues=sorted(suppressed_voice_issues),
         )
 
     def _export(self, session: Session, docs: DocumentSet) -> dict[str, Path]:
@@ -377,10 +408,72 @@ class ResumeRefineryOrchestrator:
             callback(message)
 
     # ------------------------------------------------------------------
+    # Per-reviewer false-positive suppression
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_suppressions(
+        truth: TruthfulnessResult | None,
+        voice_result: VoiceReviewResult | None,
+        ai_result: AIDetectionResult | None,
+        suppressed_claims: set[str],
+        suppressed_ai_phrases: set[str],
+        suppressed_voice_issues: set[str],
+    ) -> tuple[TruthfulnessResult | None, VoiceReviewResult | None, AIDetectionResult | None]:
+        """Return copies of review results with suppressed items removed.
+
+        Each reviewer has its own independent suppression set so that accepting
+        a voice false positive cannot silence a truthfulness finding (and
+        vice versa).
+        """
+        # --- Truthfulness ---
+        filtered_truth = truth
+        if truth and suppressed_claims:
+            def _filter_doc(doc: DocumentTruthResult) -> DocumentTruthResult:
+                remaining = [c for c in doc.unsupported_claims if c not in suppressed_claims]
+                return doc.model_copy(update={"unsupported_claims": remaining, "pass_strict": not remaining})
+            cl = _filter_doc(truth.cover_letter)
+            res = _filter_doc(truth.resume)
+            ig = _filter_doc(truth.interview_guide)
+            filtered_truth = truth.model_copy(update={
+                "cover_letter": cl,
+                "resume": res,
+                "interview_guide": ig,
+                "all_supported": cl.pass_strict and res.pass_strict and ig.pass_strict,
+            })
+
+        # --- AI detection ---
+        filtered_ai = ai_result
+        if ai_result and suppressed_ai_phrases:
+            cl_flags = [f for f in ai_result.cover_letter_flags if f not in suppressed_ai_phrases]
+            res_flags = [f for f in ai_result.resume_flags if f not in suppressed_ai_phrases]
+            ig_flags = [f for f in ai_result.interview_guide_flags if f not in suppressed_ai_phrases]
+            total = len(cl_flags) + len(res_flags) + len(ig_flags)
+            risk = "low" if total <= 1 else "medium" if total <= 3 else "high"
+            filtered_ai = ai_result.model_copy(update={
+                "cover_letter_flags": cl_flags,
+                "resume_flags": res_flags,
+                "interview_guide_flags": ig_flags,
+                "risk_level": risk,
+            })
+
+        # --- Voice ---
+        filtered_voice = voice_result
+        if voice_result and suppressed_voice_issues:
+            filtered_voice = voice_result.model_copy(update={
+                "cover_letter_issues": [i for i in voice_result.cover_letter_issues if i not in suppressed_voice_issues],
+                "resume_issues": [i for i in voice_result.resume_issues if i not in suppressed_voice_issues],
+                "interview_guide_issues": [i for i in voice_result.interview_guide_issues if i not in suppressed_voice_issues],
+                "specific_issues": [i for i in voice_result.specific_issues if i not in suppressed_voice_issues],
+            })
+
+        return filtered_truth, filtered_voice, filtered_ai
+
+    # ------------------------------------------------------------------
     # Review-result summaries emitted via the progress callback
     # ------------------------------------------------------------------
 
-    def _summarise_truth(self, truth: TruthfulnessResult, previous_suggestions: list[str] | None = None) -> str:
+    def _summarise_truth(self, truth: TruthfulnessResult) -> str:
         if truth.all_supported:
             parts = ["[green]Truthfulness: ALL SUPPORTED[/green]"]
         else:
@@ -390,63 +483,68 @@ class ResumeRefineryOrchestrator:
                            ("Interview Guide", truth.interview_guide)]:
             status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗ ({len(doc.unsupported_claims)} unsupported)[/red]"
             parts.append(f"  {label}: {status}")
-            if doc.suggestions:
-                for s in doc.suggestions:
-                    parts.append(f"    • {s}")
-        if previous_suggestions:
-            parts.append("  Previously attempted:")
-            for s in previous_suggestions:
-                parts.append(f"    ◦ {s}")
+            if not doc.pass_strict:
+                for claim in doc.unsupported_claims:
+                    parts.append(f"    • {claim}")
         return "\n".join(parts)
 
-    def _summarise_voice(self, voice: VoiceReviewResult, previous_suggestions: list[str] | None = None) -> str:
+    def _summarise_voice(self, voice: VoiceReviewResult) -> str:
         color = {"strong": "green", "moderate": "yellow", "weak": "red"}[voice.overall_match]
         parts = [f"[{color}]Voice match: {voice.overall_match.upper()}[/{color}]"]
-        per_doc_suggestions: dict[str, list[str]] = {
-            "Cover Letter": voice.cover_letter_suggestions,
-            "Resume": voice.resume_suggestions,
-            "Interview Guide": voice.interview_guide_suggestions,
-        }
-        for label, match in [
-            ("Cover Letter", voice.cover_letter_match),
-            ("Resume", voice.resume_match),
-            ("Interview Guide", voice.interview_guide_match),
+        for label, match, issues in [
+            ("Cover Letter", voice.cover_letter_match, voice.cover_letter_issues),
+            ("Resume", voice.resume_match, voice.resume_issues),
+            ("Interview Guide", voice.interview_guide_match, voice.interview_guide_issues),
         ]:
             mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
             parts.append(f"  {label}: [{mc}]{match}[/{mc}]")
-            suggestions = per_doc_suggestions.get(label, [])
-            if suggestions:
-                for s in suggestions:
-                    parts.append(f"    • {s}")
-        if previous_suggestions:
-            parts.append("  Previously attempted:")
-            for s in previous_suggestions:
-                parts.append(f"    ◦ {s}")
+            if match != "strong" and issues:
+                for issue in issues:
+                    parts.append(f"    • {issue}")
         return "\n".join(parts)
 
-    def _summarise_ai(self, ai: AIDetectionResult, previous_suggestions: list[str] | None = None) -> str:
+    def _summarise_ai(self, ai: AIDetectionResult) -> str:
         color = {"low": "green", "medium": "yellow", "high": "red"}[ai.risk_level]
         parts = [f"[{color}]AI-detection risk: {ai.risk_level.upper()}[/{color}]"]
-        per_doc_suggestions: dict[str, list[str]] = {
-            "Cover Letter": ai.cover_letter_suggestions,
-            "Resume": ai.resume_suggestions,
-        }
-        per_doc_flags: dict[str, list[str]] = {
-            "Cover Letter": ai.cover_letter_flags,
-            "Resume": ai.resume_flags,
-        }
-        for label in ("Cover Letter", "Resume"):
-            flags = per_doc_flags.get(label, [])
-            suggestions = per_doc_suggestions.get(label, [])
-            if flags or suggestions:
-                flag_count = len(flags)
-                parts.append(f"  {label}: {flag_count} flag(s)")
-                for s in suggestions:
-                    parts.append(f"    • {s}")
-        if previous_suggestions:
-            parts.append("  Previously attempted:")
-            for s in previous_suggestions:
-                parts.append(f"    ◦ {s}")
+        for label, flags in [
+            ("Cover Letter", ai.cover_letter_flags),
+            ("Resume", ai.resume_flags),
+            ("Interview Guide", ai.interview_guide_flags),
+        ]:
+            if flags:
+                parts.append(f"  {label}: {len(flags)} flag(s)")
+                for flag in flags:
+                    parts.append(f'    • "{flag}"')
+        return "\n".join(parts)
+
+    def _summarise_repair(self, repair_pass: RepairPassResult) -> str:
+        doc_labels = self._doc_labels()
+        parts = ["[bold]Repair edits applied:[/bold]"]
+        for key, edits in repair_pass.edits.items():
+            label = doc_labels.get(key, key)
+            parts.append(f"  {label}: {len(edits)} edit(s)")
+            for edit in edits:
+                parts.append(f'    [red]- "{edit.find}"[/red]')
+                parts.append(f'    [green]+ "{edit.replace}"[/green]')
+                if edit.reason:
+                    parts.append(f"      ({edit.reason})")
+        return "\n".join(parts)
+
+    def _summarise_acceptances(self, repair_pass: RepairPassResult) -> str:
+        """Build a Rich-tagged summary of all phrases/claims accepted as false positives."""
+        parts = ["[bold cyan]Repair agent accepted the following as false positives (will be exempted from future passes):[/bold cyan]"]
+        if repair_pass.accepted_claims:
+            parts.append("  [cyan]Truthfulness claims (accepted as supported by career evidence):[/cyan]")
+            for claim in repair_pass.accepted_claims:
+                parts.append(f'    [cyan]✓ "{claim}"[/cyan]')
+        if repair_pass.accepted_ai_phrases:
+            parts.append("  [cyan]AI-detection flags (accepted as natural human language):[/cyan]")
+            for phrase in repair_pass.accepted_ai_phrases:
+                parts.append(f'    [cyan]✓ "{phrase}"[/cyan]')
+        if repair_pass.accepted_voice_issues:
+            parts.append("  [cyan]Voice-match issues (accepted as reviewer false positives):[/cyan]")
+            for issue in repair_pass.accepted_voice_issues:
+                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
         return "\n".join(parts)
 
     def _doc_labels(self) -> dict[DocumentKey, str]:

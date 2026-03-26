@@ -12,6 +12,7 @@ from resume_refinery.models import (
     DraftingContext,
     EvidencePack,
     JobRequirement,
+    RepairPassResult,
     ReviewBundle,
     TruthfulnessResult,
     VoiceReviewResult,
@@ -280,7 +281,7 @@ def test_drafting_agent_voice_context_includes_guide(career_profile, voice_profi
 
 
 class FakeReviewer:
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         doc = DocumentTruthResult(pass_strict=True)
         return TruthfulnessResult(
             all_supported=True,
@@ -299,9 +300,9 @@ class FakeReviewer:
         return AIDetectionResult(risk_level="low")
 
 
-def test_verification_agent_review_all(document_set, career_profile, voice_profile):
+def test_verification_agent_review_all(document_set, career_profile, voice_profile, job_description):
     agent = VerificationAgent(reviewer=FakeReviewer())
-    bundle = agent.review_all(document_set, career_profile, voice_profile)
+    bundle = agent.review_all(document_set, career_profile, voice_profile, job_description)
 
     assert bundle.truthfulness is not None
     assert bundle.voice is not None
@@ -309,9 +310,9 @@ def test_verification_agent_review_all(document_set, career_profile, voice_profi
     assert bundle.truthfulness.all_supported is True
 
 
-def test_verification_agent_review_truthfulness(document_set, career_profile):
+def test_verification_agent_review_truthfulness(document_set, career_profile, job_description):
     agent = VerificationAgent(reviewer=FakeReviewer())
-    result = agent.review_truthfulness(document_set, career_profile)
+    result = agent.review_truthfulness(document_set, career_profile, job_description)
     assert result.all_supported is True
 
 
@@ -422,29 +423,6 @@ def test_evidence_agent_falls_back_on_llm_failure(career_profile, job_descriptio
 
 
 # ---------------------------------------------------------------------------
-# RepairAgent dedup and previous_suggestions
-# ---------------------------------------------------------------------------
-
-
-def test_repair_agent_deduplicate():
-    """_deduplicate should remove suggestions already in previous list."""
-    agent = RepairAgent()
-    current = ["Fix claim A", "Rewrite intro", "Add metrics"]
-    previous = ["Fix claim A", "add metrics"]  # case-insensitive dedup
-
-    result = agent._deduplicate(current, previous)
-
-    assert result == ["Rewrite intro"]
-
-
-def test_repair_agent_deduplicate_no_previous():
-    """With no previous suggestions, all current should be returned."""
-    agent = RepairAgent()
-    assert agent._deduplicate(["A", "B"], None) == ["A", "B"]
-    assert agent._deduplicate(["A", "B"], []) == ["A", "B"]
-
-
-# ---------------------------------------------------------------------------
 # RepairAgent  (surgical find/replace edits)
 # ---------------------------------------------------------------------------
 
@@ -472,9 +450,10 @@ def test_repair_unified_applies_surgical_edits(career_profile, voice_profile, jo
     context = _make_context()
 
     # Mock _plan_edits to return a surgical edit
-    agent._plan_edits = MagicMock(return_value=[
-        {"find": "quantum AI expertise", "replace": "backend migration experience", "reason": "truthfulness"},
-    ])
+    agent._plan_edits = MagicMock(return_value=(
+        [{"find": "quantum AI expertise", "replace": "backend migration experience", "reason": "truthfulness"}],
+        {},
+    ))
 
     agent.repair_unified(
         docs, truth, None, None,
@@ -491,44 +470,50 @@ def test_repair_unified_applies_surgical_edits(career_profile, voice_profile, jo
     assert agent._plan_edits.call_count == 1
 
 
-def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_description):
-    """When all reviewers pass for a doc, it should not be repaired."""
+def test_repair_unified_returns_repair_pass_result(career_profile, voice_profile, job_description):
+    """repair_unified should return a RepairPassResult with the applied edits."""
     agent = RepairAgent()
-    agent._plan_edits = MagicMock(return_value=[])
 
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    docs = DocumentSet(
+        cover_letter="I am a passionate innovator.",
+        resume="old resume",
+        interview_guide="old ig",
+    )
+    doc_fail = DocumentTruthResult(
+        pass_strict=False,
+        unsupported_claims=["passionate innovator"],
+    )
     doc_pass = DocumentTruthResult(pass_strict=True)
     truth = TruthfulnessResult(
-        all_supported=True,
-        cover_letter=doc_pass, resume=doc_pass, interview_guide=doc_pass,
+        all_supported=False,
+        cover_letter=doc_fail,
+        resume=doc_pass,
+        interview_guide=doc_pass,
     )
-    voice_review = VoiceReviewResult(
-        overall_match="strong",
-        cover_letter_match="strong",
-        resume_match="strong",
-        interview_guide_match="strong",
-        cover_letter_assessment="Good",
-        resume_assessment="Good",
-        interview_guide_assessment="Good",
-    )
-    ai_review = AIDetectionResult(risk_level="low")
     context = _make_context()
 
-    agent.repair_unified(
-        docs, truth, voice_review, ai_review,
+    agent._plan_edits = MagicMock(return_value=(
+        [{"find": "passionate innovator", "replace": "experienced engineer", "reason": "truthfulness"}],
+        {},
+    ))
+
+    result = agent.repair_unified(
+        docs, truth, None, None,
         career_profile, voice_profile, job_description, context,
     )
 
-    assert agent._plan_edits.call_count == 0
-    assert docs.cover_letter == "cl"
-    assert docs.resume == "r"
-    assert docs.interview_guide == "ig"
+    assert isinstance(result, RepairPassResult)
+    assert "cover_letter" in result.edits
+    assert len(result.edits["cover_letter"]) == 1
+    assert result.edits["cover_letter"][0].find == "passionate innovator"
+    assert result.edits["cover_letter"][0].replace == "experienced engineer"
+    assert result.edits["cover_letter"][0].reason == "truthfulness"
 
 
-def test_repair_unified_handles_none_reviews(career_profile, voice_profile, job_description):
-    """repair_unified should handle None review results gracefully."""
+def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_description):
+    """When all reviewers pass for a doc, it should not be repaired."""
     agent = RepairAgent()
-    agent._plan_edits = MagicMock(return_value=[])
+    agent._plan_edits = MagicMock(return_value=([], {}))
 
     docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
     context = _make_context()
@@ -579,9 +564,10 @@ def test_repair_unified_combines_all_findings(career_profile, voice_profile, job
     context = _make_context()
 
     # Capture the user_msg sent to _plan_edits
-    agent._plan_edits = MagicMock(return_value=[
-        {"find": "passionate innovator with quantum AI", "replace": "software engineer with backend experience", "reason": "combined"},
-    ])
+    agent._plan_edits = MagicMock(return_value=(
+        [{"find": "passionate innovator with quantum AI", "replace": "software engineer with backend experience", "reason": "combined"}],
+        {},
+    ))
 
     agent.repair_unified(
         docs, truth, voice_review, ai_review,
@@ -598,85 +584,98 @@ def test_repair_unified_combines_all_findings(career_profile, voice_profile, job
     assert "passionate innovator" in user_msg  # AI detection finding
 
 
-def test_repair_unified_includes_previous_suggestions(career_profile, voice_profile, job_description):
-    """Previously attempted suggestions should appear in review findings."""
+def test_repair_unified_populates_accepted_phrases(career_profile, voice_profile, job_description):
+    """repair_unified should populate RepairPassResult accepted_* fields from _plan_edits."""
     agent = RepairAgent()
 
-    docs = DocumentSet(cover_letter="cl with claim X", resume="r", interview_guide="ig")
-    doc_fail = DocumentTruthResult(
-        pass_strict=False,
-        unsupported_claims=["claim X"],
-        suggestions=["Fix claim X", "Fix claim Y"],
+    docs = DocumentSet(
+        cover_letter="I am a Senior Software Engineer with Python experience.",
+        resume="r",
+        interview_guide="ig",
     )
-    truth = TruthfulnessResult(
-        all_supported=False,
-        cover_letter=doc_fail,
-        resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
+    ai_review = AIDetectionResult(
+        risk_level="medium",
+        cover_letter_flags=["I am a Senior Software Engineer"],
+        resume_flags=[],
+        interview_guide_flags=[],
     )
     context = _make_context()
 
-    agent._plan_edits = MagicMock(return_value=[
-        {"find": "claim X", "replace": "verified fact", "reason": "truthfulness"},
-    ])
+    # Repairer decides the AI flag is a false positive and accepts it
+    agent._plan_edits = MagicMock(return_value=(
+        [],
+        {"accepted_claims": [], "accepted_ai_phrases": ["I am a Senior Software Engineer"], "accepted_voice_issues": []},
+    ))
 
-    agent.repair_unified(
-        docs, truth, None, None,
+    result = agent.repair_unified(
+        docs, None, None, ai_review,
         career_profile, voice_profile, job_description, context,
-        previous_suggestions=["Fix claim X"],
     )
 
-    call_args = agent._plan_edits.call_args
-    user_msg = call_args[0][1]
-    assert "previously attempted" in user_msg.lower()
-    # "Fix claim Y" is new and should be in the findings
-    assert "Fix claim Y" in user_msg
+    assert isinstance(result, RepairPassResult)
+    assert result.accepted_ai_phrases == ["I am a Senior Software Engineer"]
+    assert result.accepted_claims == []
+    assert result.accepted_voice_issues == []
+    # No edits applied — doc unchanged
+    assert "I am a Senior Software Engineer" in docs.cover_letter
 
 
-def test_repair_plan_edits_parses_json_array():
-    """_plan_edits should parse a JSON array response from the LLM."""
-    agent = RepairAgent()
-    mock_response = MagicMock()
-    mock_response.message.content = json.dumps([
-        {"find": "old text", "replace": "new text", "reason": "fix"},
-    ])
-    agent.client = MagicMock()
-    agent.client.chat.return_value = mock_response
-
-    edits = agent._plan_edits("system", "user")
-
-    assert len(edits) == 1
-    assert edits[0]["find"] == "old text"
-    assert edits[0]["replace"] == "new text"
-
-
-def test_repair_plan_edits_handles_wrapped_object():
-    """_plan_edits should handle LLM response wrapped in {edits: [...]}."""
+def test_repair_plan_edits_parses_json_object():
+    """_plan_edits should parse the new JSON object schema and return (edits, acceptances)."""
     agent = RepairAgent()
     mock_response = MagicMock()
     mock_response.message.content = json.dumps({
-        "edits": [{"find": "a", "replace": "b", "reason": "fix"}]
+        "edits": [{"find": "old text", "replace": "new text", "reason": "fix"}],
+        "accepted_claims": [],
+        "accepted_ai_phrases": [],
+        "accepted_voice_issues": [],
     })
     agent.client = MagicMock()
     agent.client.chat.return_value = mock_response
 
-    edits = agent._plan_edits("system", "user")
+    edits, acceptances = agent._plan_edits("system", "user")
+
+    assert len(edits) == 1
+    assert edits[0]["find"] == "old text"
+    assert edits[0]["replace"] == "new text"
+    assert acceptances["accepted_claims"] == []
+    assert acceptances["accepted_ai_phrases"] == []
+    assert acceptances["accepted_voice_issues"] == []
+
+
+def test_repair_plan_edits_returns_acceptances():
+    """_plan_edits should return populated acceptance arrays from the LLM response."""
+    agent = RepairAgent()
+    mock_response = MagicMock()
+    mock_response.message.content = json.dumps({
+        "edits": [{"find": "a", "replace": "b", "reason": "fix"}],
+        "accepted_claims": ["unsupported claim"],
+        "accepted_ai_phrases": [],
+        "accepted_voice_issues": ["off voice phrase"],
+    })
+    agent.client = MagicMock()
+    agent.client.chat.return_value = mock_response
+
+    edits, acceptances = agent._plan_edits("system", "user")
 
     assert len(edits) == 1
     assert edits[0]["find"] == "a"
+    assert acceptances["accepted_claims"] == ["unsupported claim"]
+    assert acceptances["accepted_voice_issues"] == ["off voice phrase"]
 
 
 def test_repair_plan_edits_handles_empty_response():
-    """_plan_edits should return empty list on empty LLM response."""
+    """_plan_edits should return ([], empty acceptances) on empty LLM response."""
     agent = RepairAgent()
     mock_response = MagicMock()
     mock_response.message.content = ""
     agent.client = MagicMock()
     agent.client.chat.return_value = mock_response
 
-    edits = agent._plan_edits("system", "user")
+    edits, acceptances = agent._plan_edits("system", "user")
 
     assert edits == []
+    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": []}
 
 
 def test_repair_build_review_findings_truthfulness():
@@ -686,7 +685,6 @@ def test_repair_build_review_findings_truthfulness():
         pass_strict=False,
         unsupported_claims=["quantum AI expertise"],
         evidence_examples=["Led backend migration"],
-        suggestions=["Remove quantum claim"],
     )
     truth = TruthfulnessResult(
         all_supported=False,
@@ -695,11 +693,10 @@ def test_repair_build_review_findings_truthfulness():
         interview_guide=DocumentTruthResult(pass_strict=True),
     )
 
-    findings = agent._build_review_findings("cover_letter", truth, None, None, None, None)
+    findings = agent._build_review_findings("cover_letter", truth, None, None, None)
 
     assert "quantum AI expertise" in findings
     assert "Led backend migration" in findings
-    assert "Remove quantum claim" in findings
     assert "TRUTHFULNESS" in findings
 
 
@@ -722,6 +719,6 @@ def test_repair_build_review_findings_empty_when_passing():
     )
     ai_review = AIDetectionResult(risk_level="low")
 
-    findings = agent._build_review_findings("cover_letter", truth, voice_review, ai_review, None, None)
+    findings = agent._build_review_findings("cover_letter", truth, voice_review, ai_review, None)
 
     assert findings == ""

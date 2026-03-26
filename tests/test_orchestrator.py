@@ -10,6 +10,7 @@ from resume_refinery.models import (
     DocumentTruthResult,
     EvidencePack,
     JobRequirement,
+    RepairPassResult,
     ReviewBundle,
     TruthfulnessResult,
     VoiceReviewResult,
@@ -51,7 +52,7 @@ class FakeVerificationAgent:
         self.voice_calls = 0
         self.ai_calls = 0
 
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         self.truth_calls += 1
         passed = self.truth_calls > 1
         truth_doc = DocumentTruthResult(pass_strict=passed, unsupported_claims=[] if passed else ["unsupported claim"], evidence_examples=[])
@@ -60,7 +61,6 @@ class FakeVerificationAgent:
             cover_letter=truth_doc,
             resume=truth_doc,
             interview_guide=truth_doc,
-            suggestions=[],
         )
 
     def review_voice(self, docs, voice):
@@ -72,7 +72,6 @@ class FakeVerificationAgent:
             resume_assessment="Consistent.",
             interview_guide_assessment="Slightly formal.",
             specific_issues=[] if match == "strong" else ["opener feels generic"],
-            suggestions=[] if match == "strong" else ["Use a concrete hook"],
         )
 
     def review_ai_detection(self, docs):
@@ -83,10 +82,9 @@ class FakeVerificationAgent:
             cover_letter_flags=[] if risk == "low" else ["results-driven"],
             resume_flags=[],
             interview_guide_flags=[],
-            suggestions=[] if risk == "low" else ["Remove generic superlatives"],
         )
 
-    def review_all(self, docs, career, voice):
+    def review_all(self, docs, career, voice, job):
         truth_doc = DocumentTruthResult(pass_strict=True, unsupported_claims=[], evidence_examples=[])
         return ReviewBundle(
             truthfulness=TruthfulnessResult(
@@ -94,7 +92,6 @@ class FakeVerificationAgent:
                 cover_letter=truth_doc,
                 resume=truth_doc,
                 interview_guide=truth_doc,
-                suggestions=[],
             ),
             voice=VoiceReviewResult(
                 overall_match="strong",
@@ -102,14 +99,12 @@ class FakeVerificationAgent:
                 resume_assessment="Good",
                 interview_guide_assessment="Good",
                 specific_issues=[],
-                suggestions=[],
             ),
             ai_detection=AIDetectionResult(
                 risk_level="low",
                 cover_letter_flags=[],
                 resume_flags=[],
                 interview_guide_flags=[],
-                suggestions=[],
             ),
         )
 
@@ -118,12 +113,12 @@ class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, previous_suggestions=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None):
         self.unified_calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
         docs.interview_guide = "interview_guide repaired"
-        return docs
+        return RepairPassResult()
 
 
 def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -211,7 +206,7 @@ def test_orchestrator_refine_session_run_updates_selected_doc(tmp_path, monkeypa
 class AlwaysPassVerificationAgent:
     """Reviews always pass on the very first call."""
 
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         passed_doc = DocumentTruthResult(pass_strict=True, unsupported_claims=[], evidence_examples=[])
         return TruthfulnessResult(
             all_supported=True,
@@ -231,9 +226,9 @@ class AlwaysPassVerificationAgent:
     def review_ai_detection(self, docs):
         return AIDetectionResult(risk_level="low")
 
-    def review_all(self, docs, career, voice):
+    def review_all(self, docs, career, voice, job):
         return ReviewBundle(
-            truthfulness=self.review_truthfulness(docs, career),
+            truthfulness=self.review_truthfulness(docs, career, job),
             voice=self.review_voice(docs, voice),
             ai_detection=self.review_ai_detection(docs),
         )
@@ -265,7 +260,7 @@ def test_no_repair_when_all_reviews_pass(tmp_path, monkeypatch, career_profile, 
 
 
 class TruthRaisesVerificationAgent(AlwaysPassVerificationAgent):
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         raise RuntimeError("LLM timeout")
 
 
@@ -319,6 +314,59 @@ def test_ai_review_exception_skips_loop(tmp_path, monkeypatch, career_profile, v
 
 
 # ---------------------------------------------------------------------------
+# Per-reviewer suppression
+# ---------------------------------------------------------------------------
+
+
+class AlwaysFlagsAIPhraseVerification(AlwaysPassVerificationAgent):
+    """Truth and voice always pass; AI detection always flags the same phrase."""
+
+    def review_ai_detection(self, docs):
+        return AIDetectionResult(
+            risk_level="medium",
+            cover_letter_flags=["accepted-phrase"],
+            resume_flags=[],
+            interview_guide_flags=[],
+        )
+
+
+class AcceptsAIPhraseRepairAgent:
+    """On first repair, accepts the flagged AI phrase instead of trying to fix it."""
+
+    def __init__(self):
+        self.unified_calls = 0
+
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None):
+        self.unified_calls += 1
+        return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
+
+
+def test_suppression_prevents_reflagged_phrase_from_blocking_convergence(
+    tmp_path, monkeypatch, career_profile, voice_profile, job_description
+):
+    """A phrase accepted by the repairer should be suppressed in subsequent passes."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    repair = AcceptsAIPhraseRepairAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysFlagsAIPhraseVerification(),
+        repair_agent=repair,
+    )
+
+    result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
+
+    # Pass 1: AI flag found → repair called → phrase accepted.
+    # Pass 2: same AI flag found but suppressed → gate passes → loop exits early.
+    assert repair.unified_calls == 1
+    # The final review reflects the suppressed (filtered) state
+    assert result.reviews.ai_detection is not None
+    assert result.reviews.ai_detection.cover_letter_flags == []
+
+
+# ---------------------------------------------------------------------------
 # Per-loop max_passes: 0 skips, 1 = review-only, independent control
 # ---------------------------------------------------------------------------
 
@@ -331,7 +379,7 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
         self.voice_calls = 0
         self.ai_calls = 0
 
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         self.truth_calls += 1
         doc = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
         return TruthfulnessResult(
@@ -372,7 +420,7 @@ def test_max_passes_zero_skips_all_reviews(tmp_path, monkeypatch, career_profile
         repair_agent=repair,
     )
 
-    result = orchestrator._verify_and_repair(
+    result, _, _exempted = orchestrator._verify_and_repair(
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
@@ -402,7 +450,7 @@ def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_p
         repair_agent=repair,
     )
 
-    result = orchestrator._verify_and_repair(
+    result, _, _exempted = orchestrator._verify_and_repair(
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
@@ -435,7 +483,7 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
         repair_agent=repair,
     )
 
-    result = orchestrator._verify_and_repair(
+    result, _, _exempted = orchestrator._verify_and_repair(
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
@@ -460,7 +508,7 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
 class TruthFailsVerificationAgent(AlwaysPassVerificationAgent):
     """Truth always fails; voice + AI always pass."""
 
-    def review_truthfulness(self, docs, career):
+    def review_truthfulness(self, docs, career, job):
         doc = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
         return TruthfulnessResult(
             all_supported=False,
@@ -649,7 +697,7 @@ def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, car
         repair_agent=repair,
     )
 
-    result = orchestrator._verify_and_repair(
+    result, _, _exempted = orchestrator._verify_and_repair(
         DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),

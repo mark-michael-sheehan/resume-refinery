@@ -22,6 +22,8 @@ from .models import (
     EvidencePack,
     JobDescription,
     JobRequirement,
+    RepairEdit,
+    RepairPassResult,
     ReviewBundle,
     TruthfulnessResult,
     VoiceProfile,
@@ -437,15 +439,15 @@ class VerificationAgent:
     def __init__(self, reviewer: DocumentReviewer | None = None) -> None:
         self.reviewer = reviewer or DocumentReviewer()
 
-    def review_all(self, docs: DocumentSet, career: CareerProfile, voice: VoiceProfile) -> ReviewBundle:
+    def review_all(self, docs: DocumentSet, career: CareerProfile, voice: VoiceProfile, job: JobDescription) -> ReviewBundle:
         return ReviewBundle(
-            truthfulness=self.reviewer.review_truthfulness(docs, career),
+            truthfulness=self.reviewer.review_truthfulness(docs, career, job),
             voice=self.reviewer.review_voice(docs, voice),
             ai_detection=self.reviewer.review_ai_detection(docs),
         )
 
-    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile) -> TruthfulnessResult:
-        return self.reviewer.review_truthfulness(docs, career)
+    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile, job: JobDescription) -> TruthfulnessResult:
+        return self.reviewer.review_truthfulness(docs, career, job)
 
     def review_voice(self, docs: DocumentSet, voice: VoiceProfile) -> VoiceReviewResult:
         return self.reviewer.review_voice(docs, voice)
@@ -458,8 +460,7 @@ class RepairAgent:
     """Produces surgical find/replace edits and applies them programmatically."""
 
     def __init__(self, drafting_agent: DraftingAgent | None = None) -> None:
-        # drafting_agent kept for backward compat but no longer used for repair.
-        self.drafting_agent = drafting_agent or DraftingAgent()
+        # drafting_agent param retained for call-site compatibility; not used internally.
         self.client = ollama.Client(host=_BASE_URL)
 
     # ------------------------------------------------------------------
@@ -477,15 +478,19 @@ class RepairAgent:
         job: JobDescription,
         context: DraftingContext,
         feedback: str | None = None,
-        previous_suggestions: list[str] | None = None,
-    ) -> DocumentSet:
+    ) -> RepairPassResult:
         """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
         from .utils import apply_edits
 
+        all_edits: dict[str, list[RepairEdit]] = {}
+        all_accepted_claims: list[str] = []
+        all_accepted_ai_phrases: list[str] = []
+        all_accepted_voice_issues: list[str] = []
+
         for key in ("cover_letter", "resume", "interview_guide"):
             review_findings = self._build_review_findings(
-                key, truth, voice_review, ai_review, feedback, previous_suggestions,
+                key, truth, voice_review, ai_review, feedback,
             )
             if not review_findings:
                 continue
@@ -501,18 +506,55 @@ class RepairAgent:
                 review_findings=review_findings,
             )
 
-            edits = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
+            edits, acceptances = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
+            all_accepted_claims.extend(acceptances.get("accepted_claims", []))
+            all_accepted_ai_phrases.extend(acceptances.get("accepted_ai_phrases", []))
+            all_accepted_voice_issues.extend(acceptances.get("accepted_voice_issues", []))
+            logging.debug(
+                "[repair:%s] LLM returned %d edit(s), %d/%d/%d accepted (claims/ai/voice)",
+                key, len(edits),
+                len(acceptances.get("accepted_claims", [])),
+                len(acceptances.get("accepted_ai_phrases", [])),
+                len(acceptances.get("accepted_voice_issues", [])),
+            )
             if edits:
+                for i, e in enumerate(edits):
+                    logging.debug(
+                        "[repair:%s] edit %d/%d — find=%r  replace=%r  reason=%r",
+                        key, i + 1, len(edits),
+                        e.get("find", "")[:120],
+                        e.get("replace", "")[:120],
+                        e.get("reason", "")[:120],
+                    )
                 repaired = apply_edits(doc_content, edits)
                 docs.set(key, repaired)
-        return docs
+                all_edits[key] = [
+                    RepairEdit(
+                        find=e.get("find", ""),
+                        replace=e.get("replace", ""),
+                        reason=e.get("reason", ""),
+                    )
+                    for e in edits
+                ]
+        return RepairPassResult(
+            edits=all_edits,
+            accepted_claims=all_accepted_claims,
+            accepted_ai_phrases=all_accepted_ai_phrases,
+            accepted_voice_issues=all_accepted_voice_issues,
+        )
 
     # ------------------------------------------------------------------
     # LLM call for edit planning
     # ------------------------------------------------------------------
 
-    def _plan_edits(self, system: str, user_msg: str) -> list[dict]:
-        """Call the LLM and return a list of {find, replace, reason} dicts."""
+    def _plan_edits(self, system: str, user_msg: str) -> tuple[list[dict], dict[str, list[str]]]:
+        """Call the LLM and return (edits, acceptances).
+
+        edits: list of {find, replace, reason} dicts.
+        acceptances: dict with keys accepted_claims, accepted_ai_phrases,
+            accepted_voice_issues — verbatim phrases the repairer determined
+            are reviewer false positives that should be suppressed going forward.
+        """
         from .reviewers import _normalize_llm_json
 
         response = self.client.chat(
@@ -522,28 +564,83 @@ class RepairAgent:
                 {"role": "user", "content": user_msg},
             ],
             think=True,
-            format="json",
-            options={"num_ctx": _NUM_CTX, "num_predict": -1},
+            format={
+                "type": "object",
+                "properties": {
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "find":    {"type": "string"},
+                                "replace": {"type": "string"},
+                                "reason":  {"type": "string"},
+                            },
+                            "required": ["find", "replace"],
+                        },
+                    },
+                    "accepted_claims":       {"type": "array", "items": {"type": "string"}},
+                    "accepted_ai_phrases":   {"type": "array", "items": {"type": "string"}},
+                    "accepted_voice_issues": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues"],
+            },
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS * 2},
         )
         raw = (response.message.content or "").strip()
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
         if not raw:
             logging.warning("Repair LLM returned empty content")
-            return []
+            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": []}
         raw = _normalize_llm_json(raw)
-        data = json.loads(raw)
+        _empty: dict[str, list[str]] = {
+            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": []
+        }
 
-        # The LLM may return a bare array or {"edits": [...]}
-        if isinstance(data, list):
-            return data
+        def _extract_acceptances(d: dict) -> dict[str, list[str]]:
+            return {
+                k: [x for x in d.get(k, []) if isinstance(x, str)]
+                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues")
+            }
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logging.warning("Repair LLM returned non-JSON after normalization; skipping repair pass")
+            return [], dict(_empty)
+
         if isinstance(data, dict):
-            for k in ("edits", "changes", "replacements"):
+            edits = data.get("edits")
+            if isinstance(edits, list):
+                edits = self._filter_valid_edits(edits)
+                return edits, _extract_acceptances(data)
+            # Fallback: older bare-list keys the model may emit
+            for k in ("changes", "replacements"):
                 if isinstance(data.get(k), list):
-                    return data[k]
-            # Single edit wrapped in an object
+                    logging.warning("Repair LLM returned object with '%s' key instead of 'edits'", k)
+                    return self._filter_valid_edits(data[k]), _extract_acceptances(data)
             if "find" in data:
-                return [data]
-        return []
+                logging.warning("Repair LLM returned a single edit object instead of object with 'edits'")
+                return self._filter_valid_edits([data]), dict(_empty)
+        if isinstance(data, list):
+            # Backward compat: bare array (pre-schema)
+            logging.warning("Repair LLM returned a bare array instead of an object with 'edits'")
+            return self._filter_valid_edits(data), dict(_empty)
+        return [], dict(_empty)
+
+    @staticmethod
+    def _filter_valid_edits(edits: list[dict]) -> list[dict]:
+        """Drop malformed edit entries (missing or empty 'find')."""
+        valid = []
+        for e in edits:
+            if not isinstance(e, dict):
+                continue
+            find = e.get("find", "")
+            if not isinstance(find, str) or not find.strip():
+                logging.debug("Dropping malformed edit (empty/missing find): %s", e)
+                continue
+            valid.append(e)
+        return valid
 
     # ------------------------------------------------------------------
     # Build review findings text from reviewer results
@@ -556,7 +653,6 @@ class RepairAgent:
         voice_review: VoiceReviewResult | None,
         ai_review: AIDetectionResult | None,
         feedback: str | None,
-        previous_suggestions: list[str] | None,
     ) -> str:
         """Return a human-readable summary of review findings for *key*.
 
@@ -579,9 +675,14 @@ class RepairAgent:
             if not doc_truth.pass_strict:
                 has_issues = True
                 if doc_truth.unsupported_claims:
+                    n = len(doc_truth.unsupported_claims)
+                    logging.debug(
+                        "[repair:%s] truthfulness: %d unsupported claim(s) — passing ALL to repair",
+                        key, n,
+                    )
                     parts.append(
                         "TRUTHFULNESS — Unsupported claims (verbatim from document):\n"
-                        + "\n".join(f"- {c}" for c in doc_truth.unsupported_claims[:8])
+                        + "\n".join(f"- {c}" for c in doc_truth.unsupported_claims)
                     )
                 else:
                     parts.append(
@@ -591,15 +692,8 @@ class RepairAgent:
                 if doc_truth.evidence_examples:
                     parts.append(
                         "Supporting evidence from Career Profile:\n"
-                        + "\n".join(f"- {e}" for e in doc_truth.evidence_examples[:8])
+                        + "\n".join(f"- {e}" for e in doc_truth.evidence_examples)
                     )
-                if doc_truth.suggestions:
-                    new = self._deduplicate(doc_truth.suggestions, previous_suggestions)
-                    if new:
-                        parts.append(
-                            "Truthfulness suggestions:\n"
-                            + "\n".join(f"- {s}" for s in new[:8])
-                        )
 
         # --- Voice (skip for interview guide — personal prep) ---
         if voice_review and key != "interview_guide":
@@ -617,9 +711,13 @@ class RepairAgent:
                 }
                 issues = doc_issues_map[key] or voice_review.specific_issues
                 if issues:
+                    logging.debug(
+                        "[repair:%s] voice: %d off-voice issue(s) — passing ALL to repair",
+                        key, len(issues),
+                    )
                     parts.append(
                         "VOICE — Off-voice phrases (verbatim from document):\n"
-                        + "\n".join(f"- {i}" for i in issues[:8])
+                        + "\n".join(f"- {i}" for i in issues)
                     )
 
         # --- AI detection (skip for interview guide — personal prep) ---
@@ -632,26 +730,22 @@ class RepairAgent:
             flags = flag_map[key]
             if flags:
                 has_issues = True
+                logging.debug(
+                    "[repair:%s] ai-detection: %d flagged phrase(s) — passing ALL to repair",
+                    key, len(flags),
+                )
                 parts.append(
                     "AI DETECTION — Flagged phrases (verbatim from document):\n"
-                    + "\n".join(f'- "{f}"' for f in flags[:8])
+                    + "\n".join(f'- "{f}"' for f in flags)
                 )
 
         if not has_issues:
+            logging.debug("[repair:%s] no issues found — skipping repair for this document", key)
             return ""
 
-        if previous_suggestions:
-            parts.append(
-                "Previously attempted fixes (try a different approach):\n"
-                + "\n".join(f"- {s}" for s in previous_suggestions[:12])
-            )
-
-        return "\n\n".join(parts)
-
-    @staticmethod
-    def _deduplicate(current: list[str], previous: list[str] | None) -> list[str]:
-        """Return suggestions from *current* not already in *previous*."""
-        if not previous:
-            return current
-        seen = {s.strip().lower() for s in previous}
-        return [s for s in current if s.strip().lower() not in seen]
+        findings = "\n\n".join(parts)
+        logging.debug(
+            "[repair:%s] full review findings sent to LLM (%d chars):\n%s",
+            key, len(findings), findings,
+        )
+        return findings

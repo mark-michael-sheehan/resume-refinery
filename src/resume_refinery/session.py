@@ -23,6 +23,7 @@ Layout:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -37,6 +38,7 @@ from .models import (
     DocumentSet,
     DraftingContext,
     EvidencePack,
+    ExemptedPhrases,
     JobDescription,
     ReviewBundle,
     Session,
@@ -234,6 +236,16 @@ class SessionStore:
             return None
         return DraftingContext(evidence_pack=ep, voice_style_guide=vg)
 
+    # --- Suppression / exempted phrases ------------------------------------
+
+    def save_suppressions(self, session: Session, phrases: ExemptedPhrases) -> None:
+        """Persist the cumulative set of repair-loop exempted phrases for the current version."""
+        version_dir = self.root / session.session_id / f"v{session.current_version}"
+        version_dir.mkdir(parents=True, exist_ok=True)
+        (version_dir / "exempted_phrases.json").write_text(
+            phrases.model_dump_json(indent=2), encoding="utf-8"
+        )
+
     # --- Repair pass snapshots ---------------------------------------------
 
     def save_repair_pass(
@@ -305,8 +317,8 @@ class SessionStore:
             if path.is_dir() and meta_file.exists():
                 try:
                     sessions.append(self._read_metadata(path.name))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.warning("Skipping unreadable session '%s': %s", path.name, exc)
         return sessions
 
     def get(self, session_id: str) -> Session:
@@ -326,7 +338,12 @@ class SessionStore:
 
     def _read_metadata(self, session_id: str) -> Session:
         path = self.root / session_id / "session.json"
-        return Session(**json.loads(path.read_text(encoding="utf-8")))
+        try:
+            return Session(**json.loads(path.read_text(encoding="utf-8")))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Session '{session_id}' metadata is corrupted (invalid JSON): {exc}") from exc
+        except Exception as exc:
+            raise ValueError(f"Session '{session_id}' metadata is corrupted: {exc}") from exc
 
 
 _ALL_DOC_KEYS: tuple[DocumentKey, ...] = ("cover_letter", "resume", "interview_guide")

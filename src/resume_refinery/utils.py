@@ -44,16 +44,22 @@ def apply_edits(
 ) -> str:
     """Apply surgical find/replace edits to *document*.
 
-    Edits are applied in reverse document order so that earlier replacements
-    don't shift the positions of later ones.  If the number of edits that
-    fail to match exceeds *fail_threshold*, an ``EditApplicationError`` is
-    raised.
+    Edits are located in the original document to determine processing
+    order (left-to-right), then applied **sequentially**: each edit
+    re-finds its target in the *current* document state before applying.
+
+    This handles overlapping edits safely — if a prior edit already
+    transformed the region, the later edit simply won't match and is
+    counted as a failure rather than silently corrupting the document.
+
+    If the number of edits that fail to match exceeds *fail_threshold*,
+    an ``EditApplicationError`` is raised.
     """
     threshold = fail_threshold if fail_threshold is not None else _EDIT_FAIL_THRESHOLD
 
-    # Determine application order: sort by position in document (reverse)
-    # so offset drift doesn't affect later edits.
-    positioned: list[tuple[int, EditOp]] = []
+    # Phase 1 — locate every edit in the *original* document to determine
+    # left-to-right processing order.
+    ordered: list[tuple[int, EditOp]] = []
     failed: list[EditOp] = []
 
     for edit in edits:
@@ -67,22 +73,32 @@ def apply_edits(
             log.warning("Edit find text not found in document: %.80s", find_text)
             failed.append(edit)
             continue
-        positioned.append((idx, edit))
+        ordered.append((idx, edit))
 
-    # Check threshold before applying anything
-    if len(failed) > threshold:
-        raise EditApplicationError(failed, threshold)
+    # Sort by original position so edits are processed left-to-right.
+    ordered.sort(key=lambda t: t[0])
 
-    # Apply in reverse order so earlier edits don't shift later positions
-    positioned.sort(key=lambda t: t[0], reverse=True)
-
-    for idx, edit in positioned:
+    # Phase 2 — apply each edit sequentially, re-finding the target in
+    # the current document.  If a prior edit changed the region, the
+    # find text won't match and the edit is counted as a failure.
+    applied_count = 0
+    for _orig_idx, edit in ordered:
         find_text = edit["find"]
         replace_text = edit.get("replace", "")
+        idx = document.find(find_text)
+        if idx == -1:
+            log.warning(
+                "Edit find text no longer present after prior edits: %.80s",
+                find_text,
+            )
+            failed.append(edit)
+            continue
         document = document[:idx] + replace_text + document[idx + len(find_text):]
+        applied_count += 1
 
-    # Log summary
-    applied_count = len(positioned)
+    # Check threshold after all edits have been attempted.
+    if len(failed) > threshold:
+        raise EditApplicationError(failed, threshold)
     if failed:
         log.warning(
             "Applied %d edit(s), %d failed to match (threshold=%d)",

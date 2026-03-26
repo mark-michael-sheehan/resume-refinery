@@ -17,8 +17,9 @@ You will be given:
 Core principles:
 - AUTHENTICITY: Every sentence must sound like it came from this specific person, not \
   a generic AI assistant. Match their voice precisely.
-- SPECIFICITY: Reference concrete details from both the career profile and the job \
-  description. Never use generic filler.
+- SPECIFICITY: Reference concrete details from the career profile. Use the job \
+  description only for targeting and keyword alignment — never copy job posting \
+  structure, metadata, or recruiting language into any document.
 - HONESTY: Never fabricate experience or skills the applicant doesn't have.
 - STRATEGY: Emphasise the experiences and accomplishments most relevant to this role.
 - CONCISION: Every sentence earns its place.
@@ -28,6 +29,11 @@ Core principles:
 - DIFFERENTIATION: Identify what makes this applicant uniquely valuable compared to a \
   generic qualified candidate. Highlight unusual combinations of skills, distinctive \
   accomplishments, or unconventional career paths that make them memorable.
+- DOCUMENT BOUNDARIES: The generated document must contain ONLY the applicant's own \
+  experience, skills, and accomplishments. Never include job posting sections (Title, \
+  Company, Location, About the Role, Requirements, Qualifications, Responsibilities), \
+  salary information, or any text that reads like a job advertisement rather than the \
+  applicant's own narrative.
 """
 
 COVER_LETTER_PROMPT = """Generate a cover letter for this applicant targeting this specific job.
@@ -41,6 +47,9 @@ Requirements:
 - Reference at least 3 distinct, specific details from the job description (team size, \
   tech stack, challenges mentioned, company mission) — not just the job title. Each \
   paragraph should contain at least one explicit connection to the posting.
+- Do NOT copy or paraphrase job posting sections (Requirements, Qualifications, About) \
+  into the cover letter. Reference the role's context naturally within the applicant's \
+  own narrative.
 - Close with a confident, specific call to action
 - Match the applicant's voice precisely from their voice profile
 - 3–4 paragraphs, roughly one page (about 350-500 words)
@@ -73,8 +82,13 @@ Requirements:
 - Use plain Markdown only — no tables, columns, or complex formatting that breaks ATS parsers
 - Reorder and emphasise experience most relevant to this role
 - Quantify achievements wherever the data exists in the profile
-- Mirror exact phrases from the job description where truthful, not just synonyms — ATS \
-  systems match on exact keywords
+- Mirror exact keywords from the job description in Skills and bullet points where the \
+  applicant genuinely has that skill — ATS systems match on exact keywords. Only mirror \
+  keywords, not entire sentences or sections from the posting.
+- NEVER include job posting content in the resume. The resume must contain only the \
+  applicant's own experience, education, skills, and accomplishments. Do not reproduce \
+  the job title, company description, requirements list, or any other section from the \
+  job posting.
 - Match the tone and emphasis to the seniority level of the target role: for senior/staff+ \
   roles, emphasize architectural decisions, cross-team influence, mentoring, and strategic \
   impact; for mid-level roles, emphasize hands-on execution and growth trajectory
@@ -163,31 +177,6 @@ Decision rules (apply literally, do not deliberate):
 - If the tone broadly matches but characteristic phrasing is absent → "moderate"
 - If the document reads like generic corporate writing with no voice markers → "weak"
 - Flag ONLY phrases you can quote from the document. Do not flag absence of phrases.
-- Every suggestion must name the exact phrase to change and what to change it to.
-"""
-
-VOICE_REVIEW_USER_TEMPLATE = """## Voice Profile
-{voice_profile}
-
-## Cover Letter
-{cover_letter}
-
-## Resume
-{resume}
-
-## Interview Guide
-{interview_guide}
-
-## Task
-Evaluate how well each document reflects the voice profile. Return a JSON object with:
-- "overall_match": "strong" | "moderate" | "weak"
-- "cover_letter_assessment": string (1-2 sentences)
-- "resume_assessment": string (1-2 sentences)
-- "interview_guide_assessment": string (1-2 sentences)
-- "specific_issues": list of specific phrases or passages that feel off-voice
-- "suggestions": list of concrete changes to better match the voice profile
-
-Return JSON only — no markdown fences, no explanation.
 """
 
 AI_DETECTION_SYSTEM_PROMPT = """You are an expert in identifying AI-generated content in \
@@ -199,7 +188,9 @@ deliberate or weigh context; if a pattern matches, flag it:
 2. Generic claims that could describe any candidate: "strong communicator", "team player", \
    "detail-oriented" without a concrete example attached.
 3. Structural tells: 3+ em-dashes in a single document, "Furthermore," / "Moreover," \
-   transitions, and sentences starting with "I am" followed by an adjective.
+   transitions, and sentences starting with "I am" followed by a bare adjective \
+   (e.g. "I am passionate", "I am driven") — but NOT "I am a [job title]" or \
+   "I am responsible for" which are normal professional phrasing.
 4. Hedging language: "I believe", "I feel that", "arguably", "it could be said".
 5. Filler sentences that add no information if deleted.
 
@@ -207,65 +198,117 @@ Do NOT flag: industry-standard terminology, quantified claims, or specific \
 technical descriptions even if they sound polished.
 """
 
-AI_DETECTION_USER_TEMPLATE = """## Cover Letter
-{cover_letter}
 
-## Resume
-{resume}
+TRUTHFULNESS_SYSTEM_PROMPT = """You are a strict factual verifier for career documents.
+Your job is to verify that personal claims made in the documents are supported by the
+provided reference sources. Not every sentence needs to be in the reference sources —
+only first-person claims about the candidate's specific experience, actions, or metrics.
 
-## Interview Guide
-{interview_guide}
+IMPORTANT — What the reference sources are for:
+- The Career Profile and Job Description are VERIFICATION REFERENCES ONLY.
+  They tell you what is true about the applicant and the role.
+  They are NOT a list of content that must appear in the document.
+  Do NOT flag anything as unsupported just because it isn't in those sources —
+  only flag claims that assert specific personal facts that CONTRADICT or are ABSENT FROM both.
 
-## Task
-Identify content that sounds AI-generated, generic, or hollow. Return a JSON object with:
-- "risk_level": "low" | "medium" | "high"
-- "cover_letter_flags": list of specific phrases or passages (quote them)
-- "resume_flags": list of specific phrases or passages (quote them)
-- "interview_guide_flags": list of specific phrases or passages (quote them)
-- "suggestions": list of concrete rewrites or guidance
+Three kinds of statements that are automatically SUPPORTED — do NOT flag them:
 
-Return JSON only — no markdown fences, no explanation.
+1. CAREER PROFILE facts: The applicant's own experience, skills, metrics, and
+   accomplishments that appear in the Career Profile.
+
+2. JOB DESCRIPTION context: Company name, role title, team context, technology stack,
+   company mission, and any other detail from the job posting — BUT ONLY if accurately
+   represented. If the document makes a claim about the role or company that contradicts
+   the Job Description (e.g. wrong company name, wrong team size, wrong tech stack, wrong
+   responsibilities), that claim is UNSUPPORTED and must be flagged.
+
+3. GENERALLY ACCEPTED SUPPORTING STATEMENTS: Broad observations about how roles,
+   industries, or professions work that are common knowledge or widely understood —
+   even if they do not appear in either reference document. These are background
+   context used to frame or support a point, NOT personal claims.
+   Examples of statements that must NOT be flagged:
+   - "Product managers focus on user outcomes" — general role knowledge.
+   - "Engineers think in abstractions" — widely accepted professional observation.
+   - "ECS and Kubernetes share similar orchestration concepts" — industry knowledge.
+   - "Getting alignment means bridging different mental models" — general insight.
+   - "Mentoring benefits from direct feedback loops" — general management principle.
+   If a statement describes how the world, an industry, or a profession generally works,
+   it is a supporting statement — NOT a personal claim — and must be treated as supported.
+
+What to flag — ONLY these:
+- First-person statements (e.g. "I ...", "my ...", "we ...") about specific past actions,
+  achievements, or metrics that are NOT supported by the Career Profile.
+- Claims that introduce specific numbers, dates, names, or facts about the candidate
+  that do not appear in either reference source.
+- Statements that directly CONTRADICT the Career Profile.
+- Statements about the target role, company, team, or technology stack that CONTRADICT
+  or misrepresent the Job Description (e.g. wrong company name, wrong team size stated,
+  wrong responsibilities attributed to the role, tech stack the JD does not mention as
+  required but is asserted as something the company definitely uses).
+
+Decision procedure (follow in order):
+1. Read the Career Profile. Build a list of concrete facts: job titles, company names,
+   years, technologies, metrics, accomplishments.
+2. Read the Job Description. Build a second list: target company name, role title, team
+   context, tech stack, scale/metrics mentioned, company mission, responsibilities.
+3. Read the document sentence by sentence.
+4. For each sentence, classify it:
+   a. Is it a general observation about how the world/industry/roles work? → SUPPORTED.
+   b. Is it vague or widely applicable (e.g. "experienced professional")? → SUPPORTED.
+   c. Does it match the Career Profile? → SUPPORTED.
+   d. Does it accurately reflect the Job Description? → SUPPORTED.
+   e. Does it make a specific claim ABOUT the role/company that contradicts the
+      Job Description (wrong details, misattributed facts)? → UNSUPPORTED.
+   f. Is it a first-person specific claim with facts not in either source? → UNSUPPORTED.
+5. If ANY unsupported claim exists, set pass_strict to false.
+
+Common mistakes to AVOID:
+- Do NOT flag general professional observations as unsupported — they are world knowledge.
+- Do NOT flag coaching advice or framing suggestions (especially in interview guides)
+  as personal claims. They are strategic guidance, not first-person assertions.
+- Do NOT flag the target company name, role title, or team details just because they
+  come from the job posting rather than the career profile. Those are valid.
+- Do NOT require every claim to appear in the Career Profile. The Job Description is
+  an equally valid source for role-specific context.
+- Do NOT flag reasonable paraphrasing of supported facts. Only flag claims that
+  introduce specific personal details absent from both sources.
 """
 
 
-TRUTHFULNESS_SYSTEM_PROMPT = """You are a strict factual verifier for career documents.
-Your only job is to verify that every claim in the generated documents is supported by the
-provided career profile. If a claim is not explicitly supported, mark it unsupported.
-Do not assume, infer, or soften this rule.
-
-Decision procedure (follow in order):
-1. Read the Career Profile and build a mental list of concrete facts: job titles,
-   company names, years, technologies, metrics, accomplishments.
-2. Read the document sentence by sentence.
-3. For each factual claim (names, numbers, skills, outcomes), check whether the
-   Career Profile contains an explicit supporting statement.
-4. If a claim is vague but reasonable (e.g. "experienced professional"), it passes.
-   Only flag claims that state specific facts not present in the Career Profile.
-5. If ANY unsupported claim exists, set pass_strict to false.
-"""""
-
-
-TRUTHFULNESS_DOC_USER_TEMPLATE = """## Career Profile
+TRUTHFULNESS_DOC_USER_TEMPLATE = """## Career Profile [VERIFICATION REFERENCE — for fact-checking only, not a content source]
 {career_profile}
 
-## {doc_type}
+## Job Description [VERIFICATION REFERENCE — for fact-checking only, not a content source]
+{job_description}
+
+## {doc_type} [THE DOCUMENT BEING VERIFIED]
 {doc_content}
 
 ## Task
-Check every factual claim in the {doc_type} against the Career Profile above.
+Check every first-person claim in the {doc_type} against the Career Profile and Job Description above.
 Return a JSON object with this shape:
 {{
   "pass_strict": boolean,
   "unsupported_claims": [string],
-  "evidence_examples": [string],
-  "suggestions": [string]
+  "evidence_examples": [string]
 }}
 
 Rules:
+- Only flag first-person claims about the candidate's specific experience, actions, or
+  metrics that cannot be supported by either reference source.
+- Also flag any claim about the target role, company, or team that contradicts or
+  misrepresents the Job Description (e.g. wrong company name, wrong tech stack, wrong
+  responsibilities — details that the JD contradicts or does not support).
+- General observations about how roles, industries, or professions work are NOT personal
+  claims — treat them as supported regardless of whether they appear in the references.
+- Coaching advice, framing guidance, and strategic suggestions (common in interview guides)
+  are NOT personal claims — do NOT flag them as unsupported.
+- Claims that accurately reflect details from the Job Description (e.g. company name,
+  role title, team context, or technology stack) are supported and must NOT be flagged.
 - Unsupported claims must quote the exact problematic phrase from the {doc_type}.
 - evidence_examples must quote exact phrases from the Career Profile that support claims.
-- suggestions should describe how to fix or remove unsupported claims.
-- pass_strict must be false if any unsupported claim exists.
+- Do NOT suggest fixes — only identify and quote unsupported personal claims.
+- pass_strict must be false if any unsupported personal claim exists.
 
 Return JSON only — no markdown fences, no explanation.
 """
@@ -285,14 +328,12 @@ Return a JSON object with this shape:
 {{
   "overall_match": "strong" | "moderate" | "weak",
   "assessment": string,
-  "issues": [string],
-  "suggestions": [string]
+  "issues": [string]
 }}
 
 - overall_match: use the decision rules above — do not hedge between categories.
 - assessment: 1–2 sentences. State which voice markers are present or missing.
 - issues: quote specific phrases from the {doc_type} that feel off-voice.
-- suggestions: for each issue, state what to replace it with. Be concrete, not vague.
 
 Do NOT flag content simply because it is professional. Only flag content that \
 contradicts the voice profile or sounds like a different person wrote it.
@@ -311,16 +352,14 @@ exact matches — do not flag content that is merely professional or well-writte
 Return a JSON object with this shape:
 {{
   "risk_level": "low" | "medium" | "high",
-  "flags": [string],
-  "suggestions": [string]
+  "flags": [string]
 }}
 
 - risk_level: "low" = 0–1 flags, "medium" = 2–3 flags, "high" = 4+ flags.
 - flags: quote the exact phrase from the document (as a string). Only include phrases \
   that match one of the 5 patterns. Do not flag quantified achievements or specific \
-  technical descriptions.
-- suggestions: for each flag, provide a concrete rewrite as a plain text string. \
-  Every item must be a string sentence, never a number.
+  technical descriptions. Deduplicate — list each distinct flagged phrase only once. \
+  Limit to at most 15 flags total.
 
 Return JSON only — no markdown fences, no explanation.
 """
@@ -397,15 +436,29 @@ Return JSON only — no markdown fences, no explanation.
 
 REPAIR_SYSTEM_PROMPT = """\
 You are a surgical document editor. You receive a career document alongside \
-review findings from three independent reviewers.  Your job is to produce a \
-JSON array of find/replace edits that fix EVERY flagged issue while \
-preserving all unflagged text exactly as-is.
+review findings from three independent reviewers. For each flagged item, \
+choose EXACTLY ONE action:
+
+  A. FIX IT   — produce a {find, replace, reason} edit in "edits".
+  B. ACCEPT IT — add the verbatim flagged phrase to the matching accepted array:
+       • "accepted_claims"       — truthfulness flag that IS actually supported \
+by the Career Profile (reviewer false positive).
+       • "accepted_ai_phrases"   — AI-detector flag for a phrase that is \
+genuinely specific, quantified, and appropriate (reviewer false positive).
+       • "accepted_voice_issues" — voice flag for a phrase that actually \
+matches the Voice Profile correctly (reviewer false positive).
+
+Only accept a finding when it is clearly a reviewer false positive. When in \
+doubt, fix it. Accepted phrases will not be flagged again in subsequent passes.
 
 REVIEWER CRITERIA (the reviewers will re-check your edits using these rules):
 
 Truthfulness reviewer rules:
 - Every specific factual claim (names, numbers, skills, outcomes) must be \
-  explicitly supported by the Career Profile.
+  explicitly supported by the Career Profile or Job Description.
+- Claims referencing job details (company name, role title, team context, \
+  technology stack mentioned in the posting) are valid if they appear in \
+  the Job Description.
 - Vague but reasonable phrasing (e.g. "experienced professional") passes.
 - If ANY unsupported specific claim exists, the document fails.
 
@@ -426,47 +479,70 @@ AI-detection reviewer rules:
 - Do NOT flag industry terminology, quantified claims, or specific technical \
   descriptions.
 
+For each finding you choose to FIX, apply this pattern:
+- TRUTHFULNESS issue  → remove or soften the unsupported phrase; do NOT \
+  invent replacement facts or copy text from the Career Profile or Job Description.
+- VOICE issue         → rephrase the flagged passage to match the tone and \
+  phrasing style visible in the Voice Profile.
+- AI DETECTION issue  → remove the flagged phrase or replace it with a \
+  specific, quantified version using only details already present in the document.
+
 EDIT RULES:
 1. Each edit must fix exactly one flagged issue.
-2. The "find" value must be a VERBATIM substring of the document — copy it \
+2. "find" must be a VERBATIM substring of the document — copy it \
    character-for-character.
-3. The "replace" value must satisfy ALL three reviewer criteria above.
-4. Never alter text that was not flagged. Keep edits as short as possible — \
-   target the flagged phrase, not the whole paragraph.
-5. To delete a flagged phrase, set "replace" to "".
-6. If a truthfulness fix conflicts with a voice/AI fix, truthfulness wins.
+3. "replace" must satisfy ALL three reviewer criteria above.
+4. Keep edits as short as possible — target the flagged phrase, \
+   not the whole paragraph.
+5. Never alter text that was not flagged.
+6. To delete a flagged phrase, set "replace" to "".
+7. If a truthfulness fix conflicts with a voice/AI fix, truthfulness wins.
+8. CRITICAL — Do NOT copy content from the Career Profile or Job Description \
+   into replacements. Those sections are fact-check references only. \
+   For truthfulness failures, REMOVE or SOFTEN the phrase only.
 """
 
 REPAIR_USER_TEMPLATE = """\
 ## Document to Edit
 {doc_content}
 
-## Career Profile
+## Career Profile [FACT-CHECK REFERENCE — do not copy text from this into the document]
 {career_profile}
 
-## Voice Profile
+## Voice Profile [STYLE REFERENCE — match tone and phrasing style only]
 {voice_profile}
 
-## Job Description
+## Job Description [FACT-CHECK REFERENCE — do not copy text from this into the document]
 {job_description}
 
 ## Review Findings
 {review_findings}
 
 ## Task
-Produce a JSON array of surgical edits.  Each element:
+For each review finding, either fix it (write an edit) or accept it (add the verbatim \
+phrase to the matching accepted array). Return a single JSON object:
 {{
-  "find": "<exact verbatim substring from the document>",
-  "replace": "<corrected text that satisfies all reviewer criteria>",
-  "reason": "<which review finding this fixes>"
+  "edits": [
+    {{
+      "find": "<exact verbatim substring from the document>",
+      "replace": "<corrected replacement; use only text already in the document>",
+      "reason": "<which review finding this fixes>"
+    }}
+  ],
+  "accepted_claims":       ["<verbatim truthfulness-flagged phrase that IS supported>"],
+  "accepted_ai_phrases":   ["<verbatim AI-flagged phrase that is genuinely specific/appropriate>"],
+  "accepted_voice_issues": ["<verbatim voice-flagged phrase that actually matches the Voice Profile>"]
 }}
 
 Rules:
 - "find" must appear verbatim in the document.  Copy it exactly.
-- "replace" must not introduce any new unsupported factual claims.
-- Include one edit per flagged issue.  Do not combine multiple issues into \
-  one edit.
-- If no edits are needed, return an empty array: []
+- "replace" must not introduce any new factual claims, numbers, or experiences \
+  that are not already present in the document being edited.
+- Do NOT pull content from the Career Profile or Job Description sections above \
+  into your replacements — they are for fact-checking only.
+- One edit OR one acceptance per flagged issue — do not both fix and accept the same phrase.
+- If no edits are needed, set "edits" to [].
+- If no acceptances apply, set the accepted arrays to [].
 - Return JSON only — no markdown fences, no explanation.
 """
 
@@ -478,7 +554,7 @@ def repair_user_message(
     job_description: str,
     review_findings: str,
 ) -> str:
-    """Build the user message for a surgical-repair call."""
+    """Build the user message for a surgical-repair call (no-think mode)."""
     return REPAIR_USER_TEMPLATE.format(
         doc_content=doc_content,
         career_profile=career_profile,

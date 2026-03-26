@@ -82,9 +82,11 @@ This will:
 3. Export DOCX files to `~/.resume_refinery/sessions/<session_id>/v1/`
 4. Run strict truthfulness verification and targeted repair passes
 5. Run voice-match and AI-detection reviews automatically
-6. Print a summary of truthfulness + review results
+6. Print per-document issues from each reviewer and find/replace edits applied per repair pass
 
-Skip voice/AI style reviews with `--skip-review`.
+Pass `--skip-review` to skip voice/AI style reviews and the repair loop entirely.
+Only the truthfulness review runs; voice and AI-detection are not executed and no
+repair passes are performed. This saves significant LLM calls when reviews are not needed.
 
 Strict truthfulness is enforced by default. To keep output despite unsupported
 claims, pass `--allow-unverified`.
@@ -118,7 +120,7 @@ resume-refinery review acme-cloud_staff-engineer_2026-03-20
 resume-refinery review acme-cloud_staff-engineer_2026-03-20 --version 1
 ```
 
-Runs strict truthfulness, voice-match, and AI-detection reviewers on the current (or specified) version.
+Runs strict truthfulness (against career profile and job description), voice-match, and AI-detection reviewers on the current (or specified) version.
 
 ---
 
@@ -145,7 +147,9 @@ resume-refinery show acme-cloud_staff-engineer_2026-03-20 --open
 
 ## Output Files
 
-For each version, the following files are created:
+For each version, the following files are created in `~/.resume_refinery/sessions/<session_id>/v<N>/`:
+
+### Documents
 
 | File | Description |
 |---|---|
@@ -155,6 +159,35 @@ For each version, the following files are created:
 | `cover_letter.md` | Markdown source (for diffing between versions) |
 | `resume.md` | Markdown source |
 | `interview_guide.md` | Markdown source |
+
+### Context artifacts
+
+| File | Description |
+|---|---|
+| `evidence_pack.json` | Extracted job requirements matched to career evidence, plus identified gaps. Used by the drafting and truthfulness agents. |
+| `voice_guide.json` | Distilled voice style guide (adjectives, rules, preferred phrases, phrases to avoid, writing samples). Used by the drafting and voice-review agents. |
+
+### Review results
+
+| File | Description |
+|---|---|
+| `truth_review.json` | Per-document truthfulness verification — whether every claim is supported by the career profile. Contains `all_supported`, and per-document `pass_strict`, `unsupported_claims`, and `evidence_examples`. |
+| `voice_review.json` | Voice-match review — `overall_match` (`strong`/`moderate`/`weak`), per-document match level, assessment, and specific issues. |
+| `ai_review.json` | AI-detection review — `risk_level` (`low`/`medium`/`high`) and per-document flagged phrases that sound AI-generated. |
+| `exempted_phrases.json` | Cumulative list of phrases/claims the repair agent accepted as false positives during the repair loop. Only written when exemptions occurred. Contains `claims` (truthfulness), `ai_phrases` (AI-detection), and `voice_issues` (voice). |
+
+### Repair pass snapshots
+
+Each repair pass creates a `repair_pass_<N>/` subdirectory containing the document and review state at that point:
+
+| File | Description |
+|---|---|
+| `repair_pass_<N>/cover_letter.md` | Document state after repair pass N |
+| `repair_pass_<N>/resume.md` | Document state after repair pass N |
+| `repair_pass_<N>/interview_guide.md` | Document state after repair pass N |
+| `repair_pass_<N>/truth_review.json` | Truthfulness result that preceded repair pass N |
+| `repair_pass_<N>/voice_review.json` | Voice-match result that preceded repair pass N |
+| `repair_pass_<N>/ai_review.json` | AI-detection result that preceded repair pass N |
 
 ---
 
@@ -227,3 +260,210 @@ print(result.reviews.truthfulness.all_supported)
 print(result.reviews.voice.overall_match)      # "strong" / "moderate" / "weak"
 print(result.reviews.ai_detection.risk_level)  # "low" / "medium" / "high"
 ```
+
+---
+
+## Model Selection Guide
+
+Resume Refinery works with any model available in Ollama. The default is `qwen3.5:9b`,
+which balances quality and resource usage. Here are some practical guidelines:
+
+| Model | VRAM / RAM | Quality | Speed | Notes |
+|---|---|---|---|---|
+| `qwen3.5:4b` | ~3 GB | Good | Fast | Lighter option — may produce more AI-sounding language that triggers extra repair passes. Good for quick iterations or machines with limited RAM. |
+| `qwen3.5:9b` | ~6 GB | Very good | Moderate | Default. Strong reasoning, good voice matching, reliable JSON output from reviewers. |
+| `qwen3:8b` | ~5 GB | Good | Moderate | Previous-generation Qwen. Solid but `qwen3.5:9b` is generally preferred. |
+| `qwen3:14b` | ~10 GB | Excellent | Slower | Highest quality for truthfulness and voice fidelity. Choose if you have the VRAM and prioritise output quality over speed. |
+
+### Tips
+
+- **Generation and review models can differ.** Use a larger model for generation
+  (`RESUME_REFINERY_MODEL`) and a lighter one for reviews (`RESUME_REFINERY_REVIEW_MODEL`)
+  to save RAM during the review loop.
+- **Context window matters.** `RESUME_REFINERY_NUM_CTX` controls how much of your career
+  profile the model can see. If your career profile is long (>5 pages), raise this to
+  `32768` or higher. Each 16K tokens ≈ 2 GB extra RAM.
+- **Smaller models produce more repair passes.** Review flags and unsupported-claim counts
+  tend to be higher with smaller models, which means more repair iterations. You can raise
+  `RESUME_REFINERY_AI_FLAG_TOLERANCE` or `RESUME_REFINERY_MAX_REPAIR_PASSES` to compensate.
+- **Pull your model before running.** Ollama must already have the model downloaded:
+  ```bash
+  ollama pull qwen3.5:9b
+  ```
+
+---
+
+## End-to-End Walkthrough
+
+This section walks through a complete run using the example files in `examples/`.
+
+### 1. Start Ollama and pull the model
+
+```bash
+ollama serve            # if not already running
+ollama pull qwen3.5:9b
+```
+
+### 2. Set up the project
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+pip install -e .
+cp .env.example .env             # edit if needed
+```
+
+### 3. Generate documents via CLI
+
+```bash
+resume-refinery new \
+  examples/career_profile.md \
+  examples/voice_profile.md \
+  examples/job_description.md
+```
+
+The tool will:
+1. Extract an evidence pack (job requirements matched to career evidence).
+2. Distill a voice style guide from your voice profile.
+3. Generate a cover letter, resume, and interview guide (streamed to the terminal).
+4. Run truthfulness, voice-match, and AI-detection reviews.
+5. If any review fails, run surgical repair passes (up to `MAX_REPAIR_PASSES` times).
+6. Export final `.docx` files.
+
+You'll see output like:
+
+```
+Session created: acme-cloud_staff-engineer_2026-03-25
+Extracting evidence pack...
+Distilling voice guide...
+Generating Cover Letter (model is thinking, output appears after reasoning)...
+[streaming output...]
+Generating Resume (model is thinking, output appears after reasoning)...
+[streaming output...]
+Generating Interview Guide (model is thinking, output appears after reasoning)...
+[streaming output...]
+─── Review Pass 1/3 ───
+  Truthfulness review (3 LLM calls)...
+  Voice review (2 LLM calls)...
+  AI-detection review (2 LLM calls)...
+Truthfulness: ALL SUPPORTED
+Voice match: STRONG
+AI-detection risk: LOW
+```
+
+### 4. Find your output
+
+```bash
+resume-refinery show acme-cloud_staff-engineer_2026-03-25 --open
+```
+
+This opens `~/.resume_refinery/sessions/acme-cloud_staff-engineer_2026-03-25/v1/`
+which contains:
+
+```
+v1/
+├── cover_letter.docx         ← Open these in Word
+├── resume.docx
+├── interview_guide.docx
+├── cover_letter.md           ← Markdown source for diffing
+├── resume.md
+├── interview_guide.md
+├── truth_review.json         ← Review results (JSON)
+├── voice_review.json
+├── ai_review.json
+├── evidence_pack.json        ← Extracted evidence and gaps
+└── voice_guide.json          ← Distilled voice rules
+```
+
+### 5. Refine
+
+```bash
+resume-refinery refine acme-cloud_staff-engineer_2026-03-25 \
+  --doc cover_letter \
+  --feedback "Lead with the Redis cost-saving story, not the migration."
+```
+
+A new version (`v2/`) is created with fresh documents, reviews, and exports.
+
+### 6. Or use the web app instead
+
+```bash
+resume-refinery-web
+# Open http://127.0.0.1:8765
+```
+
+Upload your three files, click **Generate**, and browse/refine sessions from the sidebar.
+
+---
+
+## Troubleshooting
+
+### "Empty content" or "model may have exhausted its context window"
+
+The model's context window is too small for your career profile plus the document being
+generated. Raise the KV-cache size in `.env`:
+
+```
+RESUME_REFINERY_NUM_CTX=32768
+```
+
+Each 16K tokens ≈ 2 GB extra RAM. If you hit out-of-memory errors, lower it back to
+`16384` and try a smaller model instead.
+
+### Ollama not running / connection refused
+
+Resume Refinery expects Ollama at `http://localhost:11434` by default. Check that:
+
+```bash
+ollama serve          # start the server
+curl http://localhost:11434   # should return "Ollama is running"
+```
+
+If Ollama is on a different host or port, set `OLLAMA_BASE_URL` in your `.env`.
+
+### Model not found
+
+If you see an error about a missing model, pull it first:
+
+```bash
+ollama pull qwen3.5:9b
+```
+
+Replace `qwen3.5:9b` with whatever `RESUME_REFINERY_MODEL` is set to in your `.env`.
+
+### JSON parse failures / garbled review results
+
+Smaller models sometimes produce malformed JSON in review responses. Resume Refinery
+normalises JSON output (strips markdown fences, repairs trailing commas, etc.) but very
+small models (<4B parameters) can still produce unparseable output. Fixes:
+
+- Use `qwen3.5:9b` or larger for the review model.
+- If your generation model is small, set `RESUME_REFINERY_REVIEW_MODEL` to a more capable
+  model separately.
+
+### "WARNING: Ollama reviewer returned empty content"
+
+The review model ran out of context or produced only `<think>` tags with no actual JSON.
+Increase `RESUME_REFINERY_NUM_CTX` in your `.env`.
+
+### Repair loop never converges
+
+If the repair loop exhausts all passes without all reviews passing:
+
+- **Truthfulness failures:** Check that your career profile actually contains the evidence
+  the reviewer is looking for. The truthfulness gate never relaxes — if a claim isn't
+  traceable to your career profile, it won't pass.
+- **AI-detection flags:** Raise `RESUME_REFINERY_AI_FLAG_TOLERANCE` (e.g. to `4`) to allow
+  more flags on later passes. Or lower `RESUME_REFINERY_RELAXED_PASS_START` (e.g. to `0`)
+  to relax earlier.
+- **Voice match stuck at "weak":** Improve your voice profile — add more writing samples
+  and specific style notes. The models need concrete examples to match voice well.
+- **Increase passes:** Raise `RESUME_REFINERY_MAX_REPAIR_PASSES` (e.g. to `5` or `7`).
+
+### Review model == generation model warning
+
+If the review model is the same as the generation model, you'll see a warning at startup.
+This is fine for most uses, but the reviewer may be less likely to flag issues in text it
+would have written itself. Set `RESUME_REFINERY_REVIEW_MODEL` to a different model if you
+want stricter reviews.

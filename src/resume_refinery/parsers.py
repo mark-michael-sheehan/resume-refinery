@@ -13,16 +13,40 @@ from pathlib import Path
 from .models import CareerProfile, JobDescription, VoiceProfile
 
 
+def _read_file_content(path: Path) -> str:
+    """Read a file's text content, supporting .docx and plain-text formats."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"File not found: {path}\n"
+            "If this file is stored in OneDrive, ensure it has been downloaded locally "
+            "(right-click → 'Always keep on this device')."
+        )
+    if path.suffix.lower() == ".docx":
+        from docx import Document  # type: ignore[import-untyped]
+        try:
+            doc = Document(str(path))
+        except Exception as exc:
+            raise ValueError(
+                f"Could not open '{path.name}' as a Word document: {exc}\n"
+                "If the file is a OneDrive cloud-only placeholder, download it first "
+                "(right-click → 'Always keep on this device')."
+            ) from exc
+        return "\n".join(para.text for para in doc.paragraphs)
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="latin-1")
+
+
 def load_voice_profile(path: str | Path) -> VoiceProfile:
-    """Read a voice profile markdown file."""
-    content = Path(path).read_text(encoding="utf-8")
+    """Read a voice profile markdown or Word file."""
+    content = _read_file_content(Path(path))
     return parse_voice_profile_content(content)
 
 
 def load_career_profile(path: str | Path) -> CareerProfile:
-    """Read a career profile markdown file and extract basic contact info."""
-    content = Path(path).read_text(encoding="utf-8")
-
+    """Read a career profile markdown or Word file and extract basic contact info."""
+    content = _read_file_content(Path(path))
     return parse_career_profile_content(content)
 
 
@@ -49,9 +73,8 @@ def parse_career_profile_content(content: str) -> CareerProfile:
 
 
 def load_job_description(path: str | Path) -> JobDescription:
-    """Read a job description markdown/text file and extract title + company."""
-    content = Path(path).read_text(encoding="utf-8")
-
+    """Read a job description markdown/text/Word file and extract title + company."""
+    content = _read_file_content(Path(path))
     return parse_job_description_content(content)
 
 

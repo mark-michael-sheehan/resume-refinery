@@ -14,6 +14,7 @@ from .models import (
     AIDetectionResult,
     DocumentSet,
     DocumentTruthResult,
+    JobDescription,
     ReviewBundle,
     TruthfulnessResult,
     CareerProfile,
@@ -68,54 +69,13 @@ def _normalize_llm_json(raw: str) -> str:
         return raw  # let the caller surface the original error
 
 
-def _extract_json(text: str) -> str:
-    """Extract the first JSON object or array from *text*.
-
-    When ``format="json"`` is not used (e.g. with thinking mode), the model
-    may emit preamble/postamble text or wrap JSON in markdown fences.  This
-    helper finds the outermost ``{…}`` or ``[…]`` substring.
-    """
-    # Strip markdown code fences first.
-    fenced = re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", text)
-    if fenced:
-        text = fenced.group(1).strip()
-    # Find the first { or [ and match to its closing counterpart.
-    for start_char, end_char in (("{", "}"), ("[", "]")):
-        start = text.find(start_char)
-        if start == -1:
-            continue
-        depth = 0
-        in_string = False
-        escape = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = True
-                continue
-            if ch == '"':
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == start_char:
-                depth += 1
-            elif ch == end_char:
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
-    return text  # fallback: return as-is and let caller handle errors
-
-
 _GEN_MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 
 
 class DocumentReviewer:
     """Runs voice-match and AI-detection reviews on a DocumentSet."""
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(self, api_key: str | None = None) -> None:  # api_key unused; retained for call-site compatibility
         self.client = ollama.Client(host=BASE_URL)
         if MODEL == _GEN_MODEL:
             logging.warning(
@@ -132,7 +92,7 @@ class DocumentReviewer:
             ai_detection=self.review_ai_detection(docs),
         )
 
-    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile) -> TruthfulnessResult:
+    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile, job: JobDescription) -> TruthfulnessResult:
         """Verify document claims are explicitly supported by the career profile.
 
         Each document is reviewed in its own call so the context window is never
@@ -152,6 +112,7 @@ class DocumentReviewer:
                 continue
             user_msg = TRUTHFULNESS_DOC_USER_TEMPLATE.format(
                 career_profile=career.raw_content,
+                job_description=job.raw_content,
                 doc_type=doc_type,
                 doc_content=content,
             )
@@ -161,7 +122,6 @@ class DocumentReviewer:
                 pass_strict=data.get("pass_strict", True),
                 unsupported_claims=data.get("unsupported_claims", []),
                 evidence_examples=data.get("evidence_examples", []),
-                suggestions=data.get("suggestions", []),
             )
 
         cl = results["Cover Letter"]
@@ -188,9 +148,7 @@ class DocumentReviewer:
 
         assessments: dict[str, str] = {}
         all_issues: list[str] = []
-        all_suggestions: list[str] = []
         per_doc_issues: dict[str, list[str]] = {}
-        per_doc_suggestions: dict[str, list[str]] = {}
         match_scores: list[str] = []
         per_doc_match: dict[str, str] = {}
 
@@ -199,14 +157,12 @@ class DocumentReviewer:
                 assessments[doc_type] = "(not generated)"
                 per_doc_match[doc_type] = "strong"  # nothing to review
                 per_doc_issues[doc_type] = []
-                per_doc_suggestions[doc_type] = []
                 continue
             if doc_type == "Interview Guide":
                 # Interview guides are personal prep — skip voice check
                 assessments[doc_type] = "(skipped — personal prep)"
                 per_doc_match[doc_type] = "strong"
                 per_doc_issues[doc_type] = []
-                per_doc_suggestions[doc_type] = []
                 continue
             user_msg = VOICE_REVIEW_DOC_USER_TEMPLATE.format(
                 voice_profile=voice.raw_content,
@@ -217,11 +173,8 @@ class DocumentReviewer:
             data = json.loads(raw)
             assessments[doc_type] = data.get("assessment", "")
             doc_issues = data.get("issues", [])
-            doc_suggestions = data.get("suggestions", [])
             per_doc_issues[doc_type] = doc_issues
-            per_doc_suggestions[doc_type] = doc_suggestions
             all_issues.extend(doc_issues)
-            all_suggestions.extend(doc_suggestions)
             doc_match = data.get("overall_match", "moderate")
             per_doc_match[doc_type] = doc_match
             match_scores.append(doc_match)
@@ -240,13 +193,9 @@ class DocumentReviewer:
             resume_assessment=assessments.get("Resume", "(not reviewed)"),
             interview_guide_assessment=assessments.get("Interview Guide", "(not reviewed)"),
             specific_issues=all_issues,
-            suggestions=all_suggestions,
             cover_letter_issues=per_doc_issues.get("Cover Letter", []),
             resume_issues=per_doc_issues.get("Resume", []),
             interview_guide_issues=per_doc_issues.get("Interview Guide", []),
-            cover_letter_suggestions=per_doc_suggestions.get("Cover Letter", []),
-            resume_suggestions=per_doc_suggestions.get("Resume", []),
-            interview_guide_suggestions=per_doc_suggestions.get("Interview Guide", []),
         )
 
     def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:
@@ -265,11 +214,6 @@ class DocumentReviewer:
             "Resume": [],
             "Interview Guide": [],
         }
-        suggestions_by_doc: dict[str, list[str]] = {
-            "Cover Letter": [],
-            "Resume": [],
-            "Interview Guide": [],
-        }
         risk_scores: list[str] = []
 
         for doc_type, content in doc_map:
@@ -284,8 +228,15 @@ class DocumentReviewer:
             )
             raw = self._call(AI_DETECTION_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
-            flags_by_doc[doc_type] = data.get("flags", [])
-            suggestions_by_doc[doc_type] = data.get("suggestions", [])
+            # Deduplicate flags — LLMs sometimes repeat the same phrase many times.
+            raw_flags = data.get("flags", [])
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for f in raw_flags:
+                if f not in seen:
+                    seen.add(f)
+                    deduped.append(f)
+            flags_by_doc[doc_type] = deduped
             if r := data.get("risk_level"):
                 risk_scores.append(r)
 
@@ -299,8 +250,6 @@ class DocumentReviewer:
             cover_letter_flags=flags_by_doc["Cover Letter"],
             resume_flags=flags_by_doc["Resume"],
             interview_guide_flags=flags_by_doc["Interview Guide"],
-            cover_letter_suggestions=suggestions_by_doc["Cover Letter"],
-            resume_suggestions=suggestions_by_doc["Resume"],
         )
 
     def _call(self, system: str, user_msg: str, *, think: bool = False) -> str:
