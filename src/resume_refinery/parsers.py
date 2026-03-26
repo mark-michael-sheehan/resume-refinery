@@ -15,12 +15,27 @@ from .models import CareerProfile, JobDescription, VoiceProfile
 
 def _read_file_content(path: Path) -> str:
     """Read a file's text content, supporting .docx and plain-text formats."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"File not found: {path}\n"
+            "If this file is stored in OneDrive, ensure it has been downloaded locally "
+            "(right-click → 'Always keep on this device')."
+        )
     if path.suffix.lower() == ".docx":
         from docx import Document  # type: ignore[import-untyped]
-
-        doc = Document(str(path))
+        try:
+            doc = Document(str(path))
+        except Exception as exc:
+            raise ValueError(
+                f"Could not open '{path.name}' as a Word document: {exc}\n"
+                "If the file is a OneDrive cloud-only placeholder, download it first "
+                "(right-click → 'Always keep on this device')."
+            ) from exc
         return "\n".join(para.text for para in doc.paragraphs)
-    return path.read_text(encoding="utf-8")
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="latin-1")
 
 
 def load_voice_profile(path: str | Path) -> VoiceProfile:
