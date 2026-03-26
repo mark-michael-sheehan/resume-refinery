@@ -27,27 +27,6 @@ class VoiceProfile(BaseModel):
     raw_content: str = Field(description="Full contents of the voice profile file")
 
 
-class WorkExperience(BaseModel):
-    title: str
-    company: str
-    dates: str = Field(description="e.g. 'Jan 2021 – Present'")
-    bullets: list[str] = Field(default_factory=list)
-
-
-class Education(BaseModel):
-    degree: str
-    institution: str
-    year: Optional[str] = None
-    details: list[str] = Field(default_factory=list)
-
-
-class Project(BaseModel):
-    name: str
-    description: str
-    outcome: Optional[str] = None
-    technologies: list[str] = Field(default_factory=list)
-
-
 class CareerProfile(BaseModel):
     """The user's professional history, loaded from a markdown file."""
 
@@ -208,11 +187,6 @@ class ExemptedPhrases(BaseModel):
         default_factory=list,
         description="Voice-match issues accepted as reviewer false positives",
     )
-
-
-class VerificationReport(BaseModel):
-    reviews: ReviewBundle
-    passed_strict_truth: bool = False
 
 
 class OrchestrationResult(BaseModel):

@@ -179,29 +179,6 @@ Decision rules (apply literally, do not deliberate):
 - Flag ONLY phrases you can quote from the document. Do not flag absence of phrases.
 """
 
-VOICE_REVIEW_USER_TEMPLATE = """## Voice Profile
-{voice_profile}
-
-## Cover Letter
-{cover_letter}
-
-## Resume
-{resume}
-
-## Interview Guide
-{interview_guide}
-
-## Task
-Evaluate how well each document reflects the voice profile. Return a JSON object with:
-- "overall_match": "strong" | "moderate" | "weak"
-- "cover_letter_assessment": string (1-2 sentences)
-- "resume_assessment": string (1-2 sentences)
-- "interview_guide_assessment": string (1-2 sentences)
-- "specific_issues": list of specific phrases or passages that feel off-voice
-
-Return JSON only — no markdown fences, no explanation.
-"""
-
 AI_DETECTION_SYSTEM_PROMPT = """You are an expert in identifying AI-generated content in \
 professional writing. Flag content that matches these specific patterns — do not \
 deliberate or weigh context; if a pattern matches, flag it:
@@ -219,25 +196,6 @@ deliberate or weigh context; if a pattern matches, flag it:
 
 Do NOT flag: industry-standard terminology, quantified claims, or specific \
 technical descriptions even if they sound polished.
-"""
-
-AI_DETECTION_USER_TEMPLATE = """## Cover Letter
-{cover_letter}
-
-## Resume
-{resume}
-
-## Interview Guide
-{interview_guide}
-
-## Task
-Identify content that sounds AI-generated, generic, or hollow. Return a JSON object with:
-- "risk_level": "low" | "medium" | "high"
-- "cover_letter_flags": list of specific phrases or passages (quote them)
-- "resume_flags": list of specific phrases or passages (quote them)
-- "interview_guide_flags": list of specific phrases or passages (quote them)
-
-Return JSON only — no markdown fences, no explanation.
 """
 
 
@@ -314,7 +272,7 @@ Common mistakes to AVOID:
   an equally valid source for role-specific context.
 - Do NOT flag reasonable paraphrasing of supported facts. Only flag claims that
   introduce specific personal details absent from both sources.
-"""""
+"""
 
 
 TRUTHFULNESS_DOC_USER_TEMPLATE = """## Career Profile [VERIFICATION REFERENCE — for fact-checking only, not a content source]

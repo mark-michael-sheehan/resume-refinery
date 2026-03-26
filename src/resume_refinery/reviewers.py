@@ -69,54 +69,13 @@ def _normalize_llm_json(raw: str) -> str:
         return raw  # let the caller surface the original error
 
 
-def _extract_json(text: str) -> str:
-    """Extract the first JSON object or array from *text*.
-
-    When ``format="json"`` is not used (e.g. with thinking mode), the model
-    may emit preamble/postamble text or wrap JSON in markdown fences.  This
-    helper finds the outermost ``{…}`` or ``[…]`` substring.
-    """
-    # Strip markdown code fences first.
-    fenced = re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", text)
-    if fenced:
-        text = fenced.group(1).strip()
-    # Find the first { or [ and match to its closing counterpart.
-    for start_char, end_char in (("{", "}"), ("[", "]")):
-        start = text.find(start_char)
-        if start == -1:
-            continue
-        depth = 0
-        in_string = False
-        escape = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = True
-                continue
-            if ch == '"':
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == start_char:
-                depth += 1
-            elif ch == end_char:
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
-    return text  # fallback: return as-is and let caller handle errors
-
-
 _GEN_MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 
 
 class DocumentReviewer:
     """Runs voice-match and AI-detection reviews on a DocumentSet."""
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(self, api_key: str | None = None) -> None:  # api_key unused; retained for call-site compatibility
         self.client = ollama.Client(host=BASE_URL)
         if MODEL == _GEN_MODEL:
             logging.warning(

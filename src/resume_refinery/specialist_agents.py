@@ -460,8 +460,7 @@ class RepairAgent:
     """Produces surgical find/replace edits and applies them programmatically."""
 
     def __init__(self, drafting_agent: DraftingAgent | None = None) -> None:
-        # drafting_agent kept for backward compat but no longer used for repair.
-        self.drafting_agent = drafting_agent or DraftingAgent()
+        # drafting_agent param retained for call-site compatibility; not used internally.
         self.client = ollama.Client(host=_BASE_URL)
 
     # ------------------------------------------------------------------
@@ -604,7 +603,11 @@ class RepairAgent:
                 for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues")
             }
 
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logging.warning("Repair LLM returned non-JSON after normalization; skipping repair pass")
+            return [], dict(_empty)
 
         if isinstance(data, dict):
             edits = data.get("edits")

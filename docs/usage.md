@@ -84,7 +84,9 @@ This will:
 5. Run voice-match and AI-detection reviews automatically
 6. Print per-document issues from each reviewer and find/replace edits applied per repair pass
 
-Skip voice/AI style reviews with `--skip-review`.
+Pass `--skip-review` to skip voice/AI style reviews and the repair loop entirely.
+Only the truthfulness review runs; voice and AI-detection are not executed and no
+repair passes are performed. This saves significant LLM calls when reviews are not needed.
 
 Strict truthfulness is enforced by default. To keep output despite unsupported
 claims, pass `--allow-unverified`.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Callable, Optional
@@ -97,10 +98,21 @@ class ResumeRefineryOrchestrator:
             docs.set(key, text)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
-        reviews, repair_passes, exempted = self._verify_and_repair(
-            docs, career, voice, job, context, progress=progress,
-            on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
-        )
+        if skip_review:
+            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
+            try:
+                truth = self.verification_agent.review_truthfulness(docs, career, job)
+            except Exception as exc:
+                logging.warning("Truthfulness review failed (%s)", exc)
+                truth = None
+            reviews: ReviewBundle = ReviewBundle(truthfulness=truth)
+            repair_passes: list[RepairPassResult] = []
+            exempted = ExemptedPhrases()
+        else:
+            reviews, repair_passes, exempted = self._verify_and_repair(
+                docs, career, voice, job, context, progress=progress,
+                on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
+            )
         session = self.store.save_documents(session, docs)
         self.store.save_context(session, context)
         for pass_num, snap, pass_reviews in repair_snapshots:
@@ -109,17 +121,13 @@ class ResumeRefineryOrchestrator:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, docs)
 
-        if skip_review:
-            persisted = ReviewBundle(truthfulness=reviews.truthfulness)
-        else:
-            persisted = reviews
-        self.store.save_reviews(session, persisted)
+        self.store.save_reviews(session, reviews)
 
         strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
         return OrchestrationResult(
             session=session,
             documents=docs,
-            reviews=persisted,
+            reviews=reviews,
             repair_passes=repair_passes,
             evidence_pack=context.evidence_pack,
             voice_style_guide=context.voice_style_guide,
@@ -176,16 +184,27 @@ class ResumeRefineryOrchestrator:
                 current_docs.set(key, regenerated)
 
         repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
-        reviews, repair_passes, exempted = self._verify_and_repair(
-            current_docs,
-            career,
-            voice,
-            job,
-            context,
-            feedback=feedback,
-            progress=progress,
-            on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
-        )
+        if skip_review:
+            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
+            try:
+                truth = self.verification_agent.review_truthfulness(current_docs, career, job)
+            except Exception as exc:
+                logging.warning("Truthfulness review failed (%s)", exc)
+                truth = None
+            reviews: ReviewBundle = ReviewBundle(truthfulness=truth)
+            repair_passes: list[RepairPassResult] = []
+            exempted = ExemptedPhrases()
+        else:
+            reviews, repair_passes, exempted = self._verify_and_repair(
+                current_docs,
+                career,
+                voice,
+                job,
+                context,
+                feedback=feedback,
+                progress=progress,
+                on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
+            )
         session = self.store.save_documents(
             session,
             current_docs,
@@ -199,17 +218,13 @@ class ResumeRefineryOrchestrator:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, current_docs)
 
-        if skip_review:
-            persisted = ReviewBundle(truthfulness=reviews.truthfulness)
-        else:
-            persisted = reviews
-        self.store.save_reviews(session, persisted)
+        self.store.save_reviews(session, reviews)
 
         strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
         return OrchestrationResult(
             session=session,
             documents=current_docs,
-            reviews=persisted,
+            reviews=reviews,
             repair_passes=repair_passes,
             evidence_pack=context.evidence_pack,
             voice_style_guide=context.voice_style_guide,
