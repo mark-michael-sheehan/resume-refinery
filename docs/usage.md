@@ -37,9 +37,11 @@ Include:
 
 See [examples/voice_profile.md](../examples/voice_profile.md) for a complete template.
 
-### 2. Career Profile (`career_profile.md`)
+### 2. Career Profile (`career_profile.md`) or Career Repository
 
-Your full professional history. Structured Markdown works best, but the format is flexible.
+Your full professional history. You have two options:
+
+**Option A: Markdown file** — Structured Markdown works best, but the format is flexible.
 
 Include:
 - Contact information
@@ -49,6 +51,12 @@ Include:
 - A **Key Points** section for anything you specifically want drawn upon
 
 See [examples/career_profile.md](../examples/career_profile.md) for a complete template.
+
+**Option B: Career Builder** — Use the guided web wizard at `/career` to build a
+structured career repository through directed questions. The wizard walks you through
+identity, roles, accomplishments (with follow-up probes), skills, STAR stories,
+career strategy, and voice profile. The result is stored as JSON and can be selected
+directly when creating a new session.
 
 ### 3. Job Description (`job_description.md`)
 
@@ -69,6 +77,10 @@ resume-refinery-web
 ```
 
 Then open `http://127.0.0.1:8765` in your browser.
+
+The home page includes links to **Browse Sessions** and **Career Builder**.
+Use the Career Builder (`/career`) to create a structured career repository through
+guided questions before generating documents.
 
 ### `new` — Start a new session
 
@@ -230,11 +242,12 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 | `RESUME_REFINERY_MAX_VOICE_PASSES` | `2` | Max passes for the voice-match loop. Each pass rates voice fidelity; if not `"strong"`, all docs are re-generated with voice feedback. |
 | `RESUME_REFINERY_MAX_AI_PASSES` | `2` | Max passes for the AI-detection loop. Each pass flags generic/AI-sounding phrases; flagged docs are re-generated with the quoted phrases as repair feedback. |
 
-### Session storage
+### Storage
 
 | Variable | Default | Description |
 |---|---|---|
 | `RESUME_REFINERY_SESSIONS_DIR` | `~/.resume_refinery/sessions` | Directory where sessions are persisted. Each session is a subdirectory containing input copies, versioned Markdown sources, DOCX exports, and review JSON files. |
+| `RESUME_REFINERY_CAREERS_DIR` | `~/.resume_refinery/careers` | Directory where career repositories are persisted. Each repository is a subdirectory containing a `career.json` file with the full `CareerRepository` model. |
 | `voice_review.json` | Voice-match review results |
 | `ai_review.json` | AI-detection review results |
 | `truth_review.json` | Strict claim-support verification results |

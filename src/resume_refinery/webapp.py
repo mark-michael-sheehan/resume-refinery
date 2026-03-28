@@ -17,10 +17,15 @@ from .parsers import (
     parse_voice_profile_content,
 )
 from .session import SessionStore
+from .career_wizard import router as career_router
+from .career_repo import CareerRepoStore
 
 app = FastAPI(title="Resume Refinery", version="0.1.0")
 store = SessionStore()
 orchestrator = ResumeRefineryOrchestrator(store=store)
+career_store = CareerRepoStore()
+
+app.include_router(career_router)
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -126,20 +131,32 @@ def _artifact_summary(result: OrchestrationResult) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def home() -> HTMLResponse:
-    body = """
+    # Build career repo dropdown options
+    repos = career_store.list_repos()
+    repo_options = '<option value="">— Upload files instead —</option>'
+    for r in repos:
+        name = html.escape(r.identity.name or r.repo_id)
+        repo_options += f'<option value="{html.escape(r.repo_id)}">{name}</option>'
+
+    body = f"""
 <div class=\"card\">
   <h1>Resume Refinery</h1>
   <p class=\"muted\">Local-only web app for tailored resume, cover letter, and interview focus points.</p>
-  <p><a href=\"/sessions\">Browse sessions</a></p>
+  <p><a href=\"/sessions\">Browse sessions</a> &middot; <a href=\"/career\">Career Builder</a></p>
 </div>
 <div class=\"card\">
   <h2>New Session</h2>
   <form method=\"post\" action=\"/sessions/new\" enctype=\"multipart/form-data\">
-    <label>Career Profile (.md or .txt)</label>
-    <input type=\"file\" name=\"career_profile\" required />
+    <label>Career Source</label>
+    <select name=\"career_repo_id\">
+      {repo_options}
+    </select>
 
-    <label>Voice Profile (.md or .txt)</label>
-    <input type=\"file\" name=\"voice_profile\" required />
+    <label>Career Profile (.md or .txt) — used when no career repo is selected</label>
+    <input type=\"file\" name=\"career_profile\" />
+
+    <label>Voice Profile (.md or .txt) — used when no career repo is selected</label>
+    <input type=\"file\" name=\"voice_profile\" />
 
     <label>Job Description (.md or .txt)</label>
     <input type=\"file\" name=\"job_description\" required />
@@ -156,21 +173,49 @@ def home() -> HTMLResponse:
 
 @app.post("/sessions/new", response_class=HTMLResponse)
 async def create_session(
-    career_profile: UploadFile,
-    voice_profile: UploadFile,
     job_description: UploadFile,
+    career_profile: Optional[UploadFile] = None,
+    voice_profile: Optional[UploadFile] = None,
+    career_repo_id: Optional[str] = Form(None),
     skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
 ) -> HTMLResponse:
     try:
-        career_text = (await career_profile.read()).decode("utf-8")
-        voice_text = (await voice_profile.read()).decode("utf-8")
         job_text = (await job_description.read()).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=400, detail=f"Input files must be UTF-8 text: {exc}")
 
-    career = parse_career_profile_content(career_text)
-    voice = parse_voice_profile_content(voice_text)
+    # Career + voice: from repo or from uploaded files
+    if career_repo_id:
+        try:
+            repo = career_store.get(career_repo_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=400, detail=f"Career repo not found: {career_repo_id}")
+        career = repo.to_career_profile()
+        voice = parse_voice_profile_content(repo.voice_raw) if repo.voice_raw.strip() else None
+        # Fall back to uploaded voice file if repo has no voice
+        if voice is None and voice_profile is not None:
+            try:
+                voice_text = (await voice_profile.read()).decode("utf-8")
+                voice = parse_voice_profile_content(voice_text)
+            except Exception:
+                pass
+        if voice is None:
+            voice = parse_voice_profile_content("")
+    else:
+        if career_profile is None or voice_profile is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Upload career and voice profile files, or select a career repository.",
+            )
+        try:
+            career_text = (await career_profile.read()).decode("utf-8")
+            voice_text = (await voice_profile.read()).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Input files must be UTF-8 text: {exc}")
+        career = parse_career_profile_content(career_text)
+        voice = parse_voice_profile_content(voice_text)
+
     job = parse_job_description_content(job_text)
 
     result = orchestrator.create_session_run(

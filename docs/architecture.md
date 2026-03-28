@@ -10,9 +10,10 @@ documents, review outputs, and source inputs.
 
 ```
 voice_profile.md + career_profile.md + job_description.md
+        (or CareerRepository via career_wizard.py)
             │
             ▼
-     parsers.py
+     parsers.py / CareerRepository.to_career_profile()
             │
             ▼
   ResumeRefineryOrchestrator
@@ -45,6 +46,24 @@ voice_profile.md + career_profile.md + job_description.md
 | `session.py` | Session CRUD, versioning, disk I/O |
 | `exporters.py` | Markdown → DOCX via python-docx |
 | `cli.py` | CLI commands calling orchestrator |
+| `career_repo.py` | Career repository CRUD, disk I/O for structured career data |
+| `career_wizard.py` | HTMX-powered guided elicitation wizard (FastAPI sub-router) |
+| `elicitation.py` | LLM-powered follow-up probe agent for career elicitation |
+
+## Career Repository Storage
+
+Career repositories live in `~/.resume_refinery/careers/` by default.
+Override with `RESUME_REFINERY_CAREERS_DIR` env var.
+
+```
+~/.resume_refinery/careers/
+└── jordan-lee/
+    └── career.json          ← Full structured career data (single JSON)
+```
+
+A `CareerRepository` can be flattened into a `CareerProfile` via
+`to_career_profile()`, making it a drop-in replacement for file-uploaded
+career profiles in the existing pipeline.
 
 ## Session Storage
 

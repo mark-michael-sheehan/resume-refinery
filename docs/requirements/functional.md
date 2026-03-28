@@ -43,6 +43,18 @@
 | FR-5.2 | A CLI interface is also available for headless/scripted use. |
 | FR-5.3 | The tool is pip-installable (`pip install -e .`). |
 
+## FR-7 Career Repository
+
+| ID | Requirement |
+|---|---|
+| FR-7.1 | The system provides a **Career Builder** — a guided, multi-phase web wizard that elicits structured career data (identity, roles, skills, STAR stories, strategy, voice). |
+| FR-7.2 | Career data is stored as a `CareerRepository` model persisted in `~/.resume_refinery/careers/<repo_id>/career.json`. Override with `RESUME_REFINERY_CAREERS_DIR`. |
+| FR-7.3 | A `CareerRepository` can be flattened into a `CareerProfile` (`to_career_profile()`) and used as a direct replacement for a file-uploaded career profile in session creation. |
+| FR-7.4 | The wizard uses HTMX for partial-page updates. No JavaScript build step is required. |
+| FR-7.5 | Each phase saves progress incrementally — the user can stop and resume at any point. |
+| FR-7.6 | An `ElicitationAgent` uses the LLM to analyse role answers and generate contextual follow-up probes. Falls back to static heuristic probes when the LLM is unavailable. The probe endpoint returns HTML fragments swapped into the page via HTMX. |
+| FR-7.7 | The session creation form in the web app allows selecting a saved career repository instead of uploading files. |
+
 ## FR-6 Reviewers
 
 | ID | Requirement |
