@@ -58,6 +58,13 @@ identity, roles, accomplishments (with follow-up probes), skills, STAR stories,
 career strategy, and voice profile. The result is stored as JSON and can be selected
 directly when creating a new session.
 
+**Option C: Import from Documents** — On the Career Builder page (`/career`), use
+the "Import from Documents" form to upload one or more files (PDF, DOCX, TXT, MD).
+An AI agent extracts structured career data (identity, roles, skills, education, etc.)
+from the combined document text in a single pass. The result is saved as a new career
+repository and you enter the wizard to review and refine the extracted data. This is
+the fastest way to get started if you already have a resume or CV on hand.
+
 ### 3. Job Description (`job_description.md`)
 
 The target role. Paste the full job description text. Include:

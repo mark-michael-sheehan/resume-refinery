@@ -10,11 +10,12 @@ import html
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .career_repo import CareerRepoStore
 from .elicitation import ElicitationAgent
+from .ingest_agent import IngestAgent, build_repo_from_parsed, parse_ingest_response
 from .models import (
     CareerIdentity,
     CareerMeta,
@@ -28,6 +29,7 @@ from .models import (
 router = APIRouter(prefix="/career", tags=["career"])
 career_store = CareerRepoStore()
 elicitation_agent = ElicitationAgent()
+ingest_agent = IngestAgent()
 
 _HTMX_CDN = "https://unpkg.com/htmx.org@2.0.4"
 
@@ -189,6 +191,20 @@ def career_index() -> HTMLResponse:
     <button type="submit">Begin</button>
   </form>
 </div>
+<div class="card">
+  <h2>Import from Documents</h2>
+  <p class="muted">Upload resumes, CVs, or LinkedIn exports (PDF, DOCX, TXT, MD).
+     An AI agent will extract your career data as a starting point.</p>
+  <form method="post" action="/career/ingest" enctype="multipart/form-data">
+    <label>Your full name</label>
+    <input type="text" name="name" required placeholder="e.g. Jordan Lee" />
+    <label>Documents</label>
+    <p class="hint">Select one or more files. All content will be combined for extraction.</p>
+    <input type="file" name="files" multiple required
+           accept=".pdf,.docx,.doc,.txt,.md" />
+    <button type="submit">Import &amp; Build Profile</button>
+  </form>
+</div>
 <p class="muted" style="margin-top:1rem"><a href="/">Back to Resume Refinery</a></p>
 """
     return _wizard_page("Career Builder", body)
@@ -197,6 +213,66 @@ def career_index() -> HTMLResponse:
 @router.post("/new")
 def career_create(name: str = Form(...)) -> RedirectResponse:
     repo = career_store.create(name.strip())
+    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
+
+
+@router.post("/ingest")
+async def career_ingest(
+    name: str = Form(...),
+    files: list[UploadFile] = File(...),
+) -> RedirectResponse:
+    """Upload documents and create a pre-filled career repository via LLM extraction."""
+    from .parsers import _read_file_content
+    from pathlib import Path
+    import tempfile
+
+    if not files or all(not f.filename for f in files):
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    # Read and combine text from all uploaded files
+    combined_parts: list[str] = []
+    allowed_extensions = {".pdf", ".docx", ".doc", ".txt", ".md"}
+
+    for upload in files:
+        if not upload.filename:
+            continue
+        ext = Path(upload.filename).suffix.lower()
+        if ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {ext}. Allowed: {', '.join(sorted(allowed_extensions))}",
+            )
+
+        content = await upload.read()
+        # Write to a temp file so _read_file_content can handle format detection
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+        try:
+            text = _read_file_content(tmp_path)
+            if text.strip():
+                combined_parts.append(f"--- {upload.filename} ---\n{text}")
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    if not combined_parts:
+        raise HTTPException(status_code=400, detail="No readable text found in uploaded files")
+
+    combined_text = "\n\n".join(combined_parts)
+
+    # Create the repo first
+    repo = career_store.create(name.strip())
+
+    # Run the ingest agent
+    try:
+        ingest_agent.ingest_to_repo(combined_text, repo)
+        # Override name from form (user-provided takes priority)
+        repo.identity.name = name.strip()
+    except Exception:
+        log.warning("Ingest agent failed, continuing with empty repo", exc_info=True)
+        repo.identity.name = name.strip()
+
+    career_store.save(repo)
     return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 

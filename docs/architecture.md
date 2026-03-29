@@ -49,6 +49,7 @@ voice_profile.md + career_profile.md + job_description.md
 | `career_repo.py` | Career repository CRUD, disk I/O for structured career data |
 | `career_wizard.py` | HTMX-powered guided elicitation wizard (FastAPI sub-router) |
 | `elicitation.py` | LLM-powered follow-up probe agent for career elicitation |
+| `ingest_agent.py` | LLM-powered document ingest — extracts structured career data from uploaded PDFs, DOCX, and text files |
 
 ## Career Repository Storage
 
@@ -64,6 +65,31 @@ Override with `RESUME_REFINERY_CAREERS_DIR` env var.
 A `CareerRepository` can be flattened into a `CareerProfile` via
 `to_career_profile()`, making it a drop-in replacement for file-uploaded
 career profiles in the existing pipeline.
+
+### Document Ingest
+
+The `IngestAgent` (in `ingest_agent.py`) accepts raw text extracted from
+uploaded documents (PDF, DOCX, TXT/MD) and uses a single LLM call to populate
+a `CareerRepository` with structured career data. The agent returns JSON
+conforming to the repository schema, parsed via `json-repair`. This provides
+a first-pass starting point that the user then reviews and refines through
+the career wizard.
+
+```
+Upload: resume.pdf + linkedin.txt
+         │
+         ▼
+    parsers._read_file_content()  (PDF, DOCX, TXT)
+         │
+         ▼
+    IngestAgent.ingest(combined_text)
+         │  ← single Ollama call, structured JSON output
+         ▼
+    CareerRepository (pre-filled)
+         │
+         ▼
+    Wizard Phase 1 (identity) for review
+```
 
 ## Session Storage
 

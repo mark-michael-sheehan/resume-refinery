@@ -21,7 +21,21 @@ def _read_file_content(path: Path) -> str:
             "If this file is stored in OneDrive, ensure it has been downloaded locally "
             "(right-click → 'Always keep on this device')."
         )
-    if path.suffix.lower() == ".docx":
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        import fitz  # PyMuPDF
+        try:
+            doc = fitz.open(str(path))
+        except Exception as exc:
+            raise ValueError(
+                f"Could not open '{path.name}' as a PDF: {exc}\n"
+                "If the file is a OneDrive cloud-only placeholder, download it first "
+                "(right-click → 'Always keep on this device')."
+            ) from exc
+        pages = [page.get_text() for page in doc]
+        doc.close()
+        return "\n".join(pages)
+    if suffix == ".docx":
         from docx import Document  # type: ignore[import-untyped]
         try:
             doc = Document(str(path))
