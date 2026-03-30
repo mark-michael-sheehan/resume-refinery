@@ -1,0 +1,2 @@
+1. Add agent that acts as hiring manager and gives honest feedback on likelihood for callback
+2. Add agent that assesses alignment of current skillset with job description before attempting to create documents to save time for poorly aligned jobs

@@ -705,10 +705,21 @@ def career_skills(repo_id: str) -> HTMLResponse:
 def _render_skills(repo: CareerRepository) -> HTMLResponse:
     skill_rows: list[str] = []
     for i, s in enumerate(repo.skills):
+        if s.evidence.strip():
+            preview = _esc(s.evidence[:50])
+            if len(s.evidence) > 50:
+                preview += "\u2026"
+            evidence_cell = (
+                f'<details><summary style="cursor:pointer;font-size:0.9rem">{preview}</summary>'
+                f'<p style="margin:0.4rem 0 0;white-space:pre-wrap;font-size:0.88rem">{_esc(s.evidence)}</p>'
+                f'</details>'
+            )
+        else:
+            evidence_cell = ""
         skill_rows.append(
             f"<tr><td>{_esc(s.name)}</td><td>{_esc(s.category)}</td>"
             f"<td>{_esc(s.proficiency)}</td><td>{_esc(s.years or '-')}</td>"
-            f"<td>{_esc(s.evidence[:60])}</td>"
+            f"<td>{evidence_cell}</td>"
             f'<td><form method="post" action="/career/{_esc(repo.repo_id)}/skills/{i}/delete" style="display:inline">'
             f'<button type="submit" class="btn btn-sm btn-danger">X</button></form></td></tr>'
         )
@@ -821,10 +832,27 @@ def _render_stories(repo: CareerRepository) -> HTMLResponse:
     story_cards: list[str] = []
     for i, s in enumerate(repo.stories):
         tags = ", ".join(s.tags) if s.tags else "no tags"
+        star_parts: list[str] = []
+        if s.situation:
+            star_parts.append(f'<div><strong style="color:var(--accent)">Situation:</strong> {_esc(s.situation)}</div>')
+        if s.task:
+            star_parts.append(f'<div><strong style="color:var(--accent)">Task:</strong> {_esc(s.task)}</div>')
+        if s.action:
+            star_parts.append(f'<div><strong style="color:var(--accent)">Action:</strong> {_esc(s.action)}</div>')
+        if s.result:
+            star_parts.append(f'<div><strong style="color:var(--accent)">Result:</strong> {_esc(s.result)}</div>')
+        if s.what_it_shows:
+            star_parts.append(f'<div><strong style="color:var(--accent)">Shows:</strong> {_esc(s.what_it_shows)}</div>')
+        star_html = (
+            f'<div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.3rem;'
+            f'font-size:0.92rem;line-height:1.45">{"\n".join(star_parts)}</div>'
+            if star_parts else '<p class="muted" style="font-size:0.9rem">No details entered yet.</p>'
+        )
         story_cards.append(f"""
 <div class="role-card">
   <strong>{_esc(s.title)}</strong> <span class="muted">({_esc(tags)})</span>
-  <div style="margin-top:0.4rem">
+  {star_html}
+  <div style="margin-top:0.5rem">
     <a href="/career/{_esc(repo.repo_id)}/stories/{i}/edit" class="btn btn-sm btn-secondary">Edit</a>
     <form method="post" action="/career/{_esc(repo.repo_id)}/stories/{i}/delete"
           style="display:inline" onsubmit="return confirm('Remove this story?')">
