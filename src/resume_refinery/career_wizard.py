@@ -115,6 +115,16 @@ def _wizard_page(title: str, body: str, repo: CareerRepository | None = None) ->
     th,td {{ border-bottom:1px solid var(--line); text-align:left; padding:0.45rem 0.5rem; }}
     .probe {{ background:var(--accent-light); border-left:3px solid var(--accent);
               padding:0.8rem 1rem; border-radius:0 8px 8px 0; margin:0.8rem 0; }}
+    .warning {{ background:#fff3cd; border-left:3px solid #ffc107;
+               padding:0.6rem 1rem; border-radius:0 8px 8px 0; margin:0.5rem 0;
+               color:#664d03; font-size:0.9rem; }}
+    .htmx-indicator {{ display:none; }}
+    .htmx-request .htmx-indicator,
+    .htmx-request.htmx-indicator {{ display:inline-block; }}
+    .spinner {{ display:inline-block; width:1em; height:1em;
+               border:2px solid var(--line); border-top-color:var(--accent);
+               border-radius:50%; animation:spin .6s linear infinite; }}
+    @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
     .actions {{ display:flex; gap:0.5rem; align-items:center; margin-top:1rem; }}
     .role-card {{ border:1px solid var(--line); border-radius:10px; padding:0.8rem 1rem;
                   margin-bottom:0.6rem; background:#fff; }}
@@ -268,6 +278,8 @@ async def career_ingest(
         ingest_agent.ingest_to_repo(combined_text, repo)
         # Override name from form (user-provided takes priority)
         repo.identity.name = name.strip()
+        # Advance phase past identity/roles since ingestion fills both
+        repo.current_phase = "role_deepdive"
     except Exception:
         log.warning("Ingest agent failed, continuing with empty repo", exc_info=True)
         repo.identity.name = name.strip()
@@ -637,7 +649,11 @@ def _render_role_deepdive(repo: CareerRepository) -> HTMLResponse:
 <button class="btn btn-secondary btn-sm"
         hx-post="/career/{_esc(repo.repo_id)}/role_deepdive/{idx}/probe"
         hx-target="#probe-area"
-        hx-swap="innerHTML">Get Follow-Up Questions</button>
+        hx-swap="innerHTML"
+        hx-indicator="#probe-loading">Get Follow-Up Questions</button>
+<span id="probe-loading" class="htmx-indicator">
+  <span class="spinner"></span> Generating questions&hellip;
+</span>
 
 <div class="card">
   <div class="actions">
@@ -1356,14 +1372,25 @@ def probe_role_deepdive(repo_id: str, role_idx: int) -> HTMLResponse:
         raise HTTPException(status_code=404, detail="Role not found")
 
     role = repo.roles[role_idx]
-    probes = elicitation_agent.probe_role(role)
+    result = elicitation_agent.probe_role(role)
 
-    if not probes:
-        return HTMLResponse('<div class="probe"><p>Looks good — your answers are detailed enough.</p></div>')
+    llm_notice = ""
+    if not result.llm_used:
+        llm_notice = (
+            '<p class="warning">⚠ LLM is unavailable — showing basic suggestions. '
+            "Start your Ollama server for smarter follow-up questions.</p>"
+        )
 
-    items = "".join(f"<li>{_esc(p)}</li>" for p in probes)
+    if not result.probes:
+        return HTMLResponse(
+            f'<div class="probe">{llm_notice}'
+            "<p>Looks good — your answers are detailed enough.</p></div>"
+        )
+
+    items = "".join(f"<li>{_esc(p)}</li>" for p in result.probes)
     return HTMLResponse(f"""
 <div class="probe">
+  {llm_notice}
   <strong>Consider strengthening your answers:</strong>
   <ul>{items}</ul>
 </div>

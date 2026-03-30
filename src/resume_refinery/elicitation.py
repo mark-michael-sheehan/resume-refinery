@@ -8,11 +8,20 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass, field
 
 import ollama
 from dotenv import load_dotenv
 
 from .models import RoleEntry
+
+
+@dataclass
+class ProbeResult:
+    """Result from a probe_role call, indicating source and probes."""
+
+    probes: list[str] = field(default_factory=list)
+    llm_used: bool = True
 
 load_dotenv()
 
@@ -75,7 +84,7 @@ class ElicitationAgent:
     def __init__(self) -> None:
         self.client = ollama.Client(host=BASE_URL)
 
-    def probe_role(self, role: RoleEntry) -> list[str]:
+    def probe_role(self, role: RoleEntry) -> ProbeResult:
         """Return follow-up probes for a role, or empty list if answers are solid.
 
         Falls back to static probes if the LLM call fails.
@@ -100,12 +109,12 @@ class ElicitationAgent:
             raw = _strip_think_tags(response.message.content or "")
         except Exception:
             log.warning("ElicitationAgent LLM call failed, falling back to static probes", exc_info=True)
-            return _static_probes(role)
+            return ProbeResult(probes=_static_probes(role), llm_used=False)
 
         if not raw or "LOOKS_GOOD" in raw:
-            return []
+            return ProbeResult(probes=[], llm_used=True)
 
-        return _parse_probes(raw)
+        return ProbeResult(probes=_parse_probes(raw), llm_used=True)
 
 
 def _parse_probes(text: str) -> list[str]:

@@ -204,11 +204,11 @@ def test_save_voice(client, repo_id):
 def test_probe_endpoint(client, repo_id, monkeypatch):
     # Mock the elicitation agent so we don't need a running LLM
     from resume_refinery import career_wizard
-    from resume_refinery.elicitation import _static_probes
+    from resume_refinery.elicitation import _static_probes, ProbeResult
     from unittest.mock import MagicMock
 
     mock_agent = MagicMock()
-    mock_agent.probe_role = _static_probes
+    mock_agent.probe_role = lambda role: ProbeResult(probes=_static_probes(role), llm_used=False)
     monkeypatch.setattr(career_wizard, "elicitation_agent", mock_agent)
 
     # Add a role with thin data
@@ -228,6 +228,8 @@ def test_probe_endpoint(client, repo_id, monkeypatch):
     assert resp.status_code == 200
     # Should get follow-up probes since data is thin
     assert "quantify" in resp.text.lower() or "detail" in resp.text.lower()
+    # Should show LLM unavailable warning since mock returns llm_used=False
+    assert "LLM is unavailable" in resp.text
 
 
 def test_review_page(client, repo_id):
@@ -279,3 +281,29 @@ def test_htmx_probe_button_present(client, repo_id):
     resp = client.get(f"/career/{repo_id}")
     assert "hx-post" in resp.text
     assert "probe-area" in resp.text
+
+
+def test_ingest_advances_to_role_deepdive(client, monkeypatch):
+    """After document ingestion, phase should advance to role_deepdive."""
+    from resume_refinery import career_wizard
+    from unittest.mock import MagicMock
+
+    mock_ingest = MagicMock()
+    # Simulate ingest populating a role
+    def fake_ingest(text, repo):
+        from resume_refinery.models import RoleEntry
+        repo.roles.append(RoleEntry(company="Acme", title="Engineer",
+                                     start_date="2020", end_date="Present"))
+    mock_ingest.ingest_to_repo = fake_ingest
+    monkeypatch.setattr(career_wizard, "ingest_agent", mock_ingest)
+
+    resp = client.post("/career/ingest", data={"name": "Ingest User"},
+                       files=[("files", ("resume.txt", b"Worked at Acme as Engineer", "text/plain"))],
+                       follow_redirects=False)
+    assert resp.status_code == 303
+    location = resp.headers["location"]
+    repo_id = location.split("/career/")[1]
+
+    # Load the repo and verify phase
+    repo = career_wizard.career_store.get(repo_id)
+    assert repo.current_phase == "role_deepdive"

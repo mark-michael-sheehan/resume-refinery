@@ -131,9 +131,10 @@ def test_probe_role_with_mocked_llm(monkeypatch):
     )
 
     role = RoleEntry(company="Acme", title="Eng", start_date="2020", accomplishments="Did stuff")
-    probes = agent.probe_role(role)
-    assert len(probes) == 2
-    assert "quantify" in probes[0].lower()
+    result = agent.probe_role(role)
+    assert result.llm_used is True
+    assert len(result.probes) == 2
+    assert "quantify" in result.probes[0].lower()
 
 
 def test_probe_role_looks_good(monkeypatch):
@@ -147,8 +148,9 @@ def test_probe_role_looks_good(monkeypatch):
         company="Acme", title="Eng", start_date="2020",
         accomplishments="Cut latency by 50%, saving $200K.",
     )
-    probes = agent.probe_role(role)
-    assert probes == []
+    result = agent.probe_role(role)
+    assert result.llm_used is True
+    assert result.probes == []
 
 
 def test_probe_role_llm_failure_falls_back(monkeypatch):
@@ -160,9 +162,10 @@ def test_probe_role_llm_failure_falls_back(monkeypatch):
     monkeypatch.setattr(agent.client, "chat", _fail)
 
     role = RoleEntry(company="Acme", title="Eng", start_date="2020", accomplishments="Did stuff")
-    probes = agent.probe_role(role)
-    # Should get static fallback probes
-    assert len(probes) >= 1
+    result = agent.probe_role(role)
+    # Should get static fallback probes and indicate LLM was not used
+    assert result.llm_used is False
+    assert len(result.probes) >= 1
 
 
 def test_probe_role_with_think_tags(monkeypatch):
@@ -175,6 +178,7 @@ def test_probe_role_with_think_tags(monkeypatch):
     )
 
     role = RoleEntry(company="Acme", title="Eng", start_date="2020", accomplishments="Did stuff")
-    probes = agent.probe_role(role)
-    assert len(probes) == 2
-    assert "think" not in probes[0].lower()
+    result = agent.probe_role(role)
+    assert result.llm_used is True
+    assert len(result.probes) == 2
+    assert "think" not in result.probes[0].lower()
