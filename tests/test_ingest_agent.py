@@ -10,12 +10,16 @@ from resume_refinery.ingest_agent import (
     consolidate_repo,
     parse_ingest_response,
     _coerce_str,
+    _consolidation_call,
     _extract_json,
+    _has_duplicate_skills,
+    _normalize_skill_name,
     _repo_to_consolidation_json,
     _strip_think_tags,
     INGEST_SYSTEM_PROMPT,
     STORY_COMPOSITION_PROMPT,
-    CONSOLIDATION_SYSTEM_PROMPT,
+    CONSOLIDATION_PASS1_PROMPT,
+    CONSOLIDATION_PASS2_PROMPT,
 )
 from resume_refinery.models import CareerRepository, RoleEntry, SkillEntry
 
@@ -396,8 +400,8 @@ def test_story_composition_prompt_exists():
 # Unit tests — consolidate_repo (LLM-based, mocked)
 # ---------------------------------------------------------------------------
 
-# Sample consolidated output the LLM would return when merging two duplicate roles
-SAMPLE_CONSOLIDATED_JSON = json.dumps({
+# Sample consolidated output — pass 1 (identity + roles)
+SAMPLE_CONSOLIDATED_PASS1_JSON = json.dumps({
     "identity": {
         "name": "Jordan Lee",
         "email": "jordan@example.com",
@@ -425,6 +429,10 @@ SAMPLE_CONSOLIDATED_JSON = json.dumps({
             "confidence_notes": "merged from 2 documents",
         },
     ],
+})
+
+# Sample consolidated output — pass 2 (skills + education + meta)
+SAMPLE_CONSOLIDATED_PASS2_JSON = json.dumps({
     "skills": [
         {"name": "Python", "category": "language", "proficiency": "expert",
          "years": "5", "evidence": "Primary language at DataFlow"},
@@ -445,17 +453,20 @@ SAMPLE_CONSOLIDATED_JSON = json.dumps({
 class _FakeClient:
     """Fake ollama.Client for consolidation tests."""
 
-    def __init__(self, response_json: str):
-        self._response = response_json
+    def __init__(self, responses: list[str] | str):
+        if isinstance(responses, str):
+            responses = [responses]
+        self._responses = responses
         self.call_count = 0
 
     def chat(self, **kw):
+        idx = min(self.call_count, len(self._responses) - 1)
         self.call_count += 1
-        return _FakeResponse(self._response)
+        return _FakeResponse(self._responses[idx])
 
 
 def test_consolidate_merges_via_llm():
-    """consolidate_repo should call the LLM and rebuild the repo from its output."""
+    """consolidate_repo should call the LLM twice and rebuild the repo from both passes."""
     repo = _make_repo()
     repo.roles = [
         RoleEntry(
@@ -471,14 +482,22 @@ def test_consolidate_merges_via_llm():
             technologies="Python, Kubernetes",
         ),
     ]
-    fake_client = _FakeClient(SAMPLE_CONSOLIDATED_JSON)
+    fake_client = _FakeClient([
+        SAMPLE_CONSOLIDATED_PASS1_JSON,
+        SAMPLE_CONSOLIDATED_PASS2_JSON,
+    ])
     result = consolidate_repo(repo, client=fake_client)
-    assert fake_client.call_count == 1
+    assert fake_client.call_count == 2
+    # Pass 1 results
     assert len(result.roles) == 1
     assert "Led backend migration" in result.roles[0].accomplishments
     assert "$180K" in result.roles[0].accomplishments
     assert "Kafka" in result.roles[0].technologies
     assert "Kubernetes" in result.roles[0].technologies
+    # Pass 2 results
+    assert len(result.skills) == 1
+    assert result.skills[0].name == "Python"
+    assert "UC Berkeley" in result.education
 
 
 def test_consolidate_skips_when_nothing_to_merge():
@@ -506,33 +525,60 @@ def test_consolidate_empty_repo():
 
 
 def test_consolidate_falls_back_on_llm_failure():
-    """consolidate_repo should return original repo if LLM fails."""
+    """consolidate_repo should return original data if both LLM passes fail."""
     repo = _make_repo()
     repo.roles = [
         RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
         RoleEntry(company="B", title="SRE", start_date="2021", end_date="2022"),
     ]
+    repo.skills = [SkillEntry(name="Python", category="language")]
 
     class _FailClient:
+        call_count = 0
         def chat(self, **kw):
+            self.call_count += 1
             raise RuntimeError("LLM down")
 
-    result = consolidate_repo(repo, client=_FailClient())
-    # Original repo preserved
+    fail_client = _FailClient()
+    result = consolidate_repo(repo, client=fail_client)
+    # Both passes called, both fell back to originals
+    assert fail_client.call_count == 2
     assert len(result.roles) == 2
     assert result.roles[0].company == "A"
+    assert len(result.skills) == 1
 
 
 def test_consolidate_falls_back_on_empty_response():
-    """consolidate_repo should return original repo if LLM returns empty."""
+    """consolidate_repo should return original data if LLM returns empty."""
     repo = _make_repo()
     repo.roles = [
         RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
         RoleEntry(company="B", title="SRE", start_date="2021", end_date="2022"),
     ]
-    fake_client = _FakeClient("")
+    fake_client = _FakeClient(["", ""])
     result = consolidate_repo(repo, client=fake_client)
     assert len(result.roles) == 2
+
+
+def test_consolidate_pass1_fails_pass2_succeeds():
+    """If pass 1 fails, roles fall back to original; pass 2 skills still consolidated."""
+    repo = _make_repo()
+    repo.roles = [
+        RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
+        RoleEntry(company="B", title="SRE", start_date="2021", end_date="2022"),
+    ]
+    repo.skills = [
+        SkillEntry(name="Python", category="language", proficiency="expert"),
+        SkillEntry(name="python", category="other", proficiency="working"),
+    ]
+    # Pass 1 returns empty (fails), pass 2 returns consolidated skills
+    fake_client = _FakeClient(["", SAMPLE_CONSOLIDATED_PASS2_JSON])
+    result = consolidate_repo(repo, client=fake_client)
+    # Roles fell back to original (2 separate roles)
+    assert len(result.roles) == 2
+    # Skills came from pass 2 (consolidated)
+    assert len(result.skills) == 1
+    assert result.skills[0].name == "Python"
 
 
 def test_consolidate_preserves_repo_metadata():
@@ -544,7 +590,10 @@ def test_consolidate_preserves_repo_metadata():
         RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
         RoleEntry(company="B", title="SRE", start_date="2021", end_date="2022"),
     ]
-    fake_client = _FakeClient(SAMPLE_CONSOLIDATED_JSON)
+    fake_client = _FakeClient([
+        SAMPLE_CONSOLIDATED_PASS1_JSON,
+        SAMPLE_CONSOLIDATED_PASS2_JSON,
+    ])
     result = consolidate_repo(repo, client=fake_client)
     assert result.repo_id == "test-repo"
     assert result.voice_raw == "my voice profile"
@@ -564,13 +613,181 @@ def test_repo_to_consolidation_json():
     assert result["roles"][0]["company"] == "Test"
 
 
-def test_consolidation_prompt_has_key_instructions():
-    """Verify the consolidation prompt includes merge guidance."""
-    assert "ROLES" in CONSOLIDATION_SYSTEM_PROMPT
-    assert "SKILLS" in CONSOLIDATION_SYSTEM_PROMPT
-    assert "merge" in CONSOLIDATION_SYSTEM_PROMPT.lower()
-    assert "deduplicate" in CONSOLIDATION_SYSTEM_PROMPT.lower()
-    assert "extraction_confidence" in CONSOLIDATION_SYSTEM_PROMPT
+def test_repo_to_consolidation_json_filtered_keys():
+    """_repo_to_consolidation_json with keys param should only include those keys."""
+    repo = _make_repo()
+    repo.roles = [RoleEntry(company="Test", title="Eng", start_date="2020", end_date="2021")]
+    repo.skills = [SkillEntry(name="Python")]
+    result = json.loads(_repo_to_consolidation_json(repo, keys=["identity", "roles"]))
+    assert "identity" in result
+    assert "roles" in result
+    assert "skills" not in result
+    assert "meta" not in result
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _normalize_skill_name
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("Python", "python"),
+    ("React.js", "reactjs"),
+    ("React JS", "reactjs"),
+    ("ReactJS", "reactjs"),
+    ("Vue.js", "vuejs"),
+    ("  Kubernetes  ", "kubernetes"),
+    ("CI/CD", "ci/cd"),
+    ("Node.js", "nodejs"),
+])
+def test_normalize_skill_name(raw, expected):
+    assert _normalize_skill_name(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _has_duplicate_skills
+# ---------------------------------------------------------------------------
+
+
+def test_has_duplicate_skills_exact_match():
+    """Exact normalised-name match should be detected."""
+    skills = [
+        SkillEntry(name="Python"),
+        SkillEntry(name="Go"),
+        SkillEntry(name="python"),
+    ]
+    assert _has_duplicate_skills(skills) is True
+
+
+def test_has_duplicate_skills_no_dupes():
+    """Distinct skills should not trigger."""
+    skills = [
+        SkillEntry(name="Python"),
+        SkillEntry(name="Go"),
+        SkillEntry(name="Kubernetes"),
+    ]
+    assert _has_duplicate_skills(skills) is False
+
+
+def test_has_duplicate_skills_empty():
+    assert _has_duplicate_skills([]) is False
+
+
+def test_has_duplicate_skills_fuzzy_match():
+    """Fuzzy near-miss (e.g. 'React.js' vs 'ReactJS') should be caught."""
+    skills = [
+        SkillEntry(name="React.js"),
+        SkillEntry(name="ReactJS"),
+    ]
+    # These normalise to the same string, so caught by exact match
+    assert _has_duplicate_skills(skills) is True
+
+
+def test_has_duplicate_skills_fuzzy_close_but_different():
+    """Genuinely different skills with similar names should not match."""
+    skills = [
+        SkillEntry(name="Java"),
+        SkillEntry(name="JavaScript"),
+    ]
+    assert _has_duplicate_skills(skills) is False
+
+
+def test_has_duplicate_skills_fuzzy_threshold():
+    """Names that are very close but not identical should trigger above threshold."""
+    skills = [
+        SkillEntry(name="Machine Learning"),
+        SkillEntry(name="Machine  Learning"),  # extra space
+    ]
+    # Normalisation collapses spaces, so these become identical
+    assert _has_duplicate_skills(skills) is True
+
+
+# ---------------------------------------------------------------------------
+# Integration test — consolidate_repo retries on duplicate skills
+# ---------------------------------------------------------------------------
+
+
+def test_consolidate_retries_when_dupes_remain():
+    """If pass 2 returns duplicate skills, consolidate_repo retries the LLM."""
+    repo = _make_repo()
+    repo.roles = [
+        RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
+        RoleEntry(company="B", title="SRE", start_date="2021", end_date="2022"),
+    ]
+    repo.skills = [
+        SkillEntry(name="Python", category="language", proficiency="expert"),
+        SkillEntry(name="python", category="other", proficiency="working"),
+    ]
+
+    # Pass 2 returns duplicates the first time, clean the second time
+    pass2_with_dupes = json.dumps({
+        "skills": [
+            {"name": "Python", "category": "language", "proficiency": "expert",
+             "years": "5", "evidence": "Primary language"},
+            {"name": "python", "category": "language", "proficiency": "working",
+             "years": "3", "evidence": "Used in scripts"},
+        ],
+        "education": "B.S. CS",
+        "certifications": "",
+        "domain_knowledge": "",
+        "meta": {"career_arc": "", "differentiators": "",
+                 "themes_to_emphasize": [], "anti_claims": [], "known_gaps": []},
+    })
+    pass2_clean = json.dumps({
+        "skills": [
+            {"name": "Python", "category": "language", "proficiency": "expert",
+             "years": "5", "evidence": "Primary language. Used in scripts."},
+        ],
+        "education": "B.S. CS",
+        "certifications": "",
+        "domain_knowledge": "",
+        "meta": {"career_arc": "", "differentiators": "",
+                 "themes_to_emphasize": [], "anti_claims": [], "known_gaps": []},
+    })
+
+    fake_client = _FakeClient([
+        SAMPLE_CONSOLIDATED_PASS1_JSON,  # pass 1
+        pass2_with_dupes,                # pass 2 — still has dupes
+        pass2_clean,                     # retry pass 2 — deduped
+    ])
+    result = consolidate_repo(repo, client=fake_client)
+    assert fake_client.call_count == 3  # 2 initial passes + 1 retry
+    assert len(result.skills) == 1
+    assert result.skills[0].name == "Python"
+
+
+def test_consolidate_no_retry_when_skills_clean():
+    """No retry when pass 2 already returns deduplicated skills."""
+    repo = _make_repo()
+    repo.roles = [
+        RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
+        RoleEntry(company="B", title="SRE", start_date="2021", end_date="2022"),
+    ]
+    repo.skills = [
+        SkillEntry(name="Python", category="language"),
+        SkillEntry(name="Go", category="language"),
+    ]
+    fake_client = _FakeClient([
+        SAMPLE_CONSOLIDATED_PASS1_JSON,
+        SAMPLE_CONSOLIDATED_PASS2_JSON,  # returns 1 skill, no dupes
+    ])
+    result = consolidate_repo(repo, client=fake_client)
+    assert fake_client.call_count == 2  # no retry
+
+
+def test_consolidation_prompts_have_key_instructions():
+    """Verify the consolidation prompts include appropriate merge guidance."""
+    # Pass 1 — identity + roles
+    assert "IDENTITY" in CONSOLIDATION_PASS1_PROMPT
+    assert "ROLES" in CONSOLIDATION_PASS1_PROMPT
+    assert "merge" in CONSOLIDATION_PASS1_PROMPT.lower()
+    assert "extraction_confidence" in CONSOLIDATION_PASS1_PROMPT
+    assert "SKILLS" not in CONSOLIDATION_PASS1_PROMPT
+    # Pass 2 — skills + meta
+    assert "SKILLS" in CONSOLIDATION_PASS2_PROMPT
+    assert "META" in CONSOLIDATION_PASS2_PROMPT
+    assert "deduplicate" in CONSOLIDATION_PASS2_PROMPT.lower()
+    assert "ROLES" not in CONSOLIDATION_PASS2_PROMPT
 
 
 def test_build_repo_identity_first_nonempty_wins():

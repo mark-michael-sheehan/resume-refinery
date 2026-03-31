@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import html
 import logging
-from typing import Optional
+from typing import Iterator, Optional
 
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from .career_repo import CareerRepoStore
 from .elicitation import ElicitationAgent
@@ -226,16 +226,51 @@ def career_create(name: str = Form(...)) -> RedirectResponse:
     return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 
+_INGEST_PROGRESS_HEAD = (
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"/>'
+    '<meta name="viewport" content="width=device-width,initial-scale=1"/>'
+    "<title>Importing\u2026 \u2014 Career Builder</title>"
+    "<style>"
+    ":root{--bg:#f7f5ef;--card:#fffdf8;--ink:#1f2421;"
+    "--muted:#55605a;--accent:#0f7b6c;--line:#d8d4c8;--accent-light:#e8f5f1}"
+    "body{margin:0;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;"
+    "background:radial-gradient(circle at 0% 0%,#fffaf0 0%,var(--bg) 40%,#efeae0 100%);"
+    "color:var(--ink)}"
+    ".wrap{max-width:820px;margin:2rem auto;padding:0 1rem}"
+    ".card{background:var(--card);border:1px solid var(--line);border-radius:14px;"
+    "padding:1.25rem 1.5rem;box-shadow:0 8px 30px rgba(20,35,30,.06);margin-bottom:1rem}"
+    "h2{margin:.2rem 0 .6rem}"
+    "a{color:var(--accent);text-decoration:none}"
+    ".muted{color:var(--muted)}"
+    "#progress-log p{margin:.4rem 0;padding:.3rem 0}"
+    "#progress-log p:last-child::after{"
+    "content:'';display:inline-block;width:.85em;height:.85em;"
+    "border:2px solid var(--line);border-top-color:var(--accent);"
+    "border-radius:50%;animation:spin .6s linear infinite;"
+    "margin-left:.6em;vertical-align:middle}"
+    "#progress-log.done p:last-child::after{display:none}"
+    "@keyframes spin{to{transform:rotate(360deg)}}"
+    ".step-ok{color:var(--accent)}.step-ok::before{content:'\u2713 ';font-weight:bold}"
+    ".step-fail{color:#b00020}.step-fail::before{content:'\u2717 ';font-weight:bold}"
+    "</style></head><body><div class='wrap'>"
+    "<p style='margin-bottom:.3rem'><a href='/career'>&larr; Career Builder</a></p>"
+    "<div class='card'><h2>Importing Career Data</h2>"
+    "<div id='progress-log'>"
+)
+
+# Padding to ensure browsers start rendering before the first LLM call
+_BROWSER_FLUSH_PAD = "<!-- " + " " * 1024 + " -->\n"
+
+
 @router.post("/ingest")
 async def career_ingest(
     name: str = Form(...),
     files: list[UploadFile] = File(...),
-) -> RedirectResponse:
+) -> StreamingResponse:
     """Upload documents and create a pre-filled career repository via LLM extraction.
 
-    Each document gets its own LLM extraction call (full context window per file).
-    After all documents are processed, roles and skills are consolidated and
-    STAR stories are composed from the merged accomplishments.
+    Returns a streamed HTML page that shows real-time progress as each LLM step
+    completes, then auto-redirects to the finished career profile.
     """
     from .parsers import _read_file_content
     from pathlib import Path
@@ -244,7 +279,7 @@ async def career_ingest(
     if not files or all(not f.filename for f in files):
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    # Read text from all uploaded files individually
+    # Read text from all uploaded files individually (async part, before streaming)
     document_texts: list[tuple[str, str]] = []  # (filename, text)
     allowed_extensions = {".pdf", ".docx", ".doc", ".txt", ".md"}
 
@@ -276,36 +311,61 @@ async def career_ingest(
     # Create the repo first
     repo = career_store.create(name.strip())
 
-    # Per-document extraction — one LLM call per file
-    extraction_succeeded = False
-    for filename, text in document_texts:
-        try:
-            ingest_agent.ingest_to_repo(text, repo)
-            extraction_succeeded = True
-        except Exception:
-            log.warning("Ingest failed for %s, skipping", filename, exc_info=True)
+    def _progress() -> Iterator[str]:
+        """Sync generator: yields HTML chunks as each pipeline step completes."""
+        nonlocal repo
+        yield _INGEST_PROGRESS_HEAD + "\n" + _BROWSER_FLUSH_PAD
 
-    if extraction_succeeded:
-        # Consolidate duplicates across documents via LLM
-        try:
-            repo = consolidate_repo(repo, client=ingest_agent.client)
-        except Exception:
-            log.warning("Consolidation failed, continuing with unmerged repo", exc_info=True)
-        # Compose STAR stories from merged accomplishments
-        try:
-            ingest_agent.compose_stories(repo)
-        except Exception:
-            log.warning("Story composition failed, continuing without stories", exc_info=True)
-        # Override name from form (user-provided takes priority)
-        repo.identity.name = name.strip()
-        # Advance phase past identity/roles since ingestion fills both
-        repo.current_phase = "role_deepdive"
-    else:
-        log.warning("All document extractions failed, continuing with empty repo")
-        repo.identity.name = name.strip()
+        total = len(document_texts)
 
-    career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
+        # Per-document extraction — one LLM call per file
+        extraction_succeeded = False
+        for i, (filename, text) in enumerate(document_texts, 1):
+            yield f"<p>Extracting from <strong>{_esc(filename)}</strong> ({i}/{total})\u2026</p>\n"
+            try:
+                ingest_agent.ingest_to_repo(text, repo)
+                extraction_succeeded = True
+            except Exception:
+                log.warning("Ingest failed for %s, skipping", filename, exc_info=True)
+                yield f"<p class='step-fail'>Failed to extract {_esc(filename)}</p>\n"
+
+        if extraction_succeeded:
+            # Consolidate duplicates across documents via LLM
+            yield "<p>Consolidating career data\u2026</p>\n"
+            try:
+                repo = consolidate_repo(repo, client=ingest_agent.client)
+                yield "<p class='step-ok'>Career data consolidated</p>\n"
+            except Exception:
+                log.warning("Consolidation failed, continuing with unmerged repo", exc_info=True)
+                yield "<p class='step-fail'>Consolidation failed, continuing with extracted data</p>\n"
+            # Compose STAR stories from merged accomplishments (per-role)
+            yield "<p>Composing behavioral stories\u2026</p>\n"
+            try:
+                ingest_agent.compose_stories(repo)
+                yield f"<p class='step-ok'>Composed {len(repo.stories)} stories across {len(repo.roles)} roles</p>\n"
+            except Exception:
+                log.warning("Story composition failed, continuing without stories", exc_info=True)
+                yield "<p class='step-fail'>Story composition failed</p>\n"
+            # Override name from form (user-provided takes priority)
+            repo.identity.name = name.strip()
+            # Advance phase past identity/roles since ingestion fills both
+            repo.current_phase = "role_deepdive"
+        else:
+            log.warning("All document extractions failed, continuing with empty repo")
+            repo.identity.name = name.strip()
+
+        career_store.save(repo)
+
+        # Mark progress complete and auto-redirect
+        redirect_url = f"/career/{repo.repo_id}"
+        yield (
+            "</div>"  # close #progress-log
+            f"<p class='step-ok' style='margin-top:.8rem;font-weight:600'>Done! Redirecting\u2026</p>"
+            f"<script>setTimeout(function(){{window.location.href='{redirect_url}';}},1200);</script>"
+            "</div></div></body></html>"
+        )
+
+    return StreamingResponse(_progress(), media_type="text/html")
 
 
 # ---------------------------------------------------------------------------

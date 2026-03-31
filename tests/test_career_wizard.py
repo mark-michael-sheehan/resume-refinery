@@ -287,6 +287,7 @@ def test_ingest_advances_to_role_deepdive(client, monkeypatch):
     """After document ingestion, phase should advance to role_deepdive."""
     from resume_refinery import career_wizard
     from unittest.mock import MagicMock
+    import re
 
     mock_ingest = MagicMock()
     # Simulate ingest populating a role
@@ -298,11 +299,12 @@ def test_ingest_advances_to_role_deepdive(client, monkeypatch):
     monkeypatch.setattr(career_wizard, "ingest_agent", mock_ingest)
 
     resp = client.post("/career/ingest", data={"name": "Ingest User"},
-                       files=[("files", ("resume.txt", b"Worked at Acme as Engineer", "text/plain"))],
-                       follow_redirects=False)
-    assert resp.status_code == 303
-    location = resp.headers["location"]
-    repo_id = location.split("/career/")[1]
+                       files=[("files", ("resume.txt", b"Worked at Acme as Engineer", "text/plain"))])
+    assert resp.status_code == 200
+    # Streaming progress page embeds a JS redirect to the new profile
+    match = re.search(r"window\.location\.href='(/career/[^']+)'", resp.text)
+    assert match, "Expected JS redirect in progress page"
+    repo_id = match.group(1).split("/career/")[1]
 
     # Load the repo and verify phase
     repo = career_wizard.career_store.get(repo_id)

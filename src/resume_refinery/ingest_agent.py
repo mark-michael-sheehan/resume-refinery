@@ -2,12 +2,14 @@
 
 Given raw text extracted from one or more documents (PDF, DOCX, TXT), the
 agent uses one LLM call *per document* to populate a CareerRepository.
-After all documents are ingested, an LLM consolidation step merges duplicate
-roles and skills, and a STAR composition pass generates behavioural stories
-from the merged accomplishments.
+After all documents are ingested, a two-pass LLM consolidation step merges
+duplicate roles and skills (Pass 1: identity + roles, Pass 2: skills + meta),
+and a per-role STAR composition pass generates behavioural stories from each
+role's accomplishments individually so every role gets the full output-token
+budget.
 
 Pipeline:
-    Per-document extraction  →  consolidate_repo()  →  compose_stories()
+    Per-document extraction  →  consolidate_repo() (2 passes)  →  compose_stories() (per role)
 """
 
 from __future__ import annotations
@@ -144,8 +146,12 @@ For each story, return a JSON object with these fields:
 }
 
 Rules:
-- Only create stories where the source material provides concrete evidence for \
-at least 2 of the 4 STAR components (situation, task, action, result).
+- Create a story for EVERY distinct accomplishment, project, or initiative that \
+has enough detail for at least 2 of the 4 STAR components (situation, task, action, \
+result). Err on the side of creating MORE stories rather than fewer — a single role \
+may yield 3-10+ stories if the accomplishments are rich.
+- Use the company context and team context to fill in the Situation when the \
+accomplishment text alone doesn't spell it out explicitly.
 - Ground every statement in the career data provided. Do NOT invent details.
 - Prefer stories with quantified results (metrics, dollar amounts, percentages).
 - A single accomplishment may become one story. Multi-role accomplishments \
@@ -158,15 +164,19 @@ at least 2 of the 4 STAR components (situation, task, action, result).
 # Consolidation prompt — merge duplicates across documents
 # ---------------------------------------------------------------------------
 
-CONSOLIDATION_SYSTEM_PROMPT = """\
+CONSOLIDATION_PASS1_PROMPT = """\
 You are an expert career data consolidator. You are given structured career \
 data that was extracted from MULTIPLE documents about the SAME person \
 (e.g. a resume, multiple annual performance reviews, a LinkedIn export). \
 Because each document was processed independently, the data contains \
 duplicate and overlapping entries that must be merged.
 
-Your job is to produce a single, clean, consolidated JSON object with \
-the same schema as the input, following these rules:
+Your job is to produce a single, clean, consolidated JSON object containing \
+ONLY the "identity" and "roles" keys, following these rules:
+
+IDENTITY:
+- Produce one identity block using the most complete information available \
+across all sources. Prefer non-empty values.
 
 ROLES:
 - If the same role appears multiple times (same company and title, with \
@@ -180,16 +190,33 @@ the merged entry should be RICHER than any single source.
 as separate entries even if dates overlap (the person may have held \
 multiple jobs simultaneously).
 
+CONFIDENCE:
+- For each merged role, set extraction_confidence to the LOWEST confidence \
+from the source entries (most conservative).
+- Update confidence_notes to reflect the merge.
+
+Return a JSON object with exactly two keys: "identity" and "roles". \
+Use the EXACT same field schema as the input. \
+Respond with ONLY the JSON object. No explanation, no markdown fences.
+"""
+
+CONSOLIDATION_PASS2_PROMPT = """\
+You are an expert career data consolidator. You are given structured career \
+data that was extracted from MULTIPLE documents about the SAME person \
+(e.g. a resume, multiple annual performance reviews, a LinkedIn export). \
+Because each document was processed independently, the data contains \
+duplicate and overlapping entries that must be merged.
+
+Your job is to produce a single, clean, consolidated JSON object containing \
+ONLY the "skills", "education", "certifications", "domain_knowledge", and \
+"meta" keys, following these rules:
+
 SKILLS:
 - Deduplicate skills by name (case-insensitive). When merging duplicates:
   - Keep the highest proficiency level (expert > strong > working > familiar).
   - Keep the longest years value.
   - Combine evidence from all sources.
   - Prefer a specific category (language, framework, etc.) over "other".
-
-IDENTITY:
-- Produce one identity block using the most complete information available \
-across all sources. Prefer non-empty values.
 
 META:
 - Merge career_arc and differentiators into the most complete version.
@@ -199,12 +226,9 @@ EDUCATION / CERTIFICATIONS / DOMAIN KNOWLEDGE:
 - Deduplicate entries that refer to the same degree, certification, or domain.
 - Keep all unique entries.
 
-CONFIDENCE:
-- For each merged role, set extraction_confidence to the LOWEST confidence \
-from the source entries (most conservative).
-- Update confidence_notes to reflect the merge.
-
-Return the consolidated JSON object using the EXACT same schema as the input. \
+Return a JSON object with exactly these keys: "skills", "education", \
+"certifications", "domain_knowledge", "meta". \
+Use the EXACT same field schema as the input. \
 Respond with ONLY the JSON object. No explanation, no markdown fences.
 """
 
@@ -375,11 +399,15 @@ def build_repo_from_parsed(data: dict, repo: CareerRepository) -> CareerReposito
 # Cross-document consolidation (LLM-based)
 # ---------------------------------------------------------------------------
 
-def _repo_to_consolidation_json(repo: CareerRepository) -> str:
-    """Serialize repo roles, skills, identity, meta, and text fields to JSON for the LLM."""
+def _repo_to_consolidation_json(repo: CareerRepository, keys: list[str] | None = None) -> str:
+    """Serialize selected repo sections to JSON for the consolidation LLM.
+
+    If *keys* is None, serializes all consolidation-relevant sections.
+    Otherwise only the named keys are included.
+    """
     import json
 
-    data: dict = {
+    all_data: dict = {
         "identity": repo.identity.model_dump(),
         "roles": [r.model_dump() for r in repo.roles],
         "skills": [s.model_dump() for s in repo.skills],
@@ -388,14 +416,49 @@ def _repo_to_consolidation_json(repo: CareerRepository) -> str:
         "domain_knowledge": repo.domain_knowledge,
         "meta": repo.meta.model_dump(),
     }
-    return json.dumps(data, indent=2)
+    if keys is not None:
+        all_data = {k: v for k, v in all_data.items() if k in keys}
+    return json.dumps(all_data, indent=2)
+
+
+def _consolidation_call(
+    client: ollama.Client,
+    system_prompt: str,
+    repo_json: str,
+) -> dict | None:
+    """Make a single consolidation LLM call and return parsed data, or None on failure."""
+    try:
+        response = client.chat(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": (
+                    "Consolidate the following career data extracted from multiple "
+                    "documents about the same person. Merge duplicate entries, "
+                    "keeping ALL information. Return ONLY the JSON object.\n\n"
+                    f"---\n{repo_json}\n---"
+                )},
+            ],
+            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
+        )
+        raw = response.message.content or ""
+        if not raw.strip():
+            log.warning("Consolidation LLM returned empty response for a pass")
+            return None
+        return parse_ingest_response(raw)
+    except Exception:
+        log.warning("Consolidation LLM call failed for a pass", exc_info=True)
+        return None
 
 
 def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None) -> CareerRepository:
     """Merge duplicate roles and skills from multi-document extraction via LLM.
 
-    If only one role exists, skips the LLM call (nothing to consolidate).
-    Falls back to the original repo if the LLM call fails.
+    Uses two LLM passes to stay within output-token limits:
+      Pass 1 — identity + roles  (accomplishment-heavy, gets full output budget)
+      Pass 2 — skills + education + certifications + domain knowledge + meta
+
+    Falls back to the original repo data for any pass that fails.
     """
     # Skip if there's nothing meaningful to consolidate
     if len(repo.roles) <= 1 and len(repo.skills) <= 1:
@@ -404,46 +467,92 @@ def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None
     if client is None:
         client = ollama.Client(host=BASE_URL)
 
-    repo_json = _repo_to_consolidation_json(repo)
+    # Build a fresh repo preserving metadata
+    consolidated = CareerRepository(
+        repo_id=repo.repo_id,
+        created_at=repo.created_at,
+        updated_at=repo.updated_at,
+        current_phase=repo.current_phase,
+        deepdive_role_index=repo.deepdive_role_index,
+        voice_raw=repo.voice_raw,
+    )
 
-    try:
-        response = client.chat(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": CONSOLIDATION_SYSTEM_PROMPT},
-                {"role": "user", "content": (
-                    "Consolidate the following career data extracted from multiple "
-                    "documents about the same person. Merge duplicate roles and "
-                    "skills, keeping ALL information. Return ONLY the JSON object.\n\n"
-                    f"---\n{repo_json}\n---"
-                )},
-            ],
-            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
+    # Pass 1 — identity + roles
+    pass1_json = _repo_to_consolidation_json(repo, keys=["identity", "roles"])
+    pass1_data = _consolidation_call(client, CONSOLIDATION_PASS1_PROMPT, pass1_json)
+    if pass1_data:
+        build_repo_from_parsed(pass1_data, consolidated)
+    else:
+        # Fall back: copy original identity + roles
+        build_repo_from_parsed(
+            {"identity": repo.identity.model_dump(),
+             "roles": [r.model_dump() for r in repo.roles]},
+            consolidated,
         )
 
-        raw = response.message.content or ""
-        if not raw.strip():
-            log.warning("Consolidation LLM returned empty response, keeping original")
-            return repo
+    # Pass 2 — skills + education + certifications + domain_knowledge + meta
+    pass2_keys = ["skills", "education", "certifications", "domain_knowledge", "meta"]
+    pass2_json = _repo_to_consolidation_json(repo, keys=pass2_keys)
+    pass2_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, pass2_json)
+    if pass2_data:
+        build_repo_from_parsed(pass2_data, consolidated)
+    else:
+        # Fall back: copy original pass-2 fields
+        import json as _json
+        fallback = {k: v for k, v in _json.loads(
+            _repo_to_consolidation_json(repo, keys=pass2_keys)
+        ).items()}
+        build_repo_from_parsed(fallback, consolidated)
 
-        data = parse_ingest_response(raw)
+    # Deterministic fuzzy-match check — if duplicates remain, re-run LLM
+    if _has_duplicate_skills(consolidated.skills):
+        log.info("Duplicate skills detected after consolidation, re-running pass 2")
+        retry_json = _repo_to_consolidation_json(consolidated, keys=pass2_keys)
+        retry_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, retry_json)
+        if retry_data and "skills" in retry_data:
+            # Replace only skills from the retry (keep education/meta from first pass)
+            consolidated.skills = []
+            build_repo_from_parsed({"skills": retry_data["skills"]}, consolidated)
 
-        # Rebuild repo from consolidated data, starting fresh for the fields
-        # the LLM is responsible for
-        consolidated = CareerRepository(
-            repo_id=repo.repo_id,
-            created_at=repo.created_at,
-            updated_at=repo.updated_at,
-            current_phase=repo.current_phase,
-            deepdive_role_index=repo.deepdive_role_index,
-            voice_raw=repo.voice_raw,
-        )
-        build_repo_from_parsed(data, consolidated)
-        return consolidated
+    return consolidated
 
-    except Exception:
-        log.warning("Consolidation LLM call failed, keeping original repo", exc_info=True)
-        return repo
+
+# ---------------------------------------------------------------------------
+# Fuzzy skill duplicate detection
+# ---------------------------------------------------------------------------
+
+def _normalize_skill_name(name: str) -> str:
+    """Lower-case, strip, collapse whitespace, remove trailing version-like suffixes."""
+    s = name.strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    # Collapse e.g. "React.js" / "ReactJS" / "React JS" → "reactjs"
+    s = re.sub(r"[.\-\s]", "", s)
+    return s
+
+
+def _has_duplicate_skills(skills: list[SkillEntry], threshold: float = 0.85) -> bool:
+    """Return True if any two skills are duplicates.
+
+    Uses exact-match on normalised names first, then falls back to
+    ``SequenceMatcher`` ratio for fuzzy near-misses.
+    """
+    from difflib import SequenceMatcher
+
+    names = [_normalize_skill_name(s.name) for s in skills]
+    seen: set[str] = set()
+    for name in names:
+        if name in seen:
+            return True
+        seen.add(name)
+
+    # Fuzzy pass — only needed if no exact dupes found
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            if SequenceMatcher(None, names[i], names[j]).ratio() >= threshold:
+                return True
+    return False
+
+
 class IngestAgent:
     """Extracts structured career data from raw document text via LLM."""
 
@@ -489,84 +598,103 @@ class IngestAgent:
         data = self.ingest(document_text)
         return build_repo_from_parsed(data, repo)
 
+    @staticmethod
+    def _build_role_text(role: RoleEntry) -> str:
+        """Build a rich text summary of a single role for story composition."""
+        parts = [f"## {role.title} @ {role.company} ({role.start_date} – {role.end_date})"]
+        if role.company_context:
+            parts.append(f"Company context: {role.company_context}")
+        if role.team_context:
+            parts.append(f"Team context: {role.team_context}")
+        if role.ownership:
+            parts.append(f"Owned: {role.ownership}")
+        if role.accomplishments:
+            parts.append(f"Accomplishments: {role.accomplishments}")
+        if role.technologies:
+            parts.append(f"Technologies: {role.technologies}")
+        if role.learnings:
+            parts.append(f"Learnings: {role.learnings}")
+        return "\n".join(parts)
+
+    def _compose_stories_for_role(self, role_text: str) -> list[StoryEntry]:
+        """Make one LLM call to compose STAR stories for a single role."""
+        response = self.client.chat(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": STORY_COMPOSITION_PROMPT},
+                {"role": "user", "content": (
+                    "Compose STAR stories from the following role. "
+                    "Extract ALL accomplishments that can support a story — "
+                    "err on the side of creating MORE stories rather than fewer. "
+                    "Return ONLY the JSON array.\n\n"
+                    f"---\n{role_text}\n---"
+                )},
+            ],
+            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
+        )
+
+        raw = response.message.content or ""
+        if not raw.strip():
+            log.warning("Story composition returned empty response for a role")
+            return []
+
+        cleaned = _strip_think_tags(raw)
+        cleaned = _extract_json(cleaned)
+        stories_data = repair_json(cleaned, return_objects=True)
+
+        if isinstance(stories_data, dict) and "stories" in stories_data:
+            stories_data = stories_data["stories"]
+
+        if not isinstance(stories_data, list):
+            log.warning("Story composition returned non-list: %s", type(stories_data).__name__)
+            return []
+
+        entries: list[StoryEntry] = []
+        for story_data in stories_data:
+            if not isinstance(story_data, dict):
+                continue
+            title = story_data.get("title", "")
+            if not title:
+                continue
+            confidence = story_data.get("extraction_confidence", "medium")
+            if confidence not in ("high", "medium", "low"):
+                confidence = "medium"
+            entries.append(StoryEntry(
+                title=str(title),
+                tags=[str(t) for t in story_data.get("tags", []) if t],
+                situation=str(story_data.get("situation", "")),
+                task=str(story_data.get("task", "")),
+                action=str(story_data.get("action", "")),
+                result=str(story_data.get("result", "")),
+                what_it_shows=str(story_data.get("what_it_shows", "")),
+                extraction_confidence=confidence,
+                confidence_notes=str(story_data.get("confidence_notes", "")),
+            ))
+        return entries
+
     def compose_stories(self, repo: CareerRepository) -> CareerRepository:
         """Generate STAR stories from the repo's roles and accomplishments.
 
-        Makes one LLM call against the already-structured career data.
+        Makes one LLM call **per role** so each role gets the full output-token
+        budget, producing far more stories than a single monolithic call.
         Stories are appended to repo.stories.
         """
-        # Build a summary of roles + accomplishments for the LLM
-        role_summaries: list[str] = []
-        for role in repo.roles:
-            parts = [f"## {role.title} @ {role.company} ({role.start_date} – {role.end_date})"]
-            if role.ownership:
-                parts.append(f"Owned: {role.ownership}")
-            if role.accomplishments:
-                parts.append(f"Accomplishments: {role.accomplishments}")
-            if role.technologies:
-                parts.append(f"Technologies: {role.technologies}")
-            if role.learnings:
-                parts.append(f"Learnings: {role.learnings}")
-            role_summaries.append("\n".join(parts))
-
-        if not role_summaries:
+        if not repo.roles:
             return repo
 
-        career_text = "\n\n".join(role_summaries)
-
-        try:
-            response = self.client.chat(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": STORY_COMPOSITION_PROMPT},
-                    {"role": "user", "content": (
-                        "Compose STAR stories from the following career data. "
-                        "Return ONLY the JSON array.\n\n"
-                        f"---\n{career_text}\n---"
-                    )},
-                ],
-                options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
-            )
-
-            raw = response.message.content or ""
-            if not raw.strip():
-                log.warning("Story composition returned empty response")
-                return repo
-
-            cleaned = _strip_think_tags(raw)
-            cleaned = _extract_json(cleaned)
-            stories_data = repair_json(cleaned, return_objects=True)
-
-            if isinstance(stories_data, dict) and "stories" in stories_data:
-                stories_data = stories_data["stories"]
-
-            if not isinstance(stories_data, list):
-                log.warning("Story composition returned non-list: %s", type(stories_data).__name__)
-                return repo
-
-            for story_data in stories_data:
-                if not isinstance(story_data, dict):
-                    continue
-                title = story_data.get("title", "")
-                if not title:
-                    continue
-                confidence = story_data.get("extraction_confidence", "medium")
-                if confidence not in ("high", "medium", "low"):
-                    confidence = "medium"
-                story = StoryEntry(
-                    title=str(title),
-                    tags=[str(t) for t in story_data.get("tags", []) if t],
-                    situation=str(story_data.get("situation", "")),
-                    task=str(story_data.get("task", "")),
-                    action=str(story_data.get("action", "")),
-                    result=str(story_data.get("result", "")),
-                    what_it_shows=str(story_data.get("what_it_shows", "")),
-                    extraction_confidence=confidence,
-                    confidence_notes=str(story_data.get("confidence_notes", "")),
+        for role in repo.roles:
+            role_text = self._build_role_text(role)
+            try:
+                stories = self._compose_stories_for_role(role_text)
+                repo.stories.extend(stories)
+                log.info(
+                    "Composed %d stories for %s @ %s",
+                    len(stories), role.title, role.company,
                 )
-                repo.stories.append(story)
-
-        except Exception:
-            log.warning("Story composition failed, continuing without stories", exc_info=True)
+            except Exception:
+                log.warning(
+                    "Story composition failed for %s @ %s, continuing",
+                    role.title, role.company, exc_info=True,
+                )
 
         return repo
