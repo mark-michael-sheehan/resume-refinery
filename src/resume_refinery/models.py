@@ -80,6 +80,8 @@ class RoleEntry(BaseModel):
     technologies: str = Field(default="", description="Comma-separated or prose")
     learnings: str = Field(default="", description="What the user learned in this role")
     anti_claims: str = Field(default="", description="Things NOT to claim about this role")
+    extraction_confidence: Literal["high", "medium", "low"] = "medium"
+    confidence_notes: str = Field(default="", description="What the LLM found thin or missing")
 
     def slug(self) -> str:
         """URL-safe identifier for this role."""
@@ -108,6 +110,8 @@ class StoryEntry(BaseModel):
     action: str = ""
     result: str = ""
     what_it_shows: str = Field(default="", description="What this story demonstrates about the user")
+    extraction_confidence: Literal["high", "medium", "low"] = "medium"
+    confidence_notes: str = Field(default="", description="Which STAR components were inferred vs explicit")
 
 
 class CareerIdentity(BaseModel):

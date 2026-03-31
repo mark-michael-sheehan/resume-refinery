@@ -54,7 +54,7 @@
 | FR-7.5 | Each phase saves progress incrementally — the user can stop and resume at any point. |
 | FR-7.6 | An `ElicitationAgent` uses the LLM to analyse role answers and generate contextual follow-up probes. Falls back to static heuristic probes when the LLM is unavailable. The probe endpoint returns HTML fragments swapped into the page via HTMX. |
 | FR-7.7 | The session creation form in the web app allows selecting a saved career repository instead of uploading files. |
-| FR-7.8 | The system accepts document uploads (PDF, DOCX, TXT, MD) via a **Document Ingest** endpoint. An `IngestAgent` extracts structured career data from the combined document text using a single LLM call and populates a new `CareerRepository` as a first-pass starting point. The user reviews and refines the extracted data via the standard wizard phases. |
+| FR-7.8 | The system accepts document uploads (PDF, DOCX, TXT, MD) via a **Document Ingest** endpoint. An `IngestAgent` extracts structured career data using **one LLM call per document** (giving each file the full context window). The extraction prompt includes field-level guidance mirroring the wizard's helper text. After extraction, `consolidate_repo()` merges duplicate roles and skills across documents, and `compose_stories()` generates STAR behavioural stories from the merged accomplishments. Each role and story carries an `extraction_confidence` (`high`/`medium`/`low`) and `confidence_notes` field. The user reviews and refines the extracted data via the standard wizard phases. |
 
 ## FR-6 Reviewers
 

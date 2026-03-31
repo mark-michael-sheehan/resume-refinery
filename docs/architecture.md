@@ -68,27 +68,42 @@ career profiles in the existing pipeline.
 
 ### Document Ingest
 
-The `IngestAgent` (in `ingest_agent.py`) accepts raw text extracted from
-uploaded documents (PDF, DOCX, TXT/MD) and uses a single LLM call to populate
-a `CareerRepository` with structured career data. The agent returns JSON
-conforming to the repository schema, parsed via `json-repair`. This provides
-a first-pass starting point that the user then reviews and refines through
-the career wizard.
+The `IngestAgent` (in `ingest_agent.py`) processes each uploaded document
+(PDF, DOCX, TXT/MD) in a separate LLM call, giving each file the full
+context window. The extraction prompt includes field-level guidance that
+mirrors the wizard's helper text, ensuring the LLM fills each field
+appropriately and completely.
+
+After all documents are extracted, `consolidate_repo()` merges duplicate
+roles (matched by company + title + overlapping dates) and deduplicates
+skills (case-insensitive name match, keeping highest proficiency). A final
+`compose_stories()` LLM call generates STAR behavioural stories from the
+merged accomplishments.
+
+Each role and story carries an `extraction_confidence` rating (`high` /
+`medium` / `low`) and `confidence_notes` so the wizard can surface
+low-confidence areas for user review.
 
 ```
-Upload: resume.pdf + linkedin.txt
+Upload: resume.pdf + perf_review_2024.pdf + perf_review_2025.pdf
          │
          ▼
-    parsers._read_file_content()  (PDF, DOCX, TXT)
+    parsers._read_file_content()  (per file: PDF, DOCX, TXT)
          │
          ▼
-    IngestAgent.ingest(combined_text)
-         │  ← single Ollama call, structured JSON output
-         ▼
-    CareerRepository (pre-filled)
+    IngestAgent.ingest_to_repo()  ×N  (one LLM call per document)
          │
          ▼
-    Wizard Phase 1 (identity) for review
+    consolidate_repo()  (LLM-based merge: roles, skills, text)
+         │
+         ▼
+    IngestAgent.compose_stories()  (one LLM call on merged data)
+         │
+         ▼
+    CareerRepository (pre-filled with confidence scores)
+         │
+         ▼
+    Wizard Phase 3 (role deep-dive) — low-confidence roles first
 ```
 
 ## Session Storage

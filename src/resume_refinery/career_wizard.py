@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .career_repo import CareerRepoStore
 from .elicitation import ElicitationAgent
-from .ingest_agent import IngestAgent, build_repo_from_parsed, parse_ingest_response
+from .ingest_agent import IngestAgent, build_repo_from_parsed, consolidate_repo, parse_ingest_response
 from .models import (
     CareerIdentity,
     CareerMeta,
@@ -231,7 +231,12 @@ async def career_ingest(
     name: str = Form(...),
     files: list[UploadFile] = File(...),
 ) -> RedirectResponse:
-    """Upload documents and create a pre-filled career repository via LLM extraction."""
+    """Upload documents and create a pre-filled career repository via LLM extraction.
+
+    Each document gets its own LLM extraction call (full context window per file).
+    After all documents are processed, roles and skills are consolidated and
+    STAR stories are composed from the merged accomplishments.
+    """
     from .parsers import _read_file_content
     from pathlib import Path
     import tempfile
@@ -239,8 +244,8 @@ async def career_ingest(
     if not files or all(not f.filename for f in files):
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    # Read and combine text from all uploaded files
-    combined_parts: list[str] = []
+    # Read text from all uploaded files individually
+    document_texts: list[tuple[str, str]] = []  # (filename, text)
     allowed_extensions = {".pdf", ".docx", ".doc", ".txt", ".md"}
 
     for upload in files:
@@ -261,27 +266,42 @@ async def career_ingest(
         try:
             text = _read_file_content(tmp_path)
             if text.strip():
-                combined_parts.append(f"--- {upload.filename} ---\n{text}")
+                document_texts.append((upload.filename, text))
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    if not combined_parts:
+    if not document_texts:
         raise HTTPException(status_code=400, detail="No readable text found in uploaded files")
-
-    combined_text = "\n\n".join(combined_parts)
 
     # Create the repo first
     repo = career_store.create(name.strip())
 
-    # Run the ingest agent
-    try:
-        ingest_agent.ingest_to_repo(combined_text, repo)
+    # Per-document extraction — one LLM call per file
+    extraction_succeeded = False
+    for filename, text in document_texts:
+        try:
+            ingest_agent.ingest_to_repo(text, repo)
+            extraction_succeeded = True
+        except Exception:
+            log.warning("Ingest failed for %s, skipping", filename, exc_info=True)
+
+    if extraction_succeeded:
+        # Consolidate duplicates across documents via LLM
+        try:
+            repo = consolidate_repo(repo, client=ingest_agent.client)
+        except Exception:
+            log.warning("Consolidation failed, continuing with unmerged repo", exc_info=True)
+        # Compose STAR stories from merged accomplishments
+        try:
+            ingest_agent.compose_stories(repo)
+        except Exception:
+            log.warning("Story composition failed, continuing without stories", exc_info=True)
         # Override name from form (user-provided takes priority)
         repo.identity.name = name.strip()
         # Advance phase past identity/roles since ingestion fills both
         repo.current_phase = "role_deepdive"
-    except Exception:
-        log.warning("Ingest agent failed, continuing with empty repo", exc_info=True)
+    else:
+        log.warning("All document extractions failed, continuing with empty repo")
         repo.identity.name = name.strip()
 
     career_store.save(repo)
