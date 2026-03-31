@@ -795,6 +795,50 @@ def test_consolidation_prompts_have_key_instructions():
     assert "ROLES" not in CONSOLIDATION_PASS2_PROMPT
 
 
+def test_consolidation_prompt_preserves_distinct_skills():
+    """Pass 2 prompt should instruct LLM to keep related-but-different skills separate."""
+    assert "related-but-different" in CONSOLIDATION_PASS2_PROMPT.lower() or \
+           "SEPARATE" in CONSOLIDATION_PASS2_PROMPT
+    # Key examples of skills NOT to merge
+    assert "JavaScript" in CONSOLIDATION_PASS2_PROMPT
+    assert "TypeScript" in CONSOLIDATION_PASS2_PROMPT
+
+
+def test_consolidate_reverts_when_too_many_skills_lost():
+    """If pass 2 drops >30% of skills, original skills are kept."""
+    repo = _make_repo()
+    repo.roles = [
+        RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
+        RoleEntry(company="B", title="SRE", start_date="2021", end_date="2022"),
+    ]
+    repo.skills = [
+        SkillEntry(name="Python", category="language"),
+        SkillEntry(name="Go", category="language"),
+        SkillEntry(name="Kubernetes", category="infrastructure"),
+        SkillEntry(name="Docker", category="tool"),
+        SkillEntry(name="SQL", category="language"),
+    ]
+    # Pass 2 aggressively drops most skills (returns only 2 of 5)
+    aggressive_pass2 = json.dumps({
+        "skills": [
+            {"name": "Python", "category": "language", "proficiency": "expert",
+             "years": "5", "evidence": "Primary language"},
+            {"name": "Go", "category": "language", "proficiency": "strong",
+             "years": "3", "evidence": "Secondary language"},
+        ],
+        "education": "", "certifications": "", "domain_knowledge": "",
+        "meta": {"career_arc": "", "differentiators": "",
+                 "themes_to_emphasize": [], "anti_claims": [], "known_gaps": []},
+    })
+    fake_client = _FakeClient([
+        SAMPLE_CONSOLIDATED_PASS1_JSON,
+        aggressive_pass2,
+    ])
+    result = consolidate_repo(repo, client=fake_client)
+    # Safety check should revert to original 5 skills
+    assert len(result.skills) == 5
+
+
 def test_build_repo_identity_first_nonempty_wins():
     """When building from multiple documents, first non-empty identity field wins."""
     repo = _make_repo()

@@ -246,12 +246,28 @@ Your job is to produce a single, clean, consolidated JSON object containing \
 ONLY the "skills", "education", "certifications", "domain_knowledge", and \
 "meta" keys, following these rules:
 
-SKILLS:
-- Deduplicate skills by name (case-insensitive). When merging duplicates:
+SKILLS — IMPORTANT: preserve ALL distinct skills. Only merge entries that refer \
+to the EXACT SAME technology with different naming (e.g. "React.js" and "ReactJS" \
+are the same; "PostgreSQL" and "Postgres" are the same). \
+Do NOT merge related-but-different skills. Examples of skills that must stay SEPARATE:
+  - "JavaScript" and "TypeScript" — different languages
+  - "React" and "React Native" — different frameworks
+  - "AWS" and "AWS Lambda" — one is a platform, the other a specific service
+  - "Python" and "Cython" — different technologies
+  - "SQL" and "MySQL" — one is a language, the other a specific database
+  - "Docker" and "Kubernetes" — different tools
+  - "REST" and "GraphQL" — different paradigms
+When in doubt, keep both entries as separate skills.
+
+When merging TRUE duplicates (same technology, different name):
   - Keep the highest proficiency level (expert > strong > working > familiar).
   - Keep the longest years value.
   - Combine evidence from all sources.
   - Prefer a specific category (language, framework, etc.) over "other".
+
+The output skills list should be AT LEAST as long as the number of truly unique \
+technologies in the input. If you have N distinct technologies in, you must have \
+N skills out.
 
 META:
 - Merge career_arc and differentiators into the most complete version.
@@ -533,6 +549,18 @@ def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None
     pass2_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, pass2_json, "consolidation-pass2")
     if pass2_data:
         build_repo_from_parsed(pass2_data, consolidated)
+        # Safety check: if consolidation lost >30% of unique skills, it was too aggressive.
+        # Compare against unique count to avoid false alarms when input has duplicates.
+        unique_original = len({_normalize_skill_name(s.name) for s in repo.skills})
+        consolidated_count = len(consolidated.skills)
+        if unique_original > 0 and consolidated_count < unique_original * 0.7:
+            log.warning(
+                "Skill consolidation too aggressive: %d unique → %d (lost %.0f%%). "
+                "Keeping original skills.",
+                unique_original, consolidated_count,
+                (1 - consolidated_count / unique_original) * 100,
+            )
+            consolidated.skills = list(repo.skills)
     else:
         # Fall back: copy original pass-2 fields
         import json as _json
@@ -544,12 +572,23 @@ def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None
     # Deterministic fuzzy-match check — if duplicates remain, re-run LLM
     if _has_duplicate_skills(consolidated.skills):
         log.info("Duplicate skills detected after consolidation, re-running pass 2")
+        pre_retry_count = len(consolidated.skills)
         retry_json = _repo_to_consolidation_json(consolidated, keys=pass2_keys)
         retry_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, retry_json, "consolidation-pass2-retry")
         if retry_data and "skills" in retry_data:
-            # Replace only skills from the retry (keep education/meta from first pass)
-            consolidated.skills = []
-            build_repo_from_parsed({"skills": retry_data["skills"]}, consolidated)
+            retry_skills: list[SkillEntry] = []
+            temp = CareerRepository(repo_id="_dedup_temp")
+            build_repo_from_parsed({"skills": retry_data["skills"]}, temp)
+            retry_skills = temp.skills
+            # Only accept if retry didn't aggressively drop skills.
+            # More lenient than initial pass since we already know dupes exist.
+            if pre_retry_count > 0 and len(retry_skills) < pre_retry_count * 0.5:
+                log.warning(
+                    "Retry skill consolidation too aggressive: %d → %d. Keeping pre-retry skills.",
+                    pre_retry_count, len(retry_skills),
+                )
+            else:
+                consolidated.skills = retry_skills
 
     return consolidated
 
@@ -567,7 +606,7 @@ def _normalize_skill_name(name: str) -> str:
     return s
 
 
-def _has_duplicate_skills(skills: list[SkillEntry], threshold: float = 0.85) -> bool:
+def _has_duplicate_skills(skills: list[SkillEntry], threshold: float = 0.95) -> bool:
     """Return True if any two skills are duplicates.
 
     Uses exact-match on normalised names first, then falls back to
