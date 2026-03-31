@@ -76,14 +76,9 @@ appropriately and completely.
 
 After all documents are extracted, `consolidate_repo()` merges duplicate
 roles (matched by company + title + overlapping dates) and deduplicates
-skills (case-insensitive name match, keeping highest proficiency).
-`compose_stories()` then generates STAR behavioural stories by making **one
-LLM call per role**, giving each role the full output-token budget.  This
-per-role approach produces significantly more stories than a single
-monolithic call because output tokens are not shared across all roles.
-Each role's company context, team context, ownership, accomplishments,
-technologies, and learnings are included in the prompt so the LLM has rich
-material for the Situation and Task components.
+skills (case-insensitive name match, keeping highest proficiency). A final
+`compose_stories()` LLM call generates STAR behavioural stories from the
+merged accomplishments.
 
 Each role and story carries an `extraction_confidence` rating (`high` /
 `medium` / `low`) and `confidence_notes` so the wizard can surface
@@ -105,7 +100,7 @@ Upload: resume.pdf + perf_review_2024.pdf + perf_review_2025.pdf
          │               Fuzzy dupe check → retry pass 2 if needed
          │
          ▼
-    IngestAgent.compose_stories()  (one LLM call per role)
+    IngestAgent.compose_stories()  (one LLM call on merged data)
          │
          ▼
     CareerRepository (pre-filled with confidence scores)

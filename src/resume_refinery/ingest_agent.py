@@ -4,12 +4,11 @@ Given raw text extracted from one or more documents (PDF, DOCX, TXT), the
 agent uses one LLM call *per document* to populate a CareerRepository.
 After all documents are ingested, a two-pass LLM consolidation step merges
 duplicate roles and skills (Pass 1: identity + roles, Pass 2: skills + meta),
-and a per-role STAR composition pass generates behavioural stories from each
-role's accomplishments individually so every role gets the full output-token
-budget.
+and a STAR composition pass generates behavioural stories from the merged
+accomplishments.
 
 Pipeline:
-    Per-document extraction  →  consolidate_repo() (2 passes)  →  compose_stories() (per role)
+    Per-document extraction  →  consolidate_repo() (2 passes)  →  compose_stories()
 """
 
 from __future__ import annotations
@@ -146,12 +145,8 @@ For each story, return a JSON object with these fields:
 }
 
 Rules:
-- Create a story for EVERY distinct accomplishment, project, or initiative that \
-has enough detail for at least 2 of the 4 STAR components (situation, task, action, \
-result). Err on the side of creating MORE stories rather than fewer — a single role \
-may yield 3-10+ stories if the accomplishments are rich.
-- Use the company context and team context to fill in the Situation when the \
-accomplishment text alone doesn't spell it out explicitly.
+- Only create stories where the source material provides concrete evidence for \
+at least 2 of the 4 STAR components (situation, task, action, result).
 - Ground every statement in the career data provided. Do NOT invent details.
 - Prefer stories with quantified results (metrics, dollar amounts, percentages).
 - A single accomplishment may become one story. Multi-role accomplishments \
@@ -598,103 +593,84 @@ class IngestAgent:
         data = self.ingest(document_text)
         return build_repo_from_parsed(data, repo)
 
-    @staticmethod
-    def _build_role_text(role: RoleEntry) -> str:
-        """Build a rich text summary of a single role for story composition."""
-        parts = [f"## {role.title} @ {role.company} ({role.start_date} – {role.end_date})"]
-        if role.company_context:
-            parts.append(f"Company context: {role.company_context}")
-        if role.team_context:
-            parts.append(f"Team context: {role.team_context}")
-        if role.ownership:
-            parts.append(f"Owned: {role.ownership}")
-        if role.accomplishments:
-            parts.append(f"Accomplishments: {role.accomplishments}")
-        if role.technologies:
-            parts.append(f"Technologies: {role.technologies}")
-        if role.learnings:
-            parts.append(f"Learnings: {role.learnings}")
-        return "\n".join(parts)
-
-    def _compose_stories_for_role(self, role_text: str) -> list[StoryEntry]:
-        """Make one LLM call to compose STAR stories for a single role."""
-        response = self.client.chat(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": STORY_COMPOSITION_PROMPT},
-                {"role": "user", "content": (
-                    "Compose STAR stories from the following role. "
-                    "Extract ALL accomplishments that can support a story — "
-                    "err on the side of creating MORE stories rather than fewer. "
-                    "Return ONLY the JSON array.\n\n"
-                    f"---\n{role_text}\n---"
-                )},
-            ],
-            options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
-        )
-
-        raw = response.message.content or ""
-        if not raw.strip():
-            log.warning("Story composition returned empty response for a role")
-            return []
-
-        cleaned = _strip_think_tags(raw)
-        cleaned = _extract_json(cleaned)
-        stories_data = repair_json(cleaned, return_objects=True)
-
-        if isinstance(stories_data, dict) and "stories" in stories_data:
-            stories_data = stories_data["stories"]
-
-        if not isinstance(stories_data, list):
-            log.warning("Story composition returned non-list: %s", type(stories_data).__name__)
-            return []
-
-        entries: list[StoryEntry] = []
-        for story_data in stories_data:
-            if not isinstance(story_data, dict):
-                continue
-            title = story_data.get("title", "")
-            if not title:
-                continue
-            confidence = story_data.get("extraction_confidence", "medium")
-            if confidence not in ("high", "medium", "low"):
-                confidence = "medium"
-            entries.append(StoryEntry(
-                title=str(title),
-                tags=[str(t) for t in story_data.get("tags", []) if t],
-                situation=str(story_data.get("situation", "")),
-                task=str(story_data.get("task", "")),
-                action=str(story_data.get("action", "")),
-                result=str(story_data.get("result", "")),
-                what_it_shows=str(story_data.get("what_it_shows", "")),
-                extraction_confidence=confidence,
-                confidence_notes=str(story_data.get("confidence_notes", "")),
-            ))
-        return entries
-
     def compose_stories(self, repo: CareerRepository) -> CareerRepository:
         """Generate STAR stories from the repo's roles and accomplishments.
 
-        Makes one LLM call **per role** so each role gets the full output-token
-        budget, producing far more stories than a single monolithic call.
+        Makes one LLM call against the already-structured career data.
         Stories are appended to repo.stories.
         """
-        if not repo.roles:
+        # Build a summary of roles + accomplishments for the LLM
+        role_summaries: list[str] = []
+        for role in repo.roles:
+            parts = [f"## {role.title} @ {role.company} ({role.start_date} – {role.end_date})"]
+            if role.ownership:
+                parts.append(f"Owned: {role.ownership}")
+            if role.accomplishments:
+                parts.append(f"Accomplishments: {role.accomplishments}")
+            if role.technologies:
+                parts.append(f"Technologies: {role.technologies}")
+            if role.learnings:
+                parts.append(f"Learnings: {role.learnings}")
+            role_summaries.append("\n".join(parts))
+
+        if not role_summaries:
             return repo
 
-        for role in repo.roles:
-            role_text = self._build_role_text(role)
-            try:
-                stories = self._compose_stories_for_role(role_text)
-                repo.stories.extend(stories)
-                log.info(
-                    "Composed %d stories for %s @ %s",
-                    len(stories), role.title, role.company,
+        career_text = "\n\n".join(role_summaries)
+
+        try:
+            response = self.client.chat(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": STORY_COMPOSITION_PROMPT},
+                    {"role": "user", "content": (
+                        "Compose STAR stories from the following career data. "
+                        "Return ONLY the JSON array.\n\n"
+                        f"---\n{career_text}\n---"
+                    )},
+                ],
+                options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
+            )
+
+            raw = response.message.content or ""
+            if not raw.strip():
+                log.warning("Story composition returned empty response")
+                return repo
+
+            cleaned = _strip_think_tags(raw)
+            cleaned = _extract_json(cleaned)
+            stories_data = repair_json(cleaned, return_objects=True)
+
+            if isinstance(stories_data, dict) and "stories" in stories_data:
+                stories_data = stories_data["stories"]
+
+            if not isinstance(stories_data, list):
+                log.warning("Story composition returned non-list: %s", type(stories_data).__name__)
+                return repo
+
+            for story_data in stories_data:
+                if not isinstance(story_data, dict):
+                    continue
+                title = story_data.get("title", "")
+                if not title:
+                    continue
+                confidence = story_data.get("extraction_confidence", "medium")
+                if confidence not in ("high", "medium", "low"):
+                    confidence = "medium"
+                story = StoryEntry(
+                    title=str(title),
+                    tags=[str(t) for t in story_data.get("tags", []) if t],
+                    situation=str(story_data.get("situation", "")),
+                    task=str(story_data.get("task", "")),
+                    action=str(story_data.get("action", "")),
+                    result=str(story_data.get("result", "")),
+                    what_it_shows=str(story_data.get("what_it_shows", "")),
+                    extraction_confidence=confidence,
+                    confidence_notes=str(story_data.get("confidence_notes", "")),
                 )
-            except Exception:
-                log.warning(
-                    "Story composition failed for %s @ %s, continuing",
-                    role.title, role.company, exc_info=True,
-                )
+                repo.stories.append(story)
+
+        except Exception:
+            log.warning("Story composition failed, continuing without stories", exc_info=True)
 
         return repo
