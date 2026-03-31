@@ -39,6 +39,46 @@ MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "8192"))
 NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
 
+
+def _log_token_usage(step_name: str, response: object) -> None:
+    """Log prompt/completion token counts and warn if output was truncated.
+
+    Ollama responses expose ``prompt_eval_count``, ``eval_count``, and
+    ``done_reason``.  When ``done_reason == "length"`` the model hit
+    ``num_predict`` and the output is almost certainly incomplete JSON.
+    """
+    prompt_tokens = getattr(response, "prompt_eval_count", None)
+    completion_tokens = getattr(response, "eval_count", None)
+    done_reason = getattr(response, "done_reason", None)
+
+    log.info(
+        "[%s] tokens — prompt: %s/%d, completion: %s/%d, done_reason: %s",
+        step_name,
+        prompt_tokens if prompt_tokens is not None else "?", NUM_CTX,
+        completion_tokens if completion_tokens is not None else "?", MAX_TOKENS,
+        done_reason or "?",
+    )
+
+    if done_reason == "length":
+        log.warning(
+            "[%s] OUTPUT TRUNCATED — the model produced %s tokens and hit the "
+            "num_predict limit (%d). The JSON is likely incomplete. "
+            "Raise RESUME_REFINERY_MAX_TOKENS to fix this.",
+            step_name,
+            completion_tokens if completion_tokens is not None else "?",
+            MAX_TOKENS,
+        )
+    if prompt_tokens is not None and prompt_tokens > NUM_CTX * 0.95:
+        log.warning(
+            "[%s] INPUT NEAR LIMIT — prompt used %d of %d context tokens (%.0f%%). "
+            "The input may be silently truncated. "
+            "Raise RESUME_REFINERY_NUM_CTX or reduce document size.",
+            step_name,
+            prompt_tokens, NUM_CTX,
+            prompt_tokens / NUM_CTX * 100,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Extraction prompt — field-level guidance mirrors the career wizard
 # ---------------------------------------------------------------------------
@@ -420,6 +460,7 @@ def _consolidation_call(
     client: ollama.Client,
     system_prompt: str,
     repo_json: str,
+    step_name: str = "consolidation",
 ) -> dict | None:
     """Make a single consolidation LLM call and return parsed data, or None on failure."""
     try:
@@ -436,6 +477,7 @@ def _consolidation_call(
             ],
             options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
         )
+        _log_token_usage(step_name, response)
         raw = response.message.content or ""
         if not raw.strip():
             log.warning("Consolidation LLM returned empty response for a pass")
@@ -474,7 +516,7 @@ def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None
 
     # Pass 1 — identity + roles
     pass1_json = _repo_to_consolidation_json(repo, keys=["identity", "roles"])
-    pass1_data = _consolidation_call(client, CONSOLIDATION_PASS1_PROMPT, pass1_json)
+    pass1_data = _consolidation_call(client, CONSOLIDATION_PASS1_PROMPT, pass1_json, "consolidation-pass1")
     if pass1_data:
         build_repo_from_parsed(pass1_data, consolidated)
     else:
@@ -488,7 +530,7 @@ def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None
     # Pass 2 — skills + education + certifications + domain_knowledge + meta
     pass2_keys = ["skills", "education", "certifications", "domain_knowledge", "meta"]
     pass2_json = _repo_to_consolidation_json(repo, keys=pass2_keys)
-    pass2_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, pass2_json)
+    pass2_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, pass2_json, "consolidation-pass2")
     if pass2_data:
         build_repo_from_parsed(pass2_data, consolidated)
     else:
@@ -503,7 +545,7 @@ def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None
     if _has_duplicate_skills(consolidated.skills):
         log.info("Duplicate skills detected after consolidation, re-running pass 2")
         retry_json = _repo_to_consolidation_json(consolidated, keys=pass2_keys)
-        retry_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, retry_json)
+        retry_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, retry_json, "consolidation-pass2-retry")
         if retry_data and "skills" in retry_data:
             # Replace only skills from the retry (keep education/meta from first pass)
             consolidated.skills = []
@@ -575,6 +617,7 @@ class IngestAgent:
             ],
             options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
         )
+        _log_token_usage("ingest", response)
 
         raw = response.message.content or ""
         if not raw.strip():
@@ -631,6 +674,7 @@ class IngestAgent:
                 ],
                 options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
             )
+            _log_token_usage("compose_stories", response)
 
             raw = response.message.content or ""
             if not raw.strip():

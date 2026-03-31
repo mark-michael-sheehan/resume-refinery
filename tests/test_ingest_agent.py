@@ -13,6 +13,7 @@ from resume_refinery.ingest_agent import (
     _consolidation_call,
     _extract_json,
     _has_duplicate_skills,
+    _log_token_usage,
     _normalize_skill_name,
     _repo_to_consolidation_json,
     _strip_think_tags,
@@ -313,8 +314,12 @@ class _FakeMessage:
 
 
 class _FakeResponse:
-    def __init__(self, content: str):
+    def __init__(self, content: str, prompt_eval_count: int = 500,
+                 eval_count: int = 1000, done_reason: str = "stop"):
         self.message = _FakeMessage(content)
+        self.prompt_eval_count = prompt_eval_count
+        self.eval_count = eval_count
+        self.done_reason = done_reason
 
 
 def test_ingest_with_mocked_llm(monkeypatch):
@@ -889,3 +894,55 @@ def test_compose_stories_llm_failure(monkeypatch):
     # Should not raise
     agent.compose_stories(repo)
     assert repo.stories == []
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _log_token_usage (truncation detection)
+# ---------------------------------------------------------------------------
+
+
+def test_log_token_usage_normal(caplog):
+    """Normal responses should log info but no warnings."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="resume_refinery.ingest_agent"):
+        resp = _FakeResponse("content", prompt_eval_count=2000, eval_count=500, done_reason="stop")
+        _log_token_usage("test-step", resp)
+    assert "[test-step] tokens" in caplog.text
+    assert "TRUNCATED" not in caplog.text
+    assert "NEAR LIMIT" not in caplog.text
+
+
+def test_log_token_usage_output_truncated(caplog):
+    """done_reason='length' should trigger an OUTPUT TRUNCATED warning."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="resume_refinery.ingest_agent"):
+        resp = _FakeResponse("content", prompt_eval_count=2000, eval_count=8192, done_reason="length")
+        _log_token_usage("test-step", resp)
+    assert "OUTPUT TRUNCATED" in caplog.text
+    assert "RESUME_REFINERY_MAX_TOKENS" in caplog.text
+
+
+def test_log_token_usage_input_near_limit(caplog):
+    """Prompt tokens near NUM_CTX should trigger an INPUT NEAR LIMIT warning."""
+    import logging
+    from resume_refinery.ingest_agent import NUM_CTX
+    with caplog.at_level(logging.WARNING, logger="resume_refinery.ingest_agent"):
+        near_limit = int(NUM_CTX * 0.96)
+        resp = _FakeResponse("content", prompt_eval_count=near_limit, eval_count=100, done_reason="stop")
+        _log_token_usage("test-step", resp)
+    assert "INPUT NEAR LIMIT" in caplog.text
+    assert "RESUME_REFINERY_NUM_CTX" in caplog.text
+
+
+def test_log_token_usage_missing_attrs(caplog):
+    """Responses without token attrs (e.g. test fakes) should not crash."""
+    import logging
+
+    class _BareResponse:
+        def __init__(self):
+            self.message = _FakeMessage("content")
+
+    with caplog.at_level(logging.INFO, logger="resume_refinery.ingest_agent"):
+        _log_token_usage("test-step", _BareResponse())
+    assert "[test-step] tokens" in caplog.text
+    assert "TRUNCATED" not in caplog.text
