@@ -237,6 +237,18 @@ def parse_ingest_response(raw: str) -> dict:
     return result
 
 
+def _coerce_str(val: object) -> str:
+    """Coerce a value to a string, joining lists with newlines.
+
+    LLMs sometimes return a JSON array of strings where we expect a single
+    string.  ``str(["a", "b"])`` would produce ``"['a', 'b']"`` — instead
+    we join list items with newlines so the text reads naturally.
+    """
+    if isinstance(val, list):
+        return "\n".join(str(item) for item in val if item)
+    return str(val) if val else ""
+
+
 def build_repo_from_parsed(data: dict, repo: CareerRepository) -> CareerRepository:
     """Populate a CareerRepository from the parsed LLM response dict.
 
@@ -271,15 +283,15 @@ def build_repo_from_parsed(data: dict, repo: CareerRepository) -> CareerReposito
                 title=str(title),
                 start_date=str(role_data.get("start_date", "")),
                 end_date=str(role_data.get("end_date", "Present")),
-                company_context=str(role_data.get("company_context", "")),
-                team_context=str(role_data.get("team_context", "")),
-                ownership=str(role_data.get("ownership", "")),
-                accomplishments=str(role_data.get("accomplishments", "")),
-                technologies=str(role_data.get("technologies", "")),
-                learnings=str(role_data.get("learnings", "")),
-                anti_claims=str(role_data.get("anti_claims", "")),
+                company_context=_coerce_str(role_data.get("company_context", "")),
+                team_context=_coerce_str(role_data.get("team_context", "")),
+                ownership=_coerce_str(role_data.get("ownership", "")),
+                accomplishments=_coerce_str(role_data.get("accomplishments", "")),
+                technologies=_coerce_str(role_data.get("technologies", "")),
+                learnings=_coerce_str(role_data.get("learnings", "")),
+                anti_claims=_coerce_str(role_data.get("anti_claims", "")),
                 extraction_confidence=confidence,
-                confidence_notes=str(role_data.get("confidence_notes", "")),
+                confidence_notes=_coerce_str(role_data.get("confidence_notes", "")),
             )
             repo.roles.append(role)
 
@@ -304,7 +316,7 @@ def build_repo_from_parsed(data: dict, repo: CareerRepository) -> CareerReposito
                 category=category,
                 proficiency=proficiency,
                 years=str(skill_data.get("years", "") or ""),
-                evidence=str(skill_data.get("evidence", "")),
+                evidence=_coerce_str(skill_data.get("evidence", "")),
             )
             repo.skills.append(skill)
 
@@ -322,20 +334,20 @@ def build_repo_from_parsed(data: dict, repo: CareerRepository) -> CareerReposito
             story = StoryEntry(
                 title=str(title),
                 tags=[str(t) for t in story_data.get("tags", []) if t],
-                situation=str(story_data.get("situation", "")),
-                task=str(story_data.get("task", "")),
-                action=str(story_data.get("action", "")),
-                result=str(story_data.get("result", "")),
-                what_it_shows=str(story_data.get("what_it_shows", "")),
+                situation=_coerce_str(story_data.get("situation", "")),
+                task=_coerce_str(story_data.get("task", "")),
+                action=_coerce_str(story_data.get("action", "")),
+                result=_coerce_str(story_data.get("result", "")),
+                what_it_shows=_coerce_str(story_data.get("what_it_shows", "")),
                 extraction_confidence=confidence,
-                confidence_notes=str(story_data.get("confidence_notes", "")),
+                confidence_notes=_coerce_str(story_data.get("confidence_notes", "")),
             )
             repo.stories.append(story)
 
     # Free-form text fields — append new content (dedup at consolidation)
     for field in ("education", "certifications", "domain_knowledge"):
-        val = data.get(field, "")
-        if val and isinstance(val, str):
+        val = _coerce_str(data.get(field, ""))
+        if val:
             existing = getattr(repo, field, "")
             if existing:
                 setattr(repo, field, existing + "\n" + val)
@@ -346,8 +358,8 @@ def build_repo_from_parsed(data: dict, repo: CareerRepository) -> CareerReposito
     if "meta" in data and isinstance(data["meta"], dict):
         meta_data = data["meta"]
         for field in ("career_arc", "differentiators"):
-            val = meta_data.get(field, "")
-            if val and isinstance(val, str) and not getattr(repo.meta, field):
+            val = _coerce_str(meta_data.get(field, ""))
+            if val and not getattr(repo.meta, field):
                 setattr(repo.meta, field, val)
         for list_field in ("themes_to_emphasize", "anti_claims", "known_gaps"):
             val = meta_data.get(list_field, [])

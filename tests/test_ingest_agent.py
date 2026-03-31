@@ -9,6 +9,7 @@ from resume_refinery.ingest_agent import (
     build_repo_from_parsed,
     consolidate_repo,
     parse_ingest_response,
+    _coerce_str,
     _extract_json,
     _repo_to_consolidation_json,
     _strip_think_tags,
@@ -94,6 +95,52 @@ def test_strip_think_tags():
     assert _strip_think_tags("hello") == "hello"
     assert _strip_think_tags("<think>inner</think>result") == "result"
     assert _strip_think_tags("before<think>x</think>after") == "beforeafter"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _coerce_str
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_str_plain_string():
+    assert _coerce_str("hello") == "hello"
+
+
+def test_coerce_str_list_of_strings():
+    result = _coerce_str(["Led migration to AWS", "Reduced costs by 30%"])
+    assert result == "Led migration to AWS\nReduced costs by 30%"
+
+
+def test_coerce_str_empty_list():
+    assert _coerce_str([]) == ""
+
+
+def test_coerce_str_none():
+    assert _coerce_str(None) == ""
+
+
+def test_coerce_str_empty_string():
+    assert _coerce_str("") == ""
+
+
+def test_coerce_str_list_with_empty_items():
+    result = _coerce_str(["a", "", "b", None])
+    assert result == "a\nb"
+
+
+def test_build_repo_handles_list_accomplishments():
+    """Accomplishments returned as a list should be joined, not repr'd."""
+    data = {
+        "roles": [{
+            "company": "Acme",
+            "title": "Engineer",
+            "accomplishments": ["Led migration to AWS", "Reduced costs by 30%"],
+        }],
+    }
+    repo = CareerRepository(repo_id="test-list", created_at="", updated_at="")
+    build_repo_from_parsed(data, repo)
+    assert repo.roles[0].accomplishments == "Led migration to AWS\nReduced costs by 30%"
+    assert "[" not in repo.roles[0].accomplishments
 
 
 # ---------------------------------------------------------------------------
