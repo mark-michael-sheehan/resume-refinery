@@ -42,7 +42,7 @@ voice_profile.md + career_profile.md + job_description.md
 | `specialist_agents.py` | Evidence, voice, drafting, verification, and repair agents |
 | `orchestrator.py` | Deterministic coordinator over specialist agents |
 | `reviewers.py` | LLM review client implementations |
-| `webapp.py` | Local FastAPI browser app |
+| `webapp.py` | Local FastAPI browser app with streaming progress feedback |
 | `session.py` | Session CRUD, versioning, disk I/O |
 | `exporters.py` | Markdown → DOCX via python-docx |
 | `cli.py` | CLI commands calling orchestrator |

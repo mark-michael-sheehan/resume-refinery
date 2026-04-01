@@ -414,6 +414,10 @@ resume-refinery-web
 ```
 
 Upload your three files, click **Generate**, and browse/refine sessions from the sidebar.
+The page streams real-time progress as each pipeline step completes (evidence
+extraction, document generation, review passes, repairs). Multi-line review
+summaries and repair details appear in collapsible `<details>` blocks. On
+completion the page auto-redirects to the session view.
 
 ---
 

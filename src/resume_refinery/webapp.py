@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import html
-from typing import Optional
+import queue
+import re
+import threading
+from typing import Iterator, Optional
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from .models import OrchestrationResult
 from .orchestrator import ResumeRefineryOrchestrator
@@ -129,6 +132,139 @@ def _artifact_summary(result: OrchestrationResult) -> str:
     return "".join(parts)
 
 
+# ------------------------------------------------------------------
+# Streaming progress page shared by generate / refine
+# ------------------------------------------------------------------
+
+_PROGRESS_PAGE_HEAD = (
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"/>'
+    '<meta name="viewport" content="width=device-width,initial-scale=1"/>'
+    "<title>Working\u2026 \u2014 Resume Refinery</title>"
+    "<style>"
+    ":root{--bg:#f7f5ef;--card:#fffdf8;--ink:#1f2421;"
+    "--muted:#55605a;--accent:#0f7b6c;--line:#d8d4c8}"
+    "body{margin:0;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;"
+    "background:radial-gradient(circle at 0% 0%,#fffaf0 0%,var(--bg) 40%,#efeae0 100%);"
+    "color:var(--ink)}"
+    ".wrap{max-width:900px;margin:2rem auto;padding:0 1rem}"
+    ".card{background:var(--card);border:1px solid var(--line);border-radius:14px;"
+    "padding:1.25rem 1.5rem;box-shadow:0 8px 30px rgba(20,35,30,.06);margin-bottom:1rem}"
+    "h2{margin:.2rem 0 .6rem}"
+    "a{color:var(--accent);text-decoration:none}"
+    ".muted{color:var(--muted)}"
+    "#progress-log p{margin:.35rem 0;padding:.2rem 0}"
+    "#progress-log p:last-child::after{"
+    "content:'';display:inline-block;width:.85em;height:.85em;"
+    "border:2px solid var(--line);border-top-color:var(--accent);"
+    "border-radius:50%;animation:spin .6s linear infinite;"
+    "margin-left:.6em;vertical-align:middle}"
+    "#progress-log.done p:last-child::after{display:none}"
+    "@keyframes spin{to{transform:rotate(360deg)}}"
+    ".step-ok{color:var(--accent)}.step-ok::before{content:'\u2713 ';font-weight:bold}"
+    ".step-fail{color:#b00020}.step-fail::before{content:'\u2717 ';font-weight:bold}"
+    "details{margin:.3rem 0 .5rem .8rem;border:1px solid var(--line);border-radius:8px;"
+    "padding:.4rem .7rem;background:#f9f7f2}"
+    "details summary{cursor:pointer;font-weight:600;color:var(--muted);font-size:.92em}"
+    "details pre{white-space:pre-wrap;word-break:break-word;margin:.4rem 0 0;font-size:.88em;"
+    "background:transparent;border:none;padding:0}"
+    "</style></head><body><div class='wrap'>"
+    "<p style='margin-bottom:.3rem'><a href='/'>&larr; Resume Refinery</a></p>"
+    "<div class='card'><h2>Working\u2026</h2>"
+    "<div id='progress-log'>"
+)
+
+# Padding so browsers flush the initial shell before the first LLM call blocks.
+_BROWSER_FLUSH_PAD = "<!-- " + " " * 1024 + " -->\n"
+
+# Regex to strip Rich markup tags like [green], [/green], [bold], etc.
+_RICH_TAG_RE = re.compile(r"\[/?[a-z ]+\]")
+
+
+def _strip_rich(text: str) -> str:
+    """Remove Rich console markup tags, returning plain text."""
+    return _RICH_TAG_RE.sub("", text)
+
+
+def _is_detail_message(msg: str) -> bool:
+    """Return True if this progress message is a multi-line detail block
+    (review summary, repair edits, acceptances) that should be collapsed."""
+    return "\n" in msg
+
+
+def _progress_chunk(msg: str) -> str:
+    """Convert an orchestrator progress message into an HTML chunk."""
+    plain = _strip_rich(msg)
+
+    if _is_detail_message(plain):
+        # Multi-line detail: wrap in a collapsible <details> block
+        lines = plain.split("\n")
+        summary_text = html.escape(lines[0].strip())
+        body_text = html.escape("\n".join(lines[1:]))
+        return (
+            f"<details><summary>{summary_text}</summary>"
+            f"<pre>{body_text}</pre></details>\n"
+        )
+
+    # Heading-style lines (review pass separators)
+    stripped = plain.strip()
+    if stripped.startswith("───") or stripped.startswith("---"):
+        return f"<p><strong>{html.escape(stripped)}</strong></p>\n"
+
+    return f"<p>{html.escape(stripped)}</p>\n"
+
+
+def _stream_orchestration(
+    run_fn,
+    redirect_url_fn,
+    error_redirect: str = "/",
+) -> StreamingResponse:
+    """Run *run_fn* in a background thread, streaming progress HTML chunks.
+
+    *run_fn* receives a ``progress`` callback and must return an
+    ``OrchestrationResult``.  *redirect_url_fn* is called with the result
+    to determine the auto-redirect URL.
+    """
+    q: queue.Queue[str | None] = queue.Queue()
+
+    def _run() -> None:
+        try:
+            result = run_fn(progress=lambda msg: q.put(_progress_chunk(msg)))
+            sid = html.escape(result.session.session_id)
+            url = redirect_url_fn(result)
+            # Final success message + redirect
+            q.put(
+                "<p class='step-ok' style='margin-top:.8rem;font-weight:600'>"
+                f"Done!  Redirecting to <a href='{url}'>{sid}</a>\u2026</p>\n"
+            )
+            if result.strict_truth_failed:
+                q.put(
+                    "<p class='step-fail'>"
+                    "Strict truth check failed \u2014 outputs saved for review.</p>\n"
+                )
+            q.put(
+                f"<script>setTimeout(function(){{window.location.href='{url}';}},1500);</script>"
+            )
+        except Exception as exc:
+            q.put(
+                f"<p class='step-fail'>Error: {html.escape(str(exc))}</p>\n"
+                f"<p><a href='{error_redirect}'>Back</a></p>\n"
+            )
+        finally:
+            q.put(None)  # sentinel
+
+    def _generate() -> Iterator[str]:
+        yield _PROGRESS_PAGE_HEAD + "\n" + _BROWSER_FLUSH_PAD
+        threading.Thread(target=_run, daemon=True).start()
+        while True:
+            chunk = q.get()
+            if chunk is None:
+                break
+            yield chunk
+        yield "</div></div></div></body></html>"
+
+    return StreamingResponse(_generate(), media_type="text/html")
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> HTMLResponse:
     # Build career repo dropdown options
@@ -171,7 +307,7 @@ def home() -> HTMLResponse:
     return _page("Resume Refinery", body)
 
 
-@app.post("/sessions/new", response_class=HTMLResponse)
+@app.post("/sessions/new")
 async def create_session(
     job_description: UploadFile,
     career_profile: Optional[UploadFile] = None,
@@ -179,7 +315,7 @@ async def create_session(
     career_repo_id: Optional[str] = Form(None),
     skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
-) -> HTMLResponse:
+) -> StreamingResponse:
     try:
         job_text = (await job_description.read()).decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -218,38 +354,19 @@ async def create_session(
 
     job = parse_job_description_content(job_text)
 
-    result = orchestrator.create_session_run(
-        career,
-        voice,
-        job,
-        skip_review=bool(skip_review),
-        allow_unverified=bool(allow_unverified),
+    _skip = bool(skip_review)
+    _allow = bool(allow_unverified)
+
+    return _stream_orchestration(
+        run_fn=lambda progress: orchestrator.create_session_run(
+            career, voice, job,
+            skip_review=_skip,
+            allow_unverified=_allow,
+            progress=progress,
+        ),
+        redirect_url_fn=lambda r: f"/sessions/{r.session.session_id}",
+        error_redirect="/",
     )
-
-    strict_failed = result.strict_truth_failed
-    body = """
-<div class=\"card\">
-  <h1>Generation Complete</h1>
-  <p>Session: <a href=\"/sessions/{sid}\">{sid}</a></p>
-  {truth_summary}
-  <p><a href=\"/sessions\">Back to sessions</a></p>
-</div>
-{artifact_summary}
-""".format(
-        sid=html.escape(result.session.session_id),
-        truth_summary=_truth_summary(result.reviews.truthfulness),
-        artifact_summary=_artifact_summary(result),
-    )
-
-    if strict_failed:
-        body += """
-<div class=\"card\">
-  <h2>Strict truth check failed</h2>
-  <p>Outputs were saved for review, but strict mode did not pass. Refine with tighter evidence-based feedback or enable allow-unverified in the form.</p>
-</div>
-"""
-
-    return _page("Generation Complete", body)
 
 
 @app.get("/sessions", response_class=HTMLResponse)
@@ -327,29 +444,22 @@ def refine_session(
     if doc and doc not in ("cover_letter", "resume", "interview_guide"):
         raise HTTPException(status_code=400, detail=f"Unknown document: {doc}")
 
-    result = orchestrator.refine_session_run(
-        session_id,
-        feedback,
-        doc=doc or None,
-        skip_review=bool(skip_review),
-        allow_unverified=bool(allow_unverified),
+    _doc = doc or None
+    _skip = bool(skip_review)
+    _allow = bool(allow_unverified)
+
+    return _stream_orchestration(
+        run_fn=lambda progress: orchestrator.refine_session_run(
+            session_id,
+            feedback,
+            doc=_doc,
+            skip_review=_skip,
+            allow_unverified=_allow,
+            progress=progress,
+        ),
+        redirect_url_fn=lambda r: f"/sessions/{r.session.session_id}",
+        error_redirect=f"/sessions/{html.escape(session_id)}",
     )
-
-    if result.strict_truth_failed:
-        return _page(
-            "Strict truth check failed",
-            f"""
-<div class=\"card\">
-  <h1>Strict truth check failed</h1>
-  {_truth_summary(result.reviews.truthfulness)}
-  <p>Version v{result.session.current_version} was saved for review. Unsupported claims remain.</p>
-  <p><a href=\"/sessions/{html.escape(result.session.session_id)}\">Back to session</a></p>
-</div>
-{_artifact_summary(result)}
-""",
-        )
-
-    return RedirectResponse(url=f"/sessions/{result.session.session_id}", status_code=303)
 
 
 def main() -> None:

@@ -39,7 +39,7 @@
 
 | ID | Requirement |
 |---|---|
-| FR-5.1 | Primary delivery is a local web application (FastAPI + browser). |
+| FR-5.1 | Primary delivery is a local web application (FastAPI + browser). The **generate** and **refine** endpoints stream real-time progress to the browser using `StreamingResponse`. Each orchestrator step (evidence extraction, document generation, review passes, repairs) is reported as it completes, with multi-line detail (review summaries, repair edits, false-positive acceptances) rendered in collapsible `<details>` blocks. On completion the page auto-redirects to the session view. |
 | FR-5.2 | A CLI interface is also available for headless/scripted use. |
 | FR-5.3 | The tool is pip-installable (`pip install -e .`). |
 
