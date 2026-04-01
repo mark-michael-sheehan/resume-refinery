@@ -38,6 +38,7 @@ BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "8192"))
 NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
+STAR_TEMPERATURE = float(os.environ.get("RESUME_REFINERY_STAR_TEMPERATURE", "0.2"))
 
 
 def _log_token_usage(step_name: str, response: object) -> None:
@@ -185,6 +186,10 @@ For each story, return a JSON object with these fields:
 }
 
 Rules:
+- Extract AS MANY stories as the career data supports. These stories will be \
+selectively matched to specific job descriptions later, so quantity matters — \
+do NOT stop at 5 or any arbitrary limit. Err on the side of producing MORE \
+stories rather than fewer.
 - Only create stories where the source material provides concrete evidence for \
 at least 2 of the 4 STAR components (situation, task, action, result).
 - Ground every statement in the career data provided. Do NOT invent details.
@@ -678,11 +683,9 @@ class IngestAgent:
     def compose_stories(self, repo: CareerRepository) -> CareerRepository:
         """Generate STAR stories from the repo's roles and accomplishments.
 
-        Makes one LLM call against the already-structured career data.
-        Stories are appended to repo.stories.
+        Makes one LLM call per role so the model can exhaustively mine each
+        position.  Stories are appended to repo.stories.
         """
-        # Build a summary of roles + accomplishments for the LLM
-        role_summaries: list[str] = []
         for role in repo.roles:
             parts = [f"## {role.title} @ {role.company} ({role.start_date} – {role.end_date})"]
             if role.ownership:
@@ -693,67 +696,64 @@ class IngestAgent:
                 parts.append(f"Technologies: {role.technologies}")
             if role.learnings:
                 parts.append(f"Learnings: {role.learnings}")
-            role_summaries.append("\n".join(parts))
+            role_text = "\n".join(parts)
 
-        if not role_summaries:
-            return repo
-
-        career_text = "\n\n".join(role_summaries)
-
-        try:
-            response = self.client.chat(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": STORY_COMPOSITION_PROMPT},
-                    {"role": "user", "content": (
-                        "Compose STAR stories from the following career data. "
-                        "Return ONLY the JSON array.\n\n"
-                        f"---\n{career_text}\n---"
-                    )},
-                ],
-                options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": 0},
-            )
-            _log_token_usage("compose_stories", response)
-
-            raw = response.message.content or ""
-            if not raw.strip():
-                log.warning("Story composition returned empty response")
-                return repo
-
-            cleaned = _strip_think_tags(raw)
-            cleaned = _extract_json(cleaned)
-            stories_data = repair_json(cleaned, return_objects=True)
-
-            if isinstance(stories_data, dict) and "stories" in stories_data:
-                stories_data = stories_data["stories"]
-
-            if not isinstance(stories_data, list):
-                log.warning("Story composition returned non-list: %s", type(stories_data).__name__)
-                return repo
-
-            for story_data in stories_data:
-                if not isinstance(story_data, dict):
-                    continue
-                title = story_data.get("title", "")
-                if not title:
-                    continue
-                confidence = story_data.get("extraction_confidence", "medium")
-                if confidence not in ("high", "medium", "low"):
-                    confidence = "medium"
-                story = StoryEntry(
-                    title=str(title),
-                    tags=[str(t) for t in story_data.get("tags", []) if t],
-                    situation=str(story_data.get("situation", "")),
-                    task=str(story_data.get("task", "")),
-                    action=str(story_data.get("action", "")),
-                    result=str(story_data.get("result", "")),
-                    what_it_shows=str(story_data.get("what_it_shows", "")),
-                    extraction_confidence=confidence,
-                    confidence_notes=str(story_data.get("confidence_notes", "")),
+            try:
+                response = self.client.chat(
+                    model=MODEL,
+                    messages=[
+                        {"role": "system", "content": STORY_COMPOSITION_PROMPT},
+                        {"role": "user", "content": (
+                            "Compose STAR stories from the following role. "
+                            "Return ONLY the JSON array.\n\n"
+                            f"---\n{role_text}\n---"
+                        )},
+                    ],
+                    options={"num_ctx": NUM_CTX, "num_predict": MAX_TOKENS, "temperature": STAR_TEMPERATURE},
                 )
-                repo.stories.append(story)
+                _log_token_usage(f"compose_stories[{role.company}]", response)
 
-        except Exception:
-            log.warning("Story composition failed, continuing without stories", exc_info=True)
+                raw = response.message.content or ""
+                if not raw.strip():
+                    log.warning("Story composition returned empty for %s @ %s", role.title, role.company)
+                    continue
+
+                cleaned = _strip_think_tags(raw)
+                cleaned = _extract_json(cleaned)
+                stories_data = repair_json(cleaned, return_objects=True)
+
+                if isinstance(stories_data, dict) and "stories" in stories_data:
+                    stories_data = stories_data["stories"]
+
+                if not isinstance(stories_data, list):
+                    log.warning("Story composition returned non-list for %s @ %s: %s",
+                                role.title, role.company, type(stories_data).__name__)
+                    continue
+
+                for story_data in stories_data:
+                    if not isinstance(story_data, dict):
+                        continue
+                    title = story_data.get("title", "")
+                    if not title:
+                        continue
+                    confidence = story_data.get("extraction_confidence", "medium")
+                    if confidence not in ("high", "medium", "low"):
+                        confidence = "medium"
+                    story = StoryEntry(
+                        title=str(title),
+                        tags=[str(t) for t in story_data.get("tags", []) if t],
+                        situation=str(story_data.get("situation", "")),
+                        task=str(story_data.get("task", "")),
+                        action=str(story_data.get("action", "")),
+                        result=str(story_data.get("result", "")),
+                        what_it_shows=str(story_data.get("what_it_shows", "")),
+                        extraction_confidence=confidence,
+                        confidence_notes=str(story_data.get("confidence_notes", "")),
+                    )
+                    repo.stories.append(story)
+
+            except Exception:
+                log.warning("Story composition failed for %s @ %s, skipping role",
+                            role.title, role.company, exc_info=True)
 
         return repo
