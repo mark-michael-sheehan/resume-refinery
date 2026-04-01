@@ -74,11 +74,14 @@ context window. The extraction prompt includes field-level guidance that
 mirrors the wizard's helper text, ensuring the LLM fills each field
 appropriately and completely.
 
-After all documents are extracted, `consolidate_repo()` merges duplicate
-roles (matched by company + title + overlapping dates) and deduplicates
-skills (case-insensitive name match, keeping highest proficiency). A final
-`compose_stories()` LLM call generates STAR behavioural stories from the
-merged accomplishments.
+After extraction the user is landed on the **Role Timeline** page
+(`current_phase = "roles"`, `needs_consolidation = True`) where they can
+verify, edit, delete, and add roles before any downstream LLM work runs.
+Once the user clicks **Finalize & Build Stories**, `consolidate_repo()`
+merges duplicate roles (matched by company + title + overlapping dates)
+and deduplicates skills (case-insensitive name match, keeping highest
+proficiency). A final `compose_stories()` LLM call generates STAR
+behavioural stories from the merged accomplishments.
 
 Each role and story carries an `extraction_confidence` rating (`high` /
 `medium` / `low`) and `confidence_notes` so the wizard can surface
@@ -94,6 +97,13 @@ Upload: resume.pdf + perf_review_2024.pdf + perf_review_2025.pdf
     IngestAgent.ingest_to_repo()  ×N  (one LLM call per document)
          │
          ▼
+    ┌─────────────────────────────────────────────┐
+    │  USER VERIFICATION GATE (roles phase)       │
+    │  Edit / delete / add roles, fix dates and   │
+    │  company names before consolidation runs.   │
+    └──────────────────┬──────────────────────────┘
+                       │  "Finalize & Build Stories"
+                       ▼
     consolidate_repo()  (2-pass LLM merge)
          │               Pass 1: identity + roles
          │               Pass 2: skills + education + meta

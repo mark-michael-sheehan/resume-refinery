@@ -145,6 +145,7 @@ class CareerRepository(BaseModel):
     updated_at: str = Field(default="", description="ISO 8601 datetime")
     current_phase: WizardPhase = "identity"
     deepdive_role_index: int = Field(default=0, description="Which role is being deep-dived")
+    needs_consolidation: bool = Field(default=False, description="True after ingestion, before user confirms extracted roles")
 
     identity: CareerIdentity = Field(default_factory=CareerIdentity)
     roles: list[RoleEntry] = Field(default_factory=list)

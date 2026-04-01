@@ -344,26 +344,12 @@ async def career_ingest(
                 yield f"<p class='step-fail'>Failed to extract {_esc(filename)}</p>\n"
 
         if extraction_succeeded:
-            # Consolidate duplicates across documents via LLM
-            yield "<p>Consolidating career data\u2026</p>\n"
-            try:
-                repo = consolidate_repo(repo, client=ingest_agent.client)
-                yield "<p class='step-ok'>Career data consolidated</p>\n"
-            except Exception:
-                log.warning("Consolidation failed, continuing with unmerged repo", exc_info=True)
-                yield "<p class='step-fail'>Consolidation failed, continuing with extracted data</p>\n"
-            # Compose STAR stories from merged accomplishments (per-role)
-            yield "<p>Composing behavioral stories\u2026</p>\n"
-            try:
-                ingest_agent.compose_stories(repo)
-                yield f"<p class='step-ok'>Composed {len(repo.stories)} stories across {len(repo.roles)} roles</p>\n"
-            except Exception:
-                log.warning("Story composition failed, continuing without stories", exc_info=True)
-                yield "<p class='step-fail'>Story composition failed</p>\n"
             # Override name from form (user-provided takes priority)
             repo.identity.name = name.strip()
-            # Advance phase past identity/roles since ingestion fills both
-            repo.current_phase = "role_deepdive"
+            # Land on roles phase so the user can verify extracted data
+            # before consolidation and story composition run
+            repo.current_phase = "roles"
+            repo.needs_consolidation = True
         else:
             log.warning("All document extractions failed, continuing with empty repo")
             repo.identity.name = name.strip()
@@ -572,6 +558,18 @@ def _render_roles(repo: CareerRepository) -> HTMLResponse:
             '</div>'
         )
 
+    # Choose appropriate continue action based on whether we're post-ingestion
+    if repo.needs_consolidation:
+        continue_btn = f"""
+    <form method="post" action="/career/{_esc(repo.repo_id)}/finalize" style="display:inline">
+      <button type="submit" {"disabled" if not repo.roles else ""}>Finalize &amp; Build Stories</button>
+    </form>"""
+    else:
+        continue_btn = f"""
+    <form method="post" action="/career/{_esc(repo.repo_id)}/advance/role_deepdive" style="display:inline">
+      <button type="submit" {"disabled" if not repo.roles else ""}>Continue to Deep Dive</button>
+    </form>"""
+
     body = f"""
 <div class="card">
   <h2>Phase 2: Role Timeline</h2>
@@ -607,9 +605,7 @@ def _render_roles(repo: CareerRepository) -> HTMLResponse:
 <div class="card">
   <div class="actions">
     <a href="/career/{_esc(repo.repo_id)}/identity" class="btn btn-secondary">Back</a>
-    <form method="post" action="/career/{_esc(repo.repo_id)}/advance/role_deepdive" style="display:inline">
-      <button type="submit" {"disabled" if not repo.roles else ""}>Continue to Deep Dive</button>
-    </form>
+    {continue_btn}
   </div>
 </div>
 """
@@ -701,6 +697,91 @@ def delete_role(repo_id: str, role_idx: int) -> RedirectResponse:
         repo.roles.pop(role_idx)
         career_store.save(repo)
     return RedirectResponse(url=f"/career/{repo_id}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Post-ingestion finalize — consolidation + STAR stories after user review
+# ---------------------------------------------------------------------------
+
+_FINALIZE_PROGRESS_HEAD = (
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"/>'
+    '<meta name="viewport" content="width=device-width,initial-scale=1"/>'
+    "<title>Finalizing\u2026 \u2014 Career Builder</title>"
+    "<style>"
+    ":root{--bg:#f7f5ef;--card:#fffdf8;--ink:#1f2421;"
+    "--muted:#55605a;--accent:#0f7b6c;--line:#d8d4c8;--accent-light:#e8f5f1}"
+    "body{margin:0;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;"
+    "background:radial-gradient(circle at 0% 0%,#fffaf0 0%,var(--bg) 40%,#efeae0 100%);"
+    "color:var(--ink)}"
+    ".wrap{max-width:820px;margin:2rem auto;padding:0 1rem}"
+    ".card{background:var(--card);border:1px solid var(--line);border-radius:14px;"
+    "padding:1.25rem 1.5rem;box-shadow:0 8px 30px rgba(20,35,30,.06);margin-bottom:1rem}"
+    "h2{margin:.2rem 0 .6rem}"
+    "a{color:var(--accent);text-decoration:none}"
+    ".muted{color:var(--muted)}"
+    "#progress-log p{margin:.4rem 0;padding:.3rem 0}"
+    "#progress-log p:last-child::after{"
+    "content:'';display:inline-block;width:.85em;height:.85em;"
+    "border:2px solid var(--line);border-top-color:var(--accent);"
+    "border-radius:50%;animation:spin .6s linear infinite;"
+    "margin-left:.6em;vertical-align:middle}"
+    "#progress-log.done p:last-child::after{display:none}"
+    "@keyframes spin{to{transform:rotate(360deg)}}"
+    ".step-ok{color:var(--accent)}.step-ok::before{content:'\u2713 ';font-weight:bold}"
+    ".step-fail{color:#b00020}.step-fail::before{content:'\u2717 ';font-weight:bold}"
+    "</style></head><body><div class='wrap'>"
+    "<p style='margin-bottom:.3rem'><a href='/career'>&larr; Career Builder</a></p>"
+    "<div class='card'><h2>Finalizing Career Data</h2>"
+    "<div id='progress-log'>"
+)
+
+
+@router.post("/{repo_id}/finalize")
+def career_finalize(repo_id: str) -> StreamingResponse:
+    """Consolidate extracted roles and compose STAR stories after user review.
+
+    This runs the deferred LLM steps (consolidation + story composition) that
+    were skipped during document ingestion so the user could verify extracted
+    roles first.
+    """
+    repo = _load_repo(repo_id)
+
+    def _progress() -> Iterator[str]:
+        nonlocal repo
+        yield _FINALIZE_PROGRESS_HEAD + "\n" + _BROWSER_FLUSH_PAD
+
+        # Consolidate duplicates across documents via LLM
+        yield "<p>Consolidating career data\u2026</p>\n"
+        try:
+            repo = consolidate_repo(repo, client=ingest_agent.client)
+            yield "<p class='step-ok'>Career data consolidated</p>\n"
+        except Exception:
+            log.warning("Consolidation failed, continuing with unmerged repo", exc_info=True)
+            yield "<p class='step-fail'>Consolidation failed, continuing with reviewed data</p>\n"
+
+        # Compose STAR stories from merged accomplishments (per-role)
+        yield "<p>Composing behavioral stories\u2026</p>\n"
+        try:
+            ingest_agent.compose_stories(repo)
+            yield f"<p class='step-ok'>Composed {len(repo.stories)} stories across {len(repo.roles)} roles</p>\n"
+        except Exception:
+            log.warning("Story composition failed, continuing without stories", exc_info=True)
+            yield "<p class='step-fail'>Story composition failed</p>\n"
+
+        # Clear the flag and advance to deep-dive
+        repo.needs_consolidation = False
+        repo.current_phase = "role_deepdive"
+        career_store.save(repo)
+
+        redirect_url = f"/career/{repo.repo_id}"
+        yield (
+            "</div>"
+            f"<p class='step-ok' style='margin-top:.8rem;font-weight:600'>Done! Redirecting\u2026</p>"
+            f"<script>setTimeout(function(){{window.location.href='{redirect_url}';}},1200);</script>"
+            "</div></div></body></html>"
+        )
+
+    return StreamingResponse(_progress(), media_type="text/html")
 
 
 # ---------------------------------------------------------------------------

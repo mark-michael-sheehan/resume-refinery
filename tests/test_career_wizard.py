@@ -284,7 +284,7 @@ def test_htmx_probe_button_present(client, repo_id):
 
 
 def test_ingest_advances_to_role_deepdive(client, monkeypatch):
-    """After document ingestion, phase should advance to role_deepdive."""
+    """After document ingestion, phase should be roles with needs_consolidation."""
     from resume_refinery import career_wizard
     from unittest.mock import MagicMock
     import re
@@ -308,4 +308,71 @@ def test_ingest_advances_to_role_deepdive(client, monkeypatch):
 
     # Load the repo and verify phase
     repo = career_wizard.career_store.get(repo_id)
+    assert repo.current_phase == "roles"
+    assert repo.needs_consolidation is True
+
+
+def test_ingest_roles_page_shows_finalize_button(client, monkeypatch):
+    """After ingestion the roles page should show 'Finalize & Build Stories'."""
+    from resume_refinery import career_wizard
+    from unittest.mock import MagicMock
+    import re
+
+    mock_ingest = MagicMock()
+    def fake_ingest(text, repo):
+        from resume_refinery.models import RoleEntry
+        repo.roles.append(RoleEntry(company="Acme", title="Engineer",
+                                     start_date="2020", end_date="Present"))
+    mock_ingest.ingest_to_repo = fake_ingest
+    monkeypatch.setattr(career_wizard, "ingest_agent", mock_ingest)
+
+    resp = client.post("/career/ingest", data={"name": "Gate User"},
+                       files=[("files", ("resume.txt", b"Worked at Acme", "text/plain"))])
+    match = re.search(r"window\.location\.href='(/career/[^']+)'", resp.text)
+    assert match
+    redirect_url = match.group(1)
+
+    resp = client.get(redirect_url)
+    assert resp.status_code == 200
+    assert "Finalize" in resp.text
+    assert "Build Stories" in resp.text
+    # Should NOT show the normal "Continue to Deep Dive" button
+    assert "Continue to Deep Dive" not in resp.text
+
+
+def test_finalize_runs_consolidation_and_stories(client, monkeypatch):
+    """The finalize endpoint should consolidate, compose stories, and advance phase."""
+    from resume_refinery import career_wizard
+    from resume_refinery.models import RoleEntry
+    from unittest.mock import MagicMock, patch
+    import re
+
+    mock_ingest = MagicMock()
+    def fake_ingest(text, repo):
+        repo.roles.append(RoleEntry(company="Acme", title="Engineer",
+                                     start_date="2020", end_date="Present"))
+    mock_ingest.ingest_to_repo = fake_ingest
+    monkeypatch.setattr(career_wizard, "ingest_agent", mock_ingest)
+
+    # Ingest first
+    resp = client.post("/career/ingest", data={"name": "Final User"},
+                       files=[("files", ("resume.txt", b"Worked at Acme", "text/plain"))])
+    match = re.search(r"window\.location\.href='(/career/[^']+)'", resp.text)
+    assert match
+    repo_id = match.group(1).split("/career/")[1]
+
+    # Mock consolidate_repo to be a no-op that returns the same repo
+    def fake_consolidate(repo, client=None):
+        return repo
+    monkeypatch.setattr(career_wizard, "consolidate_repo", fake_consolidate)
+
+    # Finalize
+    resp = client.post(f"/career/{repo_id}/finalize")
+    assert resp.status_code == 200
+    assert "Consolidating" in resp.text
+    assert "Composing" in resp.text
+
+    # Verify repo state after finalize
+    repo = career_wizard.career_store.get(repo_id)
     assert repo.current_phase == "role_deepdive"
+    assert repo.needs_consolidation is False
