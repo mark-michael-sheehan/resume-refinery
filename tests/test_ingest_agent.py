@@ -8,6 +8,8 @@ from resume_refinery.ingest_agent import (
     IngestAgent,
     build_repo_from_parsed,
     consolidate_repo,
+    consolidate_roles,
+    consolidate_skills_meta,
     parse_ingest_response,
     _coerce_str,
     _consolidation_call,
@@ -603,6 +605,118 @@ def test_consolidate_preserves_repo_metadata():
     assert result.repo_id == "test-repo"
     assert result.voice_raw == "my voice profile"
     assert result.current_phase == "role_deepdive"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — consolidate_roles (Pass 1 only)
+# ---------------------------------------------------------------------------
+
+
+def test_consolidate_roles_merges_via_llm():
+    """consolidate_roles should merge duplicate roles via LLM Pass 1."""
+    repo = _make_repo()
+    repo.roles = [
+        RoleEntry(company="DataFlow Inc", title="Senior Engineer",
+                  start_date="Mar 2021", end_date="Present",
+                  accomplishments="Led backend migration.",
+                  technologies="Python, Kafka"),
+        RoleEntry(company="DataFlow Inc", title="Senior Engineer",
+                  start_date="Jan 2022", end_date="Present",
+                  accomplishments="Reduced infra costs by $180K/year.",
+                  technologies="Python, Kubernetes"),
+    ]
+    repo.skills = [SkillEntry(name="Python"), SkillEntry(name="Go")]
+    fake_client = _FakeClient([SAMPLE_CONSOLIDATED_PASS1_JSON])
+    result = consolidate_roles(repo, client=fake_client)
+    # Pass 1 should consolidate roles
+    assert fake_client.call_count == 1
+    assert len(result.roles) == 1
+    assert "$180K" in result.roles[0].accomplishments
+    # Skills should be preserved unchanged (not consolidated)
+    assert len(result.skills) == 2
+
+
+def test_consolidate_roles_skips_single_role():
+    """consolidate_roles should skip LLM when only 1 role."""
+    repo = _make_repo()
+    repo.roles = [RoleEntry(company="Acme", title="Eng", start_date="2020", end_date="Present")]
+    fake_client = _FakeClient("should not be called")
+    result = consolidate_roles(repo, client=fake_client)
+    assert fake_client.call_count == 0
+    assert len(result.roles) == 1
+
+
+def test_consolidate_roles_preserves_pass2_fields():
+    """consolidate_roles should not touch skills, education, meta, etc."""
+    repo = _make_repo()
+    repo.roles = [
+        RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
+        RoleEntry(company="B", title="SRE", start_date="2021", end_date="2022"),
+    ]
+    repo.skills = [SkillEntry(name="Python"), SkillEntry(name="python")]  # duplicates
+    repo.education = "BS CS"
+    repo.meta.career_arc = "IC track"
+    fake_client = _FakeClient([SAMPLE_CONSOLIDATED_PASS1_JSON])
+    result = consolidate_roles(repo, client=fake_client)
+    # Skills should be carried over unchanged (dupes still present)
+    assert len(result.skills) == 2
+    assert result.education == "BS CS"
+    assert result.meta.career_arc == "IC track"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — consolidate_skills_meta (Pass 2 only)
+# ---------------------------------------------------------------------------
+
+
+def test_consolidate_skills_meta_merges_via_llm():
+    """consolidate_skills_meta should merge skills/meta via LLM Pass 2."""
+    repo = _make_repo()
+    repo.roles = [
+        RoleEntry(company="DataFlow Inc", title="Senior Engineer",
+                  start_date="Mar 2021", end_date="Present"),
+    ]
+    repo.skills = [
+        SkillEntry(name="Python", category="language", proficiency="expert"),
+        SkillEntry(name="python", category="other", proficiency="working"),
+    ]
+    fake_client = _FakeClient([SAMPLE_CONSOLIDATED_PASS2_JSON])
+    result = consolidate_skills_meta(repo, client=fake_client)
+    assert fake_client.call_count == 1
+    # Skills should be consolidated
+    assert len(result.skills) == 1
+    assert result.skills[0].name == "Python"
+    # Roles should be preserved unchanged
+    assert len(result.roles) == 1
+    assert result.roles[0].company == "DataFlow Inc"
+
+
+def test_consolidate_skills_meta_skips_single_skill():
+    """consolidate_skills_meta should skip LLM when only 1 skill."""
+    repo = _make_repo()
+    repo.skills = [SkillEntry(name="Python")]
+    fake_client = _FakeClient("should not be called")
+    result = consolidate_skills_meta(repo, client=fake_client)
+    assert fake_client.call_count == 0
+    assert len(result.skills) == 1
+
+
+def test_consolidate_skills_meta_preserves_roles():
+    """consolidate_skills_meta should not touch roles or identity."""
+    repo = _make_repo()
+    repo.identity.name = "Jordan Lee"
+    repo.roles = [
+        RoleEntry(company="Acme", title="Engineer", start_date="2020", end_date="Present"),
+    ]
+    repo.skills = [
+        SkillEntry(name="Python"),
+        SkillEntry(name="Go"),
+    ]
+    fake_client = _FakeClient([SAMPLE_CONSOLIDATED_PASS2_JSON])
+    result = consolidate_skills_meta(repo, client=fake_client)
+    assert result.identity.name == "Jordan Lee"
+    assert len(result.roles) == 1
+    assert result.roles[0].company == "Acme"
 
 
 def test_repo_to_consolidation_json():

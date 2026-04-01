@@ -298,6 +298,9 @@ def test_ingest_advances_to_role_deepdive(client, monkeypatch):
     mock_ingest.ingest_to_repo = fake_ingest
     monkeypatch.setattr(career_wizard, "ingest_agent", mock_ingest)
 
+    # Mock consolidate_roles so it doesn't call the LLM
+    monkeypatch.setattr(career_wizard, "consolidate_roles", lambda repo, client=None: repo)
+
     resp = client.post("/career/ingest", data={"name": "Ingest User"},
                        files=[("files", ("resume.txt", b"Worked at Acme as Engineer", "text/plain"))])
     assert resp.status_code == 200
@@ -325,6 +328,7 @@ def test_ingest_roles_page_shows_finalize_button(client, monkeypatch):
                                      start_date="2020", end_date="Present"))
     mock_ingest.ingest_to_repo = fake_ingest
     monkeypatch.setattr(career_wizard, "ingest_agent", mock_ingest)
+    monkeypatch.setattr(career_wizard, "consolidate_roles", lambda repo, client=None: repo)
 
     resp = client.post("/career/ingest", data={"name": "Gate User"},
                        files=[("files", ("resume.txt", b"Worked at Acme", "text/plain"))])
@@ -341,7 +345,7 @@ def test_ingest_roles_page_shows_finalize_button(client, monkeypatch):
 
 
 def test_finalize_runs_consolidation_and_stories(client, monkeypatch):
-    """The finalize endpoint should consolidate, compose stories, and advance phase."""
+    """The finalize endpoint should consolidate skills/meta, compose stories, and advance phase."""
     from resume_refinery import career_wizard
     from resume_refinery.models import RoleEntry
     from unittest.mock import MagicMock, patch
@@ -353,6 +357,7 @@ def test_finalize_runs_consolidation_and_stories(client, monkeypatch):
                                      start_date="2020", end_date="Present"))
     mock_ingest.ingest_to_repo = fake_ingest
     monkeypatch.setattr(career_wizard, "ingest_agent", mock_ingest)
+    monkeypatch.setattr(career_wizard, "consolidate_roles", lambda repo, client=None: repo)
 
     # Ingest first
     resp = client.post("/career/ingest", data={"name": "Final User"},
@@ -361,10 +366,10 @@ def test_finalize_runs_consolidation_and_stories(client, monkeypatch):
     assert match
     repo_id = match.group(1).split("/career/")[1]
 
-    # Mock consolidate_repo to be a no-op that returns the same repo
+    # Mock consolidate_skills_meta to be a no-op that returns the same repo
     def fake_consolidate(repo, client=None):
         return repo
-    monkeypatch.setattr(career_wizard, "consolidate_repo", fake_consolidate)
+    monkeypatch.setattr(career_wizard, "consolidate_skills_meta", fake_consolidate)
 
     # Finalize
     resp = client.post(f"/career/{repo_id}/finalize")

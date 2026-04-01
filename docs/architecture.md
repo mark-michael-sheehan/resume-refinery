@@ -74,14 +74,18 @@ context window. The extraction prompt includes field-level guidance that
 mirrors the wizard's helper text, ensuring the LLM fills each field
 appropriately and completely.
 
-After extraction the user is landed on the **Role Timeline** page
+After per-document extraction, `consolidate_roles()` (Pass 1) immediately
+merges duplicate roles — matching by company + title + overlapping dates —
+so the user sees a clean timeline rather than one entry per source document.
+The user is then landed on the **Role Timeline** page
 (`current_phase = "roles"`, `needs_consolidation = True`) where they can
-verify, edit, delete, and add roles before any downstream LLM work runs.
-Once the user clicks **Finalize & Build Stories**, `consolidate_repo()`
-merges duplicate roles (matched by company + title + overlapping dates)
-and deduplicates skills (case-insensitive name match, keeping highest
-proficiency). A final `compose_stories()` LLM call generates STAR
-behavioural stories from the merged accomplishments.
+verify, edit, delete, and add roles before further LLM work runs.
+
+Once the user clicks **Finalize & Build Stories**, `consolidate_skills_meta()`
+(Pass 2) deduplicates skills (case-insensitive name match, keeping highest
+proficiency) and merges education/certifications/meta. A final
+`compose_stories()` LLM call generates STAR behavioural stories from the
+merged accomplishments.
 
 Each role and story carries an `extraction_confidence` rating (`high` /
 `medium` / `low`) and `confidence_notes` so the wizard can surface
@@ -97,16 +101,17 @@ Upload: resume.pdf + perf_review_2024.pdf + perf_review_2025.pdf
     IngestAgent.ingest_to_repo()  ×N  (one LLM call per document)
          │
          ▼
+    consolidate_roles()  (Pass 1: identity + roles)
+         │
+         ▼
     ┌─────────────────────────────────────────────┐
     │  USER VERIFICATION GATE (roles phase)       │
     │  Edit / delete / add roles, fix dates and   │
-    │  company names before consolidation runs.   │
+    │  company names on the merged timeline.      │
     └──────────────────┬──────────────────────────┘
                        │  "Finalize & Build Stories"
                        ▼
-    consolidate_repo()  (2-pass LLM merge)
-         │               Pass 1: identity + roles
-         │               Pass 2: skills + education + meta
+    consolidate_skills_meta()  (Pass 2: skills + education + meta)
          │               Fuzzy dupe check → retry pass 2 if needed
          │
          ▼

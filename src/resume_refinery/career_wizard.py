@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from .career_repo import CareerRepoStore
 from .elicitation import ElicitationAgent
-from .ingest_agent import IngestAgent, build_repo_from_parsed, consolidate_repo, parse_ingest_response
+from .ingest_agent import IngestAgent, build_repo_from_parsed, consolidate_roles, consolidate_skills_meta, parse_ingest_response
 from .models import (
     CareerIdentity,
     CareerMeta,
@@ -344,10 +344,19 @@ async def career_ingest(
                 yield f"<p class='step-fail'>Failed to extract {_esc(filename)}</p>\n"
 
         if extraction_succeeded:
+            # Consolidate duplicate roles across documents via LLM (Pass 1)
+            # so the user reviews a clean timeline, not one entry per source file
+            yield "<p>Consolidating roles\u2026</p>\n"
+            try:
+                repo = consolidate_roles(repo, client=ingest_agent.client)
+                yield "<p class='step-ok'>Roles consolidated</p>\n"
+            except Exception:
+                log.warning("Role consolidation failed, continuing with unmerged roles", exc_info=True)
+                yield "<p class='step-fail'>Role consolidation failed, continuing with extracted data</p>\n"
             # Override name from form (user-provided takes priority)
             repo.identity.name = name.strip()
             # Land on roles phase so the user can verify extracted data
-            # before consolidation and story composition run
+            # before skills/meta consolidation and story composition run
             repo.current_phase = "roles"
             repo.needs_consolidation = True
         else:
@@ -738,11 +747,12 @@ _FINALIZE_PROGRESS_HEAD = (
 
 @router.post("/{repo_id}/finalize")
 def career_finalize(repo_id: str) -> StreamingResponse:
-    """Consolidate extracted roles and compose STAR stories after user review.
+    """Consolidate skills/meta and compose STAR stories after user review of roles.
 
-    This runs the deferred LLM steps (consolidation + story composition) that
-    were skipped during document ingestion so the user could verify extracted
-    roles first.
+    This runs the deferred LLM steps (skills/meta consolidation + story
+    composition) that were skipped during document ingestion so the user
+    could verify extracted roles first.  Role consolidation (Pass 1)
+    already ran during ingest.
     """
     repo = _load_repo(repo_id)
 
@@ -750,14 +760,14 @@ def career_finalize(repo_id: str) -> StreamingResponse:
         nonlocal repo
         yield _FINALIZE_PROGRESS_HEAD + "\n" + _BROWSER_FLUSH_PAD
 
-        # Consolidate duplicates across documents via LLM
-        yield "<p>Consolidating career data\u2026</p>\n"
+        # Consolidate skills, education, certifications, domain knowledge, meta (Pass 2)
+        yield "<p>Consolidating skills &amp; metadata\u2026</p>\n"
         try:
-            repo = consolidate_repo(repo, client=ingest_agent.client)
-            yield "<p class='step-ok'>Career data consolidated</p>\n"
+            repo = consolidate_skills_meta(repo, client=ingest_agent.client)
+            yield "<p class='step-ok'>Skills &amp; metadata consolidated</p>\n"
         except Exception:
-            log.warning("Consolidation failed, continuing with unmerged repo", exc_info=True)
-            yield "<p class='step-fail'>Consolidation failed, continuing with reviewed data</p>\n"
+            log.warning("Skills/meta consolidation failed, continuing with extracted data", exc_info=True)
+            yield "<p class='step-fail'>Skills consolidation failed, continuing with extracted data</p>\n"
 
         # Compose STAR stories from merged accomplishments (per-role)
         yield "<p>Composing behavioral stories\u2026</p>\n"

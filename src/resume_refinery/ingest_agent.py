@@ -2,13 +2,20 @@
 
 Given raw text extracted from one or more documents (PDF, DOCX, TXT), the
 agent uses one LLM call *per document* to populate a CareerRepository.
-After all documents are ingested, a two-pass LLM consolidation step merges
-duplicate roles and skills (Pass 1: identity + roles, Pass 2: skills + meta),
-and a STAR composition pass generates behavioural stories from the merged
+Consolidation is split into two independent passes that can be run at
+different points in the wizard flow:
+
+  consolidate_roles()       — Pass 1: identity + roles (runs during ingest)
+  consolidate_skills_meta() — Pass 2: skills + meta   (runs after user review)
+  consolidate_repo()        — Both passes together     (convenience wrapper)
+
+A STAR composition pass generates behavioural stories from the merged
 accomplishments.
 
 Pipeline:
-    Per-document extraction  →  consolidate_repo() (2 passes)  →  compose_stories()
+    Per-document extraction  →  consolidate_roles()
+        →  user verification gate
+        →  consolidate_skills_meta()  →  compose_stories()
 """
 
 from __future__ import annotations
@@ -507,6 +514,130 @@ def _consolidation_call(
     except Exception:
         log.warning("Consolidation LLM call failed for a pass", exc_info=True)
         return None
+
+
+def consolidate_roles(repo: CareerRepository, client: ollama.Client | None = None) -> CareerRepository:
+    """Merge duplicate roles (and identity) from multi-document extraction via LLM.
+
+    This is Pass 1 of the two-pass consolidation — identity + roles only.
+    Designed to run immediately after extraction so the user reviews a
+    clean, merged role timeline rather than one entry per source document.
+
+    Returns a new CareerRepository with consolidated identity and roles;
+    all other fields (skills, stories, meta, etc.) are copied unchanged.
+    """
+    if len(repo.roles) <= 1:
+        return repo
+
+    if client is None:
+        client = ollama.Client(host=BASE_URL)
+
+    consolidated = CareerRepository(
+        repo_id=repo.repo_id,
+        created_at=repo.created_at,
+        updated_at=repo.updated_at,
+        current_phase=repo.current_phase,
+        deepdive_role_index=repo.deepdive_role_index,
+        needs_consolidation=repo.needs_consolidation,
+        voice_raw=repo.voice_raw,
+        # Copy pass-2 fields unchanged
+        skills=list(repo.skills),
+        education=repo.education,
+        certifications=repo.certifications,
+        domain_knowledge=repo.domain_knowledge,
+        meta=repo.meta.model_copy(),
+        stories=list(repo.stories),
+    )
+
+    pass1_json = _repo_to_consolidation_json(repo, keys=["identity", "roles"])
+    pass1_data = _consolidation_call(client, CONSOLIDATION_PASS1_PROMPT, pass1_json, "consolidation-pass1")
+    if pass1_data:
+        build_repo_from_parsed(pass1_data, consolidated)
+    else:
+        build_repo_from_parsed(
+            {"identity": repo.identity.model_dump(),
+             "roles": [r.model_dump() for r in repo.roles]},
+            consolidated,
+        )
+
+    return consolidated
+
+
+def consolidate_skills_meta(repo: CareerRepository, client: ollama.Client | None = None) -> CareerRepository:
+    """Merge duplicate skills, education, and meta from multi-document extraction via LLM.
+
+    This is Pass 2 of the two-pass consolidation — skills + education +
+    certifications + domain knowledge + meta.  Includes the fuzzy duplicate
+    detection retry step.
+
+    Designed to run after the user has verified roles, so corrected role data
+    is preserved and only skills/meta are consolidated.
+
+    Returns a new CareerRepository with consolidated pass-2 fields;
+    identity, roles, and stories are copied unchanged.
+    """
+    if len(repo.skills) <= 1:
+        return repo
+
+    if client is None:
+        client = ollama.Client(host=BASE_URL)
+
+    consolidated = CareerRepository(
+        repo_id=repo.repo_id,
+        created_at=repo.created_at,
+        updated_at=repo.updated_at,
+        current_phase=repo.current_phase,
+        deepdive_role_index=repo.deepdive_role_index,
+        needs_consolidation=repo.needs_consolidation,
+        voice_raw=repo.voice_raw,
+        # Copy pass-1 fields unchanged
+        identity=repo.identity.model_copy(),
+        roles=list(repo.roles),
+        stories=list(repo.stories),
+    )
+
+    pass2_keys = ["skills", "education", "certifications", "domain_knowledge", "meta"]
+    pass2_json = _repo_to_consolidation_json(repo, keys=pass2_keys)
+    pass2_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, pass2_json, "consolidation-pass2")
+    if pass2_data:
+        build_repo_from_parsed(pass2_data, consolidated)
+        unique_original = len({_normalize_skill_name(s.name) for s in repo.skills})
+        consolidated_count = len(consolidated.skills)
+        if unique_original > 0 and consolidated_count < unique_original * 0.7:
+            log.warning(
+                "Skill consolidation too aggressive: %d unique → %d (lost %.0f%%). "
+                "Keeping original skills.",
+                unique_original, consolidated_count,
+                (1 - consolidated_count / unique_original) * 100,
+            )
+            consolidated.skills = list(repo.skills)
+    else:
+        import json as _json
+        fallback = {k: v for k, v in _json.loads(
+            _repo_to_consolidation_json(repo, keys=pass2_keys)
+        ).items()}
+        build_repo_from_parsed(fallback, consolidated)
+
+    # Deterministic fuzzy-match check — if duplicates remain, re-run LLM
+    if _has_duplicate_skills(consolidated.skills):
+        log.info("Duplicate skills detected after consolidation, re-running pass 2")
+        pre_retry_count = len(consolidated.skills)
+        retry_json = _repo_to_consolidation_json(consolidated, keys=pass2_keys)
+        retry_data = _consolidation_call(client, CONSOLIDATION_PASS2_PROMPT, retry_json, "consolidation-pass2-retry")
+        if retry_data and "skills" in retry_data:
+            retry_skills: list[SkillEntry] = []
+            temp = CareerRepository(repo_id="_dedup_temp")
+            build_repo_from_parsed({"skills": retry_data["skills"]}, temp)
+            retry_skills = temp.skills
+            if pre_retry_count > 0 and len(retry_skills) < pre_retry_count * 0.5:
+                log.warning(
+                    "Retry skill consolidation too aggressive: %d → %d. Keeping pre-retry skills.",
+                    pre_retry_count, len(retry_skills),
+                )
+            else:
+                consolidated.skills = retry_skills
+
+    return consolidated
 
 
 def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None) -> CareerRepository:
