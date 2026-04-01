@@ -51,7 +51,9 @@ _PHASE_LABELS: dict[WizardPhase, str] = {
 
 
 def _esc(text: str | None) -> str:
-    return html.escape(text or "")
+    if not text:
+        return ""
+    return html.escape(text)
 
 
 def _wizard_page(title: str, body: str, repo: CareerRepository | None = None) -> HTMLResponse:
@@ -59,13 +61,14 @@ def _wizard_page(title: str, body: str, repo: CareerRepository | None = None) ->
     progress = ""
     if repo:
         progress = _progress_bar(repo)
+    safe_title = html.escape(title)
     return HTMLResponse(f"""
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{_esc(title)} — Career Builder</title>
+  <title>{safe_title} — Career Builder</title>
   <script src="{_HTMX_CDN}"></script>
   <style>
     :root {{
@@ -971,7 +974,7 @@ def save_role_deepdive(
     repo.deepdive_role_index = role_idx
     career_store.save(repo)
     # Stay on the same page after save so user can request probes or continue
-    return RedirectResponse(url=f"/career/{repo.repo_id}/role_deepdive/{role_idx}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}/role_deepdive/{repo.deepdive_role_index}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
