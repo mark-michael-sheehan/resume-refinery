@@ -798,15 +798,43 @@ def career_skills(repo_id: str) -> HTMLResponse:
     return _render_skills(_load_repo(repo_id))
 
 
-def _render_skills(repo: CareerRepository) -> HTMLResponse:
+def _render_skills(repo: CareerRepository, edit_idx: int | None = None) -> HTMLResponse:
     skill_rows: list[str] = []
     for i, s in enumerate(repo.skills):
+        if i == edit_idx:
+            # Inline edit form for this skill
+            cat_opts = "".join(
+                f'<option value="{c}"{" selected" if c == s.category else ""}>{c}</option>'
+                for c in ("language", "framework", "infrastructure", "tool", "non_technical", "other")
+            )
+            prof_opts = "".join(
+                f'<option value="{p}"{" selected" if p == s.proficiency else ""}>{p}</option>'
+                for p in ("familiar", "working", "strong", "expert")
+            )
+            skill_rows.append(
+                f'<tr><td colspan="6">'
+                f'<form method="post" action="/career/{_esc(repo.repo_id)}/skills/{i}/edit" '
+                f'style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end">'
+                f'<div><label style="font-size:0.85rem">Name</label>'
+                f'<input type="text" name="name" value="{_esc(s.name)}" required style="width:130px" /></div>'
+                f'<div><label style="font-size:0.85rem">Category</label>'
+                f'<select name="category">{cat_opts}</select></div>'
+                f'<div><label style="font-size:0.85rem">Level</label>'
+                f'<select name="proficiency">{prof_opts}</select></div>'
+                f'<div><label style="font-size:0.85rem">Years</label>'
+                f'<input type="text" name="years" value="{_esc(s.years or "")}" style="width:60px" /></div>'
+                f'<div style="flex:1 1 100%"><label style="font-size:0.85rem">Evidence</label>'
+                f'<textarea name="evidence" rows="2" style="width:100%">{_esc(s.evidence)}</textarea></div>'
+                f'<div style="display:flex;gap:0.3rem">'
+                f'<button type="submit" class="btn btn-sm">Save</button>'
+                f'<a href="/career/{_esc(repo.repo_id)}/skills" class="btn btn-sm btn-secondary">Cancel</a>'
+                f'</div></form></td></tr>'
+            )
+            continue
+
         if s.evidence.strip():
-            preview = _esc(s.evidence[:50])
-            if len(s.evidence) > 50:
-                preview += "\u2026"
             evidence_cell = (
-                f'<details><summary style="cursor:pointer;font-size:0.9rem">{preview}</summary>'
+                f'<details><summary style="cursor:pointer;font-size:0.9rem">Show evidence</summary>'
                 f'<p style="margin:0.4rem 0 0;white-space:pre-wrap;font-size:0.88rem">{_esc(s.evidence)}</p>'
                 f'</details>'
             )
@@ -816,14 +844,17 @@ def _render_skills(repo: CareerRepository) -> HTMLResponse:
             f"<tr><td>{_esc(s.name)}</td><td>{_esc(s.category)}</td>"
             f"<td>{_esc(s.proficiency)}</td><td>{_esc(s.years or '-')}</td>"
             f"<td>{evidence_cell}</td>"
-            f'<td><form method="post" action="/career/{_esc(repo.repo_id)}/skills/{i}/delete" style="display:inline">'
+            f'<td style="white-space:nowrap">'
+            f'<a href="/career/{_esc(repo.repo_id)}/skills/{i}/edit" class="btn btn-sm btn-secondary" '
+            f'style="margin-right:0.3rem">Edit</a>'
+            f'<form method="post" action="/career/{_esc(repo.repo_id)}/skills/{i}/delete" style="display:inline">'
             f'<button type="submit" class="btn btn-sm btn-danger">X</button></form></td></tr>'
         )
 
     table = (
         '<table><thead><tr><th>Skill</th><th>Category</th><th>Level</th>'
         '<th>Years</th><th>Evidence</th><th></th></tr></thead>'
-        f'<tbody>{"".join(skill_rows) if skill_rows else "<tr><td colspan=6>No skills added yet.</td></tr>"}'
+        f'<tbody>{"\n".join(skill_rows) if skill_rows else "<tr><td colspan=6>No skills added yet.</td></tr>"}'
         '</tbody></table>'
     )
 
@@ -901,6 +932,38 @@ def add_skill(
         years=years.strip() or None,
         evidence=evidence.strip(),
     ))
+    career_store.save(repo)
+    return RedirectResponse(url=f"/career/{repo_id}/skills", status_code=303)
+
+
+@router.get("/{repo_id}/skills/{skill_idx}/edit", response_class=HTMLResponse)
+def edit_skill_form(repo_id: str, skill_idx: int) -> HTMLResponse:
+    repo = _load_repo(repo_id)
+    if not (0 <= skill_idx < len(repo.skills)):
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return _render_skills(repo, edit_idx=skill_idx)
+
+
+@router.post("/{repo_id}/skills/{skill_idx}/edit")
+def edit_skill(
+    repo_id: str,
+    skill_idx: int,
+    name: str = Form(...),
+    category: str = Form("other"),
+    proficiency: str = Form("working"),
+    years: str = Form(""),
+    evidence: str = Form(""),
+) -> RedirectResponse:
+    repo = _load_repo(repo_id)
+    if not (0 <= skill_idx < len(repo.skills)):
+        raise HTTPException(status_code=404, detail="Skill not found")
+    repo.skills[skill_idx] = SkillEntry(
+        name=name.strip(),
+        category=category,  # type: ignore[arg-type]
+        proficiency=proficiency,  # type: ignore[arg-type]
+        years=years.strip() or None,
+        evidence=evidence.strip(),
+    )
     career_store.save(repo)
     return RedirectResponse(url=f"/career/{repo_id}/skills", status_code=303)
 
