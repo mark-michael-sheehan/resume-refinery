@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from typing import Iterator, Optional
 
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File
@@ -515,7 +516,7 @@ def save_identity(
     repo.certifications = certifications.strip()
     repo.current_phase = "roles"
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +638,7 @@ def add_role(
         end_date=end_date.strip(),
     ))
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 
 @router.get("/{repo_id}/roles/{role_idx}/edit", response_class=HTMLResponse)
@@ -696,7 +697,7 @@ def save_role_edit(
     role.start_date = start_date.strip()
     role.end_date = end_date.strip()
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 
 @router.post("/{repo_id}/roles/{role_idx}/delete")
@@ -705,7 +706,7 @@ def delete_role(repo_id: str, role_idx: int) -> RedirectResponse:
     if 0 <= role_idx < len(repo.roles):
         repo.roles.pop(role_idx)
         career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -970,7 +971,7 @@ def save_role_deepdive(
     repo.deepdive_role_index = role_idx
     career_store.save(repo)
     # Stay on the same page after save so user can request probes or continue
-    return RedirectResponse(url=f"/career/{repo_id}/role_deepdive/{role_idx}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}/role_deepdive/{role_idx}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -1118,7 +1119,7 @@ def add_skill(
         evidence=evidence.strip(),
     ))
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}/skills", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}/skills", status_code=303)
 
 
 @router.get("/{repo_id}/skills/{skill_idx}/edit", response_class=HTMLResponse)
@@ -1150,7 +1151,7 @@ def edit_skill(
         evidence=evidence.strip(),
     )
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}/skills", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}/skills", status_code=303)
 
 
 @router.post("/{repo_id}/skills/{skill_idx}/delete")
@@ -1159,7 +1160,7 @@ def delete_skill(repo_id: str, skill_idx: int) -> RedirectResponse:
     if 0 <= skill_idx < len(repo.skills):
         repo.skills.pop(skill_idx)
         career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}/skills", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}/skills", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -1304,7 +1305,7 @@ def add_story(
         what_it_shows=what_it_shows.strip(),
     ))
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}/stories", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}/stories", status_code=303)
 
 
 @router.get("/{repo_id}/stories/{story_idx}/edit", response_class=HTMLResponse)
@@ -1365,7 +1366,7 @@ def save_story_edit(
     s.result = result.strip()
     s.what_it_shows = what_it_shows.strip()
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}/stories", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}/stories", status_code=303)
 
 
 @router.post("/{repo_id}/stories/{story_idx}/delete")
@@ -1374,7 +1375,7 @@ def delete_story(repo_id: str, story_idx: int) -> RedirectResponse:
     if 0 <= story_idx < len(repo.stories):
         repo.stories.pop(story_idx)
         career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}/stories", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}/stories", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -1449,7 +1450,7 @@ def save_meta(
     repo.domain_knowledge = domain_knowledge.strip()
     repo.current_phase = "voice"
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -1570,7 +1571,7 @@ def save_voice(
     repo.voice_raw = "\n".join(parts)
     repo.current_phase = "complete"
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -1688,7 +1689,7 @@ def advance_phase(repo_id: str, phase: str) -> RedirectResponse:
     repo = _load_repo(repo_id)
     repo.current_phase = phase  # type: ignore[assignment]
     career_store.save(repo)
-    return RedirectResponse(url=f"/career/{repo_id}", status_code=303)
+    return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -1760,8 +1761,13 @@ def _voice_field(voice_raw: str, heading: str) -> str:
     return "\n".join(lines)
 
 
+_SAFE_REPO_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}$")
+
+
 def _load_repo(repo_id: str) -> CareerRepository:
+    if not _SAFE_REPO_ID_RE.match(repo_id):
+        raise HTTPException(status_code=400, detail="Invalid repository ID")
     try:
         return career_store.get(repo_id)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Career repo not found: {repo_id}")
+        raise HTTPException(status_code=404, detail="Career repo not found")
