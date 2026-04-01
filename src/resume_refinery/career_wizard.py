@@ -142,10 +142,21 @@ def _wizard_page(title: str, body: str, repo: CareerRepository | None = None) ->
 
 
 def _progress_bar(repo: CareerRepository) -> str:
-    """Render the horizontal phase progress bar."""
+    """Render the horizontal phase progress bar with clickable completed/active phases."""
     phases: list[WizardPhase] = [
         "identity", "roles", "role_deepdive", "skills", "stories", "meta", "voice", "complete",
     ]
+    # Map phase name to its direct URL path segment
+    _phase_url: dict[WizardPhase, str] = {
+        "identity": "identity",
+        "roles": "roles",
+        "role_deepdive": "role_deepdive",
+        "skills": "skills",
+        "stories": "stories",
+        "meta": "meta",
+        "voice": "voice",
+        "complete": "review",
+    }
     phase_order = {p: i for i, p in enumerate(phases)}
     current_idx = phase_order.get(repo.current_phase, 0)
 
@@ -154,11 +165,14 @@ def _progress_bar(repo: CareerRepository) -> str:
         label = _PHASE_LABELS[phase]
         if i < current_idx:
             cls = "done"
+            url = f"/career/{_esc(repo.repo_id)}/{_phase_url[phase]}"
+            steps.append(f'<a href="{url}" class="step {cls}" style="text-decoration:none;color:inherit">{_esc(label)}</a>')
         elif i == current_idx:
             cls = "active"
+            url = f"/career/{_esc(repo.repo_id)}/{_phase_url[phase]}"
+            steps.append(f'<a href="{url}" class="step {cls}" style="text-decoration:none;color:inherit">{_esc(label)}</a>')
         else:
-            cls = ""
-        steps.append(f'<div class="step {cls}">{_esc(label)}</div>')
+            steps.append(f'<div class="step">{_esc(label)}</div>')
     return f'<div class="progress">{"".join(steps)}</div>'
 
 
@@ -407,10 +421,24 @@ def career_identity(repo_id: str) -> HTMLResponse:
 
 def _render_identity(repo: CareerRepository) -> HTMLResponse:
     ident = repo.identity
+    # Detect pre-filled data from ingestion
+    _has_extracted = any(
+        r.confidence_notes or r.extraction_confidence != "medium"
+        for r in repo.roles
+    )
+    ingest_hint = ""
+    if _has_extracted:
+        ingest_hint = (
+            '<div class="warning" style="border-left-color:var(--accent)">'
+            'These fields were pre-filled from your uploaded documents. '
+            'Please verify and correct anything the AI got wrong.'
+            '</div>'
+        )
     body = f"""
 <div class="card">
   <h2>Phase 1: Identity &amp; Basics</h2>
   <p class="muted">Let's start with contact info and a quick headline about you.</p>
+  {ingest_hint}
   <form method="post" action="/career/{_esc(repo.repo_id)}/identity">
     <div class="grid">
       <div>
@@ -507,10 +535,20 @@ def career_roles(repo_id: str) -> HTMLResponse:
 
 def _render_roles(repo: CareerRepository) -> HTMLResponse:
     role_cards: list[str] = []
+    # Detect pre-filled data from ingestion
+    _has_extracted = any(
+        r.confidence_notes or r.extraction_confidence != "medium"
+        for r in repo.roles
+    )
     for i, role in enumerate(repo.roles):
+        # Show per-role confidence badge when data came from ingestion
+        conf_badge = ""
+        if role.extraction_confidence != "medium" or role.confidence_notes:
+            conf_color = {"high": "#1d8f52", "medium": "#b8860b", "low": "#b00020"}[role.extraction_confidence]
+            conf_badge = f' <span style="font-size:0.8rem;color:{conf_color};font-weight:600">[{role.extraction_confidence.capitalize()}]</span>'
         role_cards.append(f"""
 <div class="role-card">
-  <strong>{_esc(role.title)}</strong> @ {_esc(role.company)}
+  <strong>{_esc(role.title)}</strong> @ {_esc(role.company)}{conf_badge}
   <span class="muted">({_esc(role.start_date)} – {_esc(role.end_date)})</span>
   <div style="margin-top:0.4rem">
     <a href="/career/{_esc(repo.repo_id)}/roles/{i}/edit" class="btn btn-sm btn-secondary">Edit</a>
@@ -525,11 +563,21 @@ def _render_roles(repo: CareerRepository) -> HTMLResponse:
 
     existing = "".join(role_cards) if role_cards else '<p class="muted">No roles added yet.</p>'
 
+    ingest_hint = ""
+    if _has_extracted and role_cards:
+        ingest_hint = (
+            '<div class="warning" style="border-left-color:var(--accent)">'
+            'These roles were extracted from your uploaded documents. '
+            'Verify titles, dates, and company names — then add any roles the AI missed.'
+            '</div>'
+        )
+
     body = f"""
 <div class="card">
   <h2>Phase 2: Role Timeline</h2>
   <p class="muted">Add each job you've held. Start with the most recent.
      We'll dig into accomplishments in the next phase.</p>
+  {ingest_hint}
   {existing}
 </div>
 <div class="card">
@@ -670,6 +718,37 @@ def _render_role_deepdive(repo: CareerRepository) -> HTMLResponse:
         return _wizard_page("Deep Dive", '<div class="card"><p>No roles to deep-dive. '
                             f'<a href="/career/{_esc(repo.repo_id)}/roles">Add roles first.</a></p></div>', repo)
 
+    # Detect whether data came from document ingestion
+    _ingested = any(
+        r.confidence_notes or r.extraction_confidence != "medium"
+        for r in repo.roles
+    )
+
+    # Show a one-time summary banner if this looks like an ingested repo
+    ingestion_banner = ""
+    if _ingested:
+        filled_roles = sum(1 for r in repo.roles if r.accomplishments.strip())
+        low_conf = sum(1 for r in repo.roles if r.extraction_confidence == "low")
+        ingestion_banner = (
+            '<div class="card" style="background:var(--accent-light);border-left:3px solid var(--accent)">'
+            f'<strong>Imported from documents</strong> — '
+            f'{len(repo.roles)} role{"s" if len(repo.roles) != 1 else ""} extracted'
+            f', {len(repo.skills)} skill{"s" if len(repo.skills) != 1 else ""}'
+            f', {len(repo.stories)} stor{"ies" if len(repo.stories) != 1 else "y"}'
+        )
+        if low_conf:
+            ingestion_banner += (
+                f'<br><span style="color:#b00020;font-weight:600">{low_conf} role{"s" if low_conf != 1 else ""}'
+                f' with low confidence</span> — these need the most attention'
+            )
+        ingestion_banner += (
+            '<br><span class="muted" style="font-size:0.88rem">'
+            'Tip: Use the progress bar above to review '
+            '<a href="/career/' + _esc(repo.repo_id) + '/identity">Identity</a> and '
+            '<a href="/career/' + _esc(repo.repo_id) + '/roles">Roles</a> that were pre-filled.'
+            '</span></div>'
+        )
+
     idx = repo.deepdive_role_index
     if idx >= len(repo.roles):
         idx = len(repo.roles) - 1
@@ -685,10 +764,25 @@ def _render_role_deepdive(repo: CareerRepository) -> HTMLResponse:
     nav = " &middot; ".join(nav_links)
     progress_text = f"Role {idx + 1} of {len(repo.roles)}"
 
+    # Show extraction confidence when data came from ingestion
+    confidence_html = ""
+    if role.extraction_confidence != "medium" or role.confidence_notes:
+        conf_color = {"high": "#1d8f52", "medium": "#b8860b", "low": "#b00020"}[role.extraction_confidence]
+        conf_label = role.extraction_confidence.capitalize()
+        notes = f" — {_esc(role.confidence_notes)}" if role.confidence_notes else ""
+        confidence_html = (
+            f'<div class="warning" style="border-left-color:{conf_color}">'
+            f'Extraction confidence: <strong style="color:{conf_color}">{conf_label}</strong>{notes}'
+            f'<br><span class="muted" style="font-size:0.85rem">Review and enrich the fields below — especially where the AI was uncertain.</span>'
+            f'</div>'
+        )
+
     body = f"""
+{ingestion_banner}
 <div class="card">
   <h2>Phase 3: Deep Dive — {_esc(role.title)} @ {_esc(role.company)}</h2>
   <p class="muted">{progress_text} &nbsp;|&nbsp; {nav}</p>
+  {confidence_html}
   <form method="post" action="/career/{_esc(repo.repo_id)}/role_deepdive/{idx}">
     <label>Company Context</label>
     <p class="hint">What did this company do? How big was it? Stage? Industry?</p>
@@ -991,6 +1085,14 @@ def _render_stories(repo: CareerRepository) -> HTMLResponse:
     story_cards: list[str] = []
     for i, s in enumerate(repo.stories):
         tags = ", ".join(s.tags) if s.tags else "no tags"
+        # Show extraction confidence badge when data came from ingestion
+        conf_badge = ""
+        if s.extraction_confidence != "medium" or s.confidence_notes:
+            conf_color = {"high": "#1d8f52", "medium": "#b8860b", "low": "#b00020"}[s.extraction_confidence]
+            conf_label = s.extraction_confidence.capitalize()
+            conf_badge = f' <span style="font-size:0.8rem;color:{conf_color};font-weight:600">[{conf_label} confidence]</span>'
+            if s.confidence_notes:
+                conf_badge += f' <span class="muted" style="font-size:0.8rem">— {_esc(s.confidence_notes)}</span>'
         star_parts: list[str] = []
         if s.situation:
             star_parts.append(f'<div><strong style="color:var(--accent)">Situation:</strong> {_esc(s.situation)}</div>')
@@ -1009,7 +1111,7 @@ def _render_stories(repo: CareerRepository) -> HTMLResponse:
         )
         story_cards.append(f"""
 <div class="role-card">
-  <strong>{_esc(s.title)}</strong> <span class="muted">({_esc(tags)})</span>
+  <strong>{_esc(s.title)}</strong> <span class="muted">({_esc(tags)})</span>{conf_badge}
   {star_html}
   <div style="margin-top:0.5rem">
     <a href="/career/{_esc(repo.repo_id)}/stories/{i}/edit" class="btn btn-sm btn-secondary">Edit</a>
