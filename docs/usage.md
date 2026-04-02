@@ -241,6 +241,12 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 |---|---|---|
 | `RESUME_REFINERY_NUM_CTX` | `16384` | KV-cache size (tokens) requested from Ollama for every call — both generation and review. Ollama pre-allocates this on the GPU/CPU at call time: `16384` uses ~2 GB extra RAM and comfortably fits a full career profile plus one document. Raise to `32768` for very long profiles; lower to `8192` if you hit out-of-memory errors. If you see `WARNING: Ollama reviewer returned empty content`, increase this value. |
 
+### Parallelism
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_REFINERY_MAX_WORKERS` | `1` | Maximum number of concurrent threads for independent LLM calls (reviews, evidence matching, repair planning). Set to `1` for sequential execution (default). Set to `3` for full parallelism — useful with cloud-hosted models where network latency dominates. Higher values have no additional effect since the maximum concurrent operations is 3. |
+
 ### Repair loop pass limits
 
 | Variable | Default | Description |

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, Iterator
 
 import ollama
@@ -44,6 +45,7 @@ _BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 _MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 _NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
 _MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "4096"))
+_MAX_WORKERS = int(os.environ.get("RESUME_REFINERY_MAX_WORKERS", "1"))
 
 _STOPWORDS = {
     "a",
@@ -89,12 +91,18 @@ class EvidenceAgent:
         matched: list[EvidenceItem] = []
         gaps: list[str] = []
 
-        for requirement in requirements:
-            evidence_items = self._match_evidence(requirement.requirement, career.raw_content)
-            if evidence_items:
-                matched.extend(evidence_items)
-            else:
-                gaps.append(requirement.requirement)
+        def _match_one(req: JobRequirement) -> tuple[str, list[EvidenceItem]]:
+            items = self._match_evidence(req.requirement, career.raw_content)
+            return req.requirement, items
+
+        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(requirements) or 1)) as pool:
+            futures = [pool.submit(_match_one, req) for req in requirements]
+            for future in futures:
+                req_text, evidence_items = future.result()
+                if evidence_items:
+                    matched.extend(evidence_items)
+                else:
+                    gaps.append(req_text)
 
         career_lines = self._career_lines(career.raw_content)
         summary = [line for line in career_lines if len(line) > 20][:8]
@@ -488,15 +496,15 @@ class RepairAgent:
         all_accepted_ai_phrases: list[str] = []
         all_accepted_voice_issues: list[str] = []
 
-        for key in ("cover_letter", "resume", "interview_guide"):
+        def _plan_for_key(key: str) -> tuple[str, list[dict], dict[str, list[str]]] | None:
             review_findings = self._build_review_findings(
                 key, truth, voice_review, ai_review, feedback,
             )
             if not review_findings:
-                continue
+                return None
             doc_content = docs.get(key)
             if not doc_content:
-                continue
+                return None
 
             user_msg = repair_user_message(
                 doc_content=doc_content,
@@ -507,6 +515,17 @@ class RepairAgent:
             )
 
             edits, acceptances = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
+            return key, edits, acceptances
+
+        keys = ["cover_letter", "resume", "interview_guide"]
+        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, 3)) as pool:
+            futures = [pool.submit(_plan_for_key, key) for key in keys]
+            results = [f.result() for f in futures]
+
+        for result in results:
+            if result is None:
+                continue
+            key, edits, acceptances = result
             all_accepted_claims.extend(acceptances.get("accepted_claims", []))
             all_accepted_ai_phrases.extend(acceptances.get("accepted_ai_phrases", []))
             all_accepted_voice_issues.extend(acceptances.get("accepted_voice_issues", []))
@@ -526,7 +545,7 @@ class RepairAgent:
                         e.get("replace", "")[:120],
                         e.get("reason", "")[:120],
                     )
-                repaired = apply_edits(doc_content, edits)
+                repaired = apply_edits(docs.get(key), edits)
                 docs.set(key, repaired)
                 all_edits[key] = [
                     RepairEdit(
