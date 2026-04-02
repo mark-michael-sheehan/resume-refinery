@@ -11,6 +11,8 @@ import logging
 import re
 from typing import Iterator, Optional
 
+from markupsafe import Markup
+
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
@@ -60,6 +62,12 @@ def _wizard_page(title: str, body: str, repo: CareerRepository | None = None) ->
     if repo:
         progress = _progress_bar(repo)
     safe_title = html.escape(title)
+    # Mark pre-escaped HTML fragments as safe so they can be interpolated
+    # into the template without being double-escaped.  All user-derived values
+    # inside *body* and *progress* are individually html.escape()'d at the
+    # point of construction.
+    safe_body = Markup(body)
+    safe_progress = Markup(progress)
     return HTMLResponse(f"""
 <!doctype html>
 <html lang="en">
@@ -135,8 +143,8 @@ def _wizard_page(title: str, body: str, repo: CareerRepository | None = None) ->
 <body>
   <div class="wrap">
     <p style="margin-bottom:0.3rem"><a href="/career">&larr; Career Builder</a></p>
-    {progress}
-    {body}
+    {safe_progress}
+    {safe_body}
   </div>
 </body>
 </html>
