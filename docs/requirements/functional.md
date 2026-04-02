@@ -39,9 +39,22 @@
 
 | ID | Requirement |
 |---|---|
-| FR-5.1 | Primary delivery is a local web application (FastAPI + browser). |
+| FR-5.1 | Primary delivery is a local web application (FastAPI + browser). The **generate** and **refine** endpoints stream real-time progress to the browser using `StreamingResponse`. Each orchestrator step (evidence extraction, document generation, review passes, repairs) is reported as it completes, with multi-line detail (review summaries, repair edits, false-positive acceptances) rendered in collapsible `<details>` blocks. On completion the page auto-redirects to the session view. |
 | FR-5.2 | A CLI interface is also available for headless/scripted use. |
 | FR-5.3 | The tool is pip-installable (`pip install -e .`). |
+
+## FR-7 Career Repository
+
+| ID | Requirement |
+|---|---|
+| FR-7.1 | The system provides a **Career Builder** — a guided, multi-phase web wizard that elicits structured career data (identity, roles, skills, STAR stories, strategy, voice). |
+| FR-7.2 | Career data is stored as a `CareerRepository` model persisted in `~/.resume_refinery/careers/<repo_id>/career.json`. Override with `RESUME_REFINERY_CAREERS_DIR`. |
+| FR-7.3 | A `CareerRepository` can be flattened into a `CareerProfile` (`to_career_profile()`) and used as a direct replacement for a file-uploaded career profile in session creation. |
+| FR-7.4 | The wizard uses HTMX for partial-page updates. No JavaScript build step is required. |
+| FR-7.5 | Each phase saves progress incrementally — the user can stop and resume at any point. |
+| FR-7.6 | An `ElicitationAgent` uses the LLM to analyse role answers and generate contextual follow-up probes. Falls back to static heuristic probes when the LLM is unavailable. The probe endpoint returns HTML fragments swapped into the page via HTMX. |
+| FR-7.7 | The session creation form in the web app allows selecting a saved career repository instead of uploading files. |
+| FR-7.8 | The system accepts document uploads (PDF, DOCX, TXT, MD) via a **Document Ingest** endpoint. An `IngestAgent` extracts structured career data using **one LLM call per document** (giving each file the full context window). The extraction prompt includes field-level guidance mirroring the wizard's helper text. After extraction, `consolidate_roles()` **(Pass 1)** immediately merges duplicate roles (matched by company + title + overlapping dates) so the user sees a clean timeline rather than one entry per source document. The user is then landed on the **Role Timeline** page (`needs_consolidation = True`) where they can verify, edit, delete, and add roles. When the user clicks **Finalize & Build Stories**, `consolidate_skills_meta()` **(Pass 2)** consolidates skills + education + certifications + domain knowledge + meta. After pass 2, a **fuzzy duplicate detection** step (`_has_duplicate_skills`) checks for remaining skill duplicates using normalised name matching and `SequenceMatcher` similarity (threshold 0.85); if duplicates are found, pass 2 is automatically re-run. `compose_stories()` then generates STAR behavioural stories from the merged accomplishments. Each role and story carries an `extraction_confidence` (`high`/`medium`/`low`) and `confidence_notes` field. If either consolidation pass fails, the original data for that pass is preserved. Both the ingest and finalize steps return **streamed HTML progress pages** that display each pipeline step in real time as it completes, then auto-redirect to the next page. |
 
 ## FR-6 Reviewers
 

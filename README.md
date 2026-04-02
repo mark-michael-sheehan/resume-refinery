@@ -64,7 +64,7 @@ Optional model/token settings:
 ```bash
 # Generation model — defaults to qwen3.5:9b (lighter: qwen3.5:4b)
 RESUME_REFINERY_MODEL=qwen3.5:9b
-RESUME_REFINERY_MAX_TOKENS=4096
+RESUME_REFINERY_MAX_TOKENS=8192
 
 # Review model — can be the same as generation or a lighter model
 RESUME_REFINERY_REVIEW_MODEL=qwen3.5:9b

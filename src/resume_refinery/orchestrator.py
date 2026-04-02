@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -33,6 +34,7 @@ from .specialist_agents import DraftingAgent, EvidenceAgent, RepairAgent, Verifi
 load_dotenv()
 
 MAX_REPAIR_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_REPAIR_PASSES", "3"))
+MAX_WORKERS = int(os.environ.get("RESUME_REFINERY_MAX_WORKERS", "1"))
 
 # On later passes, relax voice/AI thresholds to help convergence.
 # Truthfulness always stays strict.
@@ -299,30 +301,40 @@ class ResumeRefineryOrchestrator:
         for pass_num in range(max_passes):
             self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
 
-            # --- Run all three reviews ---
-            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
-            try:
-                truth = self.verification_agent.review_truthfulness(docs, career, job)
-            except Exception as exc:
-                logging.warning("Truthfulness review failed (%s)", exc)
-                self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
-                truth = None
+            # --- Run all three reviews (parallel when MAX_WORKERS > 1) ---
+            self._progress(progress, "  Running reviews (7 LLM calls)...")
 
-            self._progress(progress, "  Voice review (2 LLM calls)...")
-            try:
-                voice_result = self.verification_agent.review_voice(docs, voice)
-            except Exception as exc:
-                logging.warning("Voice review failed (%s)", exc)
-                self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
-                voice_result = None
+            def _run_truth():
+                try:
+                    return self.verification_agent.review_truthfulness(docs, career, job)
+                except Exception as exc:
+                    logging.warning("Truthfulness review failed (%s)", exc)
+                    self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
+                    return None
 
-            self._progress(progress, "  AI-detection review (2 LLM calls)...")
-            try:
-                ai_result = self.verification_agent.review_ai_detection(docs)
-            except Exception as exc:
-                logging.warning("AI-detection review failed (%s)", exc)
-                self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
-                ai_result = None
+            def _run_voice():
+                try:
+                    return self.verification_agent.review_voice(docs, voice)
+                except Exception as exc:
+                    logging.warning("Voice review failed (%s)", exc)
+                    self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
+                    return None
+
+            def _run_ai():
+                try:
+                    return self.verification_agent.review_ai_detection(docs)
+                except Exception as exc:
+                    logging.warning("AI-detection review failed (%s)", exc)
+                    self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
+                    return None
+
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 3)) as pool:
+                truth_future = pool.submit(_run_truth)
+                voice_future = pool.submit(_run_voice)
+                ai_future = pool.submit(_run_ai)
+                truth = truth_future.result()
+                voice_result = voice_future.result()
+                ai_result = ai_future.result()
 
             # Filter out items accepted as false positives in earlier passes.
             truth, voice_result, ai_result = self._apply_suppressions(

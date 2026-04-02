@@ -37,9 +37,11 @@ Include:
 
 See [examples/voice_profile.md](../examples/voice_profile.md) for a complete template.
 
-### 2. Career Profile (`career_profile.md`)
+### 2. Career Profile (`career_profile.md`) or Career Repository
 
-Your full professional history. Structured Markdown works best, but the format is flexible.
+Your full professional history. You have two options:
+
+**Option A: Markdown file** — Structured Markdown works best, but the format is flexible.
 
 Include:
 - Contact information
@@ -49,6 +51,19 @@ Include:
 - A **Key Points** section for anything you specifically want drawn upon
 
 See [examples/career_profile.md](../examples/career_profile.md) for a complete template.
+
+**Option B: Career Builder** — Use the guided web wizard at `/career` to build a
+structured career repository through directed questions. The wizard walks you through
+identity, roles, accomplishments (with follow-up probes), skills, STAR stories,
+career strategy, and voice profile. The result is stored as JSON and can be selected
+directly when creating a new session.
+
+**Option C: Import from Documents** — On the Career Builder page (`/career`), use
+the "Import from Documents" form to upload one or more files (PDF, DOCX, TXT, MD).
+An AI agent extracts structured career data (identity, roles, skills, education, etc.)
+from the combined document text in a single pass. The result is saved as a new career
+repository and you enter the wizard to review and refine the extracted data. This is
+the fastest way to get started if you already have a resume or CV on hand.
 
 ### 3. Job Description (`job_description.md`)
 
@@ -69,6 +84,10 @@ resume-refinery-web
 ```
 
 Then open `http://127.0.0.1:8765` in your browser.
+
+The home page includes links to **Browse Sessions** and **Career Builder**.
+Use the Career Builder (`/career`) to create a structured career repository through
+guided questions before generating documents.
 
 ### `new` — Start a new session
 
@@ -207,7 +226,7 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 | Variable | Default | Description |
 |---|---|---|
 | `RESUME_REFINERY_MODEL` | `qwen3.5:9b` | Model used to write the cover letter, resume, and interview guide. Any model pulled in Ollama works; `qwen3.5:4b` is faster and lighter. |
-| `RESUME_REFINERY_MAX_TOKENS` | `4096` | Maximum new tokens the generation model may produce per document. Raise if output is cut off mid-section. |
+| `RESUME_REFINERY_MAX_TOKENS` | `8192` | Maximum new tokens the generation model may produce per document. Raise if output is cut off mid-section. |
 
 ### Review / verification
 
@@ -222,22 +241,27 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 |---|---|---|
 | `RESUME_REFINERY_NUM_CTX` | `16384` | KV-cache size (tokens) requested from Ollama for every call — both generation and review. Ollama pre-allocates this on the GPU/CPU at call time: `16384` uses ~2 GB extra RAM and comfortably fits a full career profile plus one document. Raise to `32768` for very long profiles; lower to `8192` if you hit out-of-memory errors. If you see `WARNING: Ollama reviewer returned empty content`, increase this value. |
 
+### Parallelism
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_REFINERY_MAX_WORKERS` | `1` | Maximum number of concurrent threads for independent LLM calls (reviews, evidence matching, repair planning). Set to `1` for sequential execution (default). Set to `3` for full parallelism — useful with cloud-hosted models where network latency dominates. Higher values have no additional effect since the maximum concurrent operations is 3. |
+
 ### Repair loop pass limits
 
 | Variable | Default | Description |
 |---|---|---|
-| `RESUME_REFINERY_MAX_TRUTH_PASSES` | `2` | Max review+repair passes for the truthfulness loop. Each pass checks claims against the career profile; failing docs are re-generated before the next pass. Set to `1` to review without repair, `0` to skip entirely. |
-| `RESUME_REFINERY_MAX_VOICE_PASSES` | `2` | Max passes for the voice-match loop. Each pass rates voice fidelity; if not `"strong"`, all docs are re-generated with voice feedback. |
-| `RESUME_REFINERY_MAX_AI_PASSES` | `2` | Max passes for the AI-detection loop. Each pass flags generic/AI-sounding phrases; flagged docs are re-generated with the quoted phrases as repair feedback. |
+| `RESUME_REFINERY_MAX_REPAIR_PASSES` | `3` | Max unified review+repair passes per run. Each pass runs all three reviewers (truthfulness, voice, AI-detection), checks convergence, and — if any reviewer still fails — runs the repair agent before the next pass. Set to `1` to review once with no repair. |
+| `RESUME_REFINERY_RELAXED_PASS_START` | `1` | 0-based pass index at which voice and AI-detection thresholds relax. Before this pass, AI-detection requires zero flags on cover letter + resume. From this pass onward, total flags ≤ `AI_FLAG_TOLERANCE`. Voice accepts "moderate" on all passes. Truthfulness never relaxes. |
+| `RESUME_REFINERY_AI_FLAG_TOLERANCE` | `2` | Maximum AI-detection flags (cover letter + resume combined) allowed on relaxed passes (pass ≥ `RELAXED_PASS_START`). |
+| `RESUME_REFINERY_EDIT_FAIL_THRESHOLD` | `3` | Max surgical edits that may fail to match their target text in a single repair call before an `EditApplicationError` is raised. |
 
-### Session storage
+### Storage
 
 | Variable | Default | Description |
 |---|---|---|
 | `RESUME_REFINERY_SESSIONS_DIR` | `~/.resume_refinery/sessions` | Directory where sessions are persisted. Each session is a subdirectory containing input copies, versioned Markdown sources, DOCX exports, and review JSON files. |
-| `voice_review.json` | Voice-match review results |
-| `ai_review.json` | AI-detection review results |
-| `truth_review.json` | Strict claim-support verification results |
+| `RESUME_REFINERY_CAREERS_DIR` | `~/.resume_refinery/careers` | Directory where career repositories are persisted. Each repository is a subdirectory containing a `career.json` file with the full `CareerRepository` model. |
 
 ---
 
@@ -394,6 +418,10 @@ resume-refinery-web
 ```
 
 Upload your three files, click **Generate**, and browse/refine sessions from the sidebar.
+The page streams real-time progress as each pipeline step completes (evidence
+extraction, document generation, review passes, repairs). Multi-line review
+summaries and repair details appear in collapsible `<details>` blocks. On
+completion the page auto-redirects to the session view.
 
 ---
 

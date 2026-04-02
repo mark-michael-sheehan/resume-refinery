@@ -10,9 +10,10 @@ documents, review outputs, and source inputs.
 
 ```
 voice_profile.md + career_profile.md + job_description.md
+        (or CareerRepository via career_wizard.py)
             │
             ▼
-     parsers.py
+     parsers.py / CareerRepository.to_career_profile()
             │
             ▼
   ResumeRefineryOrchestrator
@@ -37,14 +38,91 @@ voice_profile.md + career_profile.md + job_description.md
 |---|---|
 | `models.py` | Domain models + intermediate orchestration artifacts |
 | `parsers.py` | Read markdown files → models |
-| `agent.py` | Low-level Claude document generation client |
+| `agent.py` | Low-level Ollama document generation client |
 | `specialist_agents.py` | Evidence, voice, drafting, verification, and repair agents |
 | `orchestrator.py` | Deterministic coordinator over specialist agents |
 | `reviewers.py` | LLM review client implementations |
-| `webapp.py` | Local FastAPI browser app |
+| `webapp.py` | Local FastAPI browser app with streaming progress feedback |
 | `session.py` | Session CRUD, versioning, disk I/O |
 | `exporters.py` | Markdown → DOCX via python-docx |
 | `cli.py` | CLI commands calling orchestrator |
+| `career_repo.py` | Career repository CRUD, disk I/O for structured career data |
+| `career_wizard.py` | HTMX-powered guided elicitation wizard (FastAPI sub-router) |
+| `elicitation.py` | LLM-powered follow-up probe agent for career elicitation |
+| `ingest_agent.py` | LLM-powered document ingest — extracts structured career data from uploaded PDFs, DOCX, and text files |
+
+## Career Repository Storage
+
+Career repositories live in `~/.resume_refinery/careers/` by default.
+Override with `RESUME_REFINERY_CAREERS_DIR` env var.
+
+```
+~/.resume_refinery/careers/
+└── jordan-lee/
+    └── career.json          ← Full structured career data (single JSON)
+```
+
+A `CareerRepository` can be flattened into a `CareerProfile` via
+`to_career_profile()`, making it a drop-in replacement for file-uploaded
+career profiles in the existing pipeline.
+
+### Document Ingest
+
+The `IngestAgent` (in `ingest_agent.py`) processes each uploaded document
+(PDF, DOCX, TXT/MD) in a separate LLM call, giving each file the full
+context window. The extraction prompt includes field-level guidance that
+mirrors the wizard's helper text, ensuring the LLM fills each field
+appropriately and completely.
+
+After per-document extraction, `consolidate_roles()` (Pass 1) immediately
+merges duplicate roles — matching by company + title + overlapping dates —
+so the user sees a clean timeline rather than one entry per source document.
+The user is then landed on the **Role Timeline** page
+(`current_phase = "roles"`, `needs_consolidation = True`) where they can
+verify, edit, delete, and add roles before further LLM work runs.
+
+Once the user clicks **Finalize & Build Stories**, `consolidate_skills_meta()`
+(Pass 2) deduplicates skills (case-insensitive name match, keeping highest
+proficiency) and merges education/certifications/meta. A final
+`compose_stories()` LLM call generates STAR behavioural stories from the
+merged accomplishments.
+
+Each role and story carries an `extraction_confidence` rating (`high` /
+`medium` / `low`) and `confidence_notes` so the wizard can surface
+low-confidence areas for user review.
+
+```
+Upload: resume.pdf + perf_review_2024.pdf + perf_review_2025.pdf
+         │
+         ▼
+    parsers._read_file_content()  (per file: PDF, DOCX, TXT)
+         │
+         ▼
+    IngestAgent.ingest_to_repo()  ×N  (one LLM call per document)
+         │
+         ▼
+    consolidate_roles()  (Pass 1: identity + roles)
+         │
+         ▼
+    ┌─────────────────────────────────────────────┐
+    │  USER VERIFICATION GATE (roles phase)       │
+    │  Edit / delete / add roles, fix dates and   │
+    │  company names on the merged timeline.      │
+    └──────────────────┬──────────────────────────┘
+                       │  "Finalize & Build Stories"
+                       ▼
+    consolidate_skills_meta()  (Pass 2: skills + education + meta)
+         │               Fuzzy dupe check → retry pass 2 if needed
+         │
+         ▼
+    IngestAgent.compose_stories()  (one LLM call on merged data)
+         │
+         ▼
+    CareerRepository (pre-filled with confidence scores)
+         │
+         ▼
+    Wizard Phase 3 (role deep-dive) — low-confidence roles first
+```
 
 ## Session Storage
 
@@ -179,10 +257,10 @@ the global workflow. The orchestrator owns step order, retries, and persistence.
 **Intermediate artifacts for explainability:** `EvidencePack` and `VoiceStyleGuide`
 are explicit artifacts that can be inspected in the UI and reasoned about in reviews.
 
-**Per-document generation:** Each document remains a separate Claude API call, which keeps
+**Per-document generation:** Each document remains a separate Ollama LLM call, which keeps
 targeted refinement cheap and traceable.
 
-**Adaptive thinking enabled:** All Claude calls use `thinking: {type: "adaptive"}`. This
+**Adaptive thinking enabled:** All Ollama calls use `think=True`. This
 is especially valuable for the review passes, where the model needs to reason carefully
 about voice match and AI-detection signals before producing a JSON result.
 
@@ -192,7 +270,7 @@ and job description as grounding sources; voice and AI-detection reviewers opera
 only on the documents and voice profile. Truth checks run before final acceptance,
 and repair passes target only failing documents.
 
-**Raw content over structured parsing:** Input files are passed to Claude as raw text.
+**Raw content over structured parsing:** Input files are passed to the LLM as raw text.
 This is intentional — flexible, user-friendly input formats are more important than
 schema rigidity at the ingestion stage. Structured extraction is only used for session
 naming.

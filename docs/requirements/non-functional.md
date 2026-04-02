@@ -40,6 +40,8 @@ All tuning knobs are exposed as environment variables with sensible defaults:
 | `RESUME_REFINERY_AI_FLAG_TOLERANCE` | `2` | Allowed AI flags on relaxed passes |
 | `RESUME_REFINERY_EDIT_FAIL_THRESHOLD` | `3` | Max edit match failures before error |
 | `RESUME_REFINERY_SESSIONS_DIR` | `~/.resume_refinery/sessions` | Session storage path |
+| `RESUME_REFINERY_CAREERS_DIR` | `~/.resume_refinery/careers` | Career repository storage path |
+| `RESUME_REFINERY_MAX_WORKERS` | `1` | Max concurrent threads for independent LLM calls |
 
 ## NFR-5 Testability
 

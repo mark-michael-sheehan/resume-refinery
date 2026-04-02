@@ -172,11 +172,39 @@ personal voice in professional writing. Your task is to evaluate whether a \
 career document genuinely reflects the applicant's stated voice — or whether \
 it sounds generic, overly polished, or like it was written by someone else.
 
+The voice profile contains several signal layers (not every profile has all of them):
+1. Core adjectives — the personality traits the writing should embody \
+   (e.g. "direct", "analytical", "warm but not effusive").
+2. Style rules — structural habits like sentence length, active vs passive voice, \
+   and how ideas are sequenced.
+3. Preferred phrases — exact phrases the person naturally uses.
+4. Phrases to avoid — language the person explicitly rejects.
+5. Writing samples — real examples that demonstrate the target voice in practice.
+
 Decision rules (apply literally, do not deliberate):
-- If 3+ characteristic phrases from the voice profile appear naturally → "strong"
-- If the tone broadly matches but characteristic phrasing is absent → "moderate"
-- If the document reads like generic corporate writing with no voice markers → "weak"
-- Flag ONLY phrases you can quote from the document. Do not flag absence of phrases.
+
+"strong" — The document's TONE and STRUCTURE align with the core adjectives and style \
+rules. The writing *feels* like the same person who wrote the samples (if provided). \
+Minor imperfections are fine. Preferred phrases may or may not appear — their absence \
+alone does NOT prevent a "strong" rating. No phrases-to-avoid appear.
+
+"moderate" — The tone partially matches the core adjectives but the writing drifts \
+into generic professional language in places, OR one or two phrases-to-avoid appear, \
+OR the style rules are inconsistently followed (e.g. profile says "short declarative \
+sentences" but the document uses long compound sentences throughout).
+
+"weak" — The document reads like generic corporate writing that ignores the core \
+adjectives. Multiple phrases-to-avoid appear. The style bears little resemblance to \
+the writing samples or stated style rules. It could have been written by anyone.
+
+Weighting:
+- Core adjectives and style rules are the PRIMARY signals. Judge voice by \
+  whether the writing embodies these traits, not by whether specific phrases appear.
+- Phrases-to-avoid are hard violations — each one counts against the rating.
+- Preferred phrases are BONUS evidence of voice fidelity. Their presence strengthens \
+  a rating; their absence does NOT weaken it.
+- Writing samples (if provided) are the ground-truth reference for what the voice \
+  sounds like in practice. Compare overall cadence and personality, not word choice.
 """
 
 AI_DETECTION_SYSTEM_PROMPT = """You are an expert in identifying AI-generated content in \
@@ -322,7 +350,8 @@ VOICE_REVIEW_DOC_USER_TEMPLATE = """## Voice Profile
 
 ## Task
 Rate how well this {doc_type} matches the Voice Profile. Apply the decision rules \
-from your system prompt strictly.
+from your system prompt strictly — judge primarily on core adjectives and style rules, \
+not on the presence of specific phrases.
 
 Return a JSON object with this shape:
 {{
@@ -332,8 +361,11 @@ Return a JSON object with this shape:
 }}
 
 - overall_match: use the decision rules above — do not hedge between categories.
-- assessment: 1–2 sentences. State which voice markers are present or missing.
-- issues: quote specific phrases from the {doc_type} that feel off-voice.
+- assessment: 1–2 sentences. State which core adjectives and style rules the document \
+  embodies or violates. Mention any phrases-to-avoid that appear.
+- issues: quote specific phrases from the {doc_type} that contradict the voice profile \
+  (e.g. phrases-to-avoid that appear, or passages that violate stated style rules). \
+  Do NOT list the absence of preferred phrases as an issue.
 
 Do NOT flag content simply because it is professional. Only flag content that \
 contradicts the voice profile or sounds like a different person wrote it.
