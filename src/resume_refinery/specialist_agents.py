@@ -44,7 +44,7 @@ load_dotenv()
 _BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 _MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 _NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
-_MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "4096"))
+_MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "8192"))
 _MAX_WORKERS = int(os.environ.get("RESUME_REFINERY_MAX_WORKERS", "1"))
 
 _STOPWORDS = {

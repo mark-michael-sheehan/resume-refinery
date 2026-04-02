@@ -38,7 +38,7 @@ voice_profile.md + career_profile.md + job_description.md
 |---|---|
 | `models.py` | Domain models + intermediate orchestration artifacts |
 | `parsers.py` | Read markdown files → models |
-| `agent.py` | Low-level Claude document generation client |
+| `agent.py` | Low-level Ollama document generation client |
 | `specialist_agents.py` | Evidence, voice, drafting, verification, and repair agents |
 | `orchestrator.py` | Deterministic coordinator over specialist agents |
 | `reviewers.py` | LLM review client implementations |
@@ -257,10 +257,10 @@ the global workflow. The orchestrator owns step order, retries, and persistence.
 **Intermediate artifacts for explainability:** `EvidencePack` and `VoiceStyleGuide`
 are explicit artifacts that can be inspected in the UI and reasoned about in reviews.
 
-**Per-document generation:** Each document remains a separate Claude API call, which keeps
+**Per-document generation:** Each document remains a separate Ollama LLM call, which keeps
 targeted refinement cheap and traceable.
 
-**Adaptive thinking enabled:** All Claude calls use `thinking: {type: "adaptive"}`. This
+**Adaptive thinking enabled:** All Ollama calls use `think=True`. This
 is especially valuable for the review passes, where the model needs to reason carefully
 about voice match and AI-detection signals before producing a JSON result.
 
@@ -270,7 +270,7 @@ and job description as grounding sources; voice and AI-detection reviewers opera
 only on the documents and voice profile. Truth checks run before final acceptance,
 and repair passes target only failing documents.
 
-**Raw content over structured parsing:** Input files are passed to Claude as raw text.
+**Raw content over structured parsing:** Input files are passed to the LLM as raw text.
 This is intentional — flexible, user-friendly input formats are more important than
 schema rigidity at the ingestion stage. Structured extraction is only used for session
 naming.

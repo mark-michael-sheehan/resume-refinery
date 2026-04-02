@@ -226,7 +226,7 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 | Variable | Default | Description |
 |---|---|---|
 | `RESUME_REFINERY_MODEL` | `qwen3.5:9b` | Model used to write the cover letter, resume, and interview guide. Any model pulled in Ollama works; `qwen3.5:4b` is faster and lighter. |
-| `RESUME_REFINERY_MAX_TOKENS` | `4096` | Maximum new tokens the generation model may produce per document. Raise if output is cut off mid-section. |
+| `RESUME_REFINERY_MAX_TOKENS` | `8192` | Maximum new tokens the generation model may produce per document. Raise if output is cut off mid-section. |
 
 ### Review / verification
 
@@ -251,9 +251,10 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 
 | Variable | Default | Description |
 |---|---|---|
-| `RESUME_REFINERY_MAX_TRUTH_PASSES` | `2` | Max review+repair passes for the truthfulness loop. Each pass checks claims against the career profile; failing docs are re-generated before the next pass. Set to `1` to review without repair, `0` to skip entirely. |
-| `RESUME_REFINERY_MAX_VOICE_PASSES` | `2` | Max passes for the voice-match loop. Each pass rates voice fidelity; if not `"strong"`, all docs are re-generated with voice feedback. |
-| `RESUME_REFINERY_MAX_AI_PASSES` | `2` | Max passes for the AI-detection loop. Each pass flags generic/AI-sounding phrases; flagged docs are re-generated with the quoted phrases as repair feedback. |
+| `RESUME_REFINERY_MAX_REPAIR_PASSES` | `3` | Max unified review+repair passes per run. Each pass runs all three reviewers (truthfulness, voice, AI-detection), checks convergence, and — if any reviewer still fails — runs the repair agent before the next pass. Set to `1` to review once with no repair. |
+| `RESUME_REFINERY_RELAXED_PASS_START` | `1` | 0-based pass index at which voice and AI-detection thresholds relax. Before this pass, AI-detection requires zero flags on cover letter + resume. From this pass onward, total flags ≤ `AI_FLAG_TOLERANCE`. Voice accepts "moderate" on all passes. Truthfulness never relaxes. |
+| `RESUME_REFINERY_AI_FLAG_TOLERANCE` | `2` | Maximum AI-detection flags (cover letter + resume combined) allowed on relaxed passes (pass ≥ `RELAXED_PASS_START`). |
+| `RESUME_REFINERY_EDIT_FAIL_THRESHOLD` | `3` | Max surgical edits that may fail to match their target text in a single repair call before an `EditApplicationError` is raised. |
 
 ### Storage
 
@@ -261,9 +262,6 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 |---|---|---|
 | `RESUME_REFINERY_SESSIONS_DIR` | `~/.resume_refinery/sessions` | Directory where sessions are persisted. Each session is a subdirectory containing input copies, versioned Markdown sources, DOCX exports, and review JSON files. |
 | `RESUME_REFINERY_CAREERS_DIR` | `~/.resume_refinery/careers` | Directory where career repositories are persisted. Each repository is a subdirectory containing a `career.json` file with the full `CareerRepository` model. |
-| `voice_review.json` | Voice-match review results |
-| `ai_review.json` | AI-detection review results |
-| `truth_review.json` | Strict claim-support verification results |
 
 ---
 
