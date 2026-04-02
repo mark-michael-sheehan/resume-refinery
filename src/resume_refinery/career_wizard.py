@@ -51,9 +51,7 @@ _PHASE_LABELS: dict[WizardPhase, str] = {
 
 
 def _esc(text: str | None) -> str:
-    if not text:
-        return ""
-    return html.escape(text)
+    return html.escape(text or "")
 
 
 def _wizard_page(title: str, body: str, repo: CareerRepository | None = None) -> HTMLResponse:
@@ -164,19 +162,20 @@ def _progress_bar(repo: CareerRepository) -> str:
     phase_order = {p: i for i, p in enumerate(phases)}
     current_idx = phase_order.get(repo.current_phase, 0)
 
+    safe_id = html.escape(repo.repo_id)
     steps: list[str] = []
     for i, phase in enumerate(phases):
-        label = _PHASE_LABELS[phase]
+        label = html.escape(_PHASE_LABELS[phase])
         if i < current_idx:
             cls = "done"
-            url = f"/career/{_esc(repo.repo_id)}/{_phase_url[phase]}"
-            steps.append(f'<a href="{url}" class="step {cls}" style="text-decoration:none;color:inherit">{_esc(label)}</a>')
+            url = f"/career/{safe_id}/{_phase_url[phase]}"
+            steps.append(f'<a href="{url}" class="step {cls}" style="text-decoration:none;color:inherit">{label}</a>')
         elif i == current_idx:
             cls = "active"
-            url = f"/career/{_esc(repo.repo_id)}/{_phase_url[phase]}"
-            steps.append(f'<a href="{url}" class="step {cls}" style="text-decoration:none;color:inherit">{_esc(label)}</a>')
+            url = f"/career/{safe_id}/{_phase_url[phase]}"
+            steps.append(f'<a href="{url}" class="step {cls}" style="text-decoration:none;color:inherit">{label}</a>')
         else:
-            steps.append(f'<div class="step">{_esc(label)}</div>')
+            steps.append(f'<div class="step">{label}</div>')
     return f'<div class="progress">{"".join(steps)}</div>'
 
 
@@ -973,8 +972,8 @@ def save_role_deepdive(
     role.anti_claims = anti_claims.strip()
     repo.deepdive_role_index = role_idx
     career_store.save(repo)
-    # Stay on the same page after save so user can request probes or continue
-    return RedirectResponse(url=f"/career/{repo.repo_id}/role_deepdive/{repo.deepdive_role_index}", status_code=303)
+    # Redirect to base deep-dive page; GET handler reads deepdive_role_index from repo
+    return RedirectResponse(url=f"/career/{repo.repo_id}/role_deepdive", status_code=303)
 
 
 # ---------------------------------------------------------------------------
