@@ -19,6 +19,7 @@ from .models import (
     DocumentTruthResult,
     DraftingContext,
     ExemptedPhrases,
+    HiringManagerReview,
     OrchestrationResult,
     RepairPassResult,
     ReviewBundle,
@@ -123,6 +124,16 @@ class ResumeRefineryOrchestrator:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, docs)
 
+        # --- Hiring manager review (runs after repair, before final save) ---
+        self._progress(progress, "Running hiring-manager review (1 LLM call)...")
+        try:
+            hm_review = self.verification_agent.review_hiring_manager(docs, job)
+            reviews = reviews.model_copy(update={"hiring_manager": hm_review})
+            self._progress(progress, self._summarise_hiring_manager(hm_review))
+        except Exception as exc:
+            logging.warning("Hiring-manager review failed (%s)", exc)
+            self._progress(progress, f"[yellow]Hiring-manager review skipped: {exc}[/yellow]")
+
         self.store.save_reviews(session, reviews)
 
         strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
@@ -220,6 +231,16 @@ class ResumeRefineryOrchestrator:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, current_docs)
 
+        # --- Hiring manager review (runs after repair, before final save) ---
+        self._progress(progress, "Running hiring-manager review (1 LLM call)...")
+        try:
+            hm_review = self.verification_agent.review_hiring_manager(current_docs, job)
+            reviews = reviews.model_copy(update={"hiring_manager": hm_review})
+            self._progress(progress, self._summarise_hiring_manager(hm_review))
+        except Exception as exc:
+            logging.warning("Hiring-manager review failed (%s)", exc)
+            self._progress(progress, f"[yellow]Hiring-manager review skipped: {exc}[/yellow]")
+
         self.store.save_reviews(session, reviews)
 
         strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
@@ -247,6 +268,11 @@ class ResumeRefineryOrchestrator:
         job = session.job_description
         context = self._build_context(career, voice, job, progress)
         reviews = self.verification_agent.review_all(docs, career, voice, job)
+        try:
+            hm_review = self.verification_agent.review_hiring_manager(docs, job)
+            reviews = reviews.model_copy(update={"hiring_manager": hm_review})
+        except Exception as exc:
+            logging.warning("Hiring-manager review failed (%s)", exc)
         self.store.save_reviews(session, reviews)
         return OrchestrationResult(
             session=session,
@@ -527,6 +553,26 @@ class ResumeRefineryOrchestrator:
                 parts.append(f"  {label}: {len(flags)} flag(s)")
                 for flag in flags:
                     parts.append(f'    • "{flag}"')
+        return "\n".join(parts)
+
+    def _summarise_hiring_manager(self, hm: HiringManagerReview) -> str:
+        pct = hm.advance_likelihood
+        color = "green" if pct >= 70 else "yellow" if pct >= 40 else "red"
+        parts = [f"[{color}]Hiring-manager advance likelihood: {pct}%[/{color}]"]
+        if hm.summary:
+            parts.append(f"  {hm.summary}")
+        if hm.strengths:
+            parts.append("  Strengths:")
+            for s in hm.strengths:
+                parts.append(f"    • {s}")
+        if hm.concerns:
+            parts.append("  Concerns:")
+            for c in hm.concerns:
+                parts.append(f"    • {c}")
+        if hm.improvements:
+            parts.append("  Suggested improvements:")
+            for imp in hm.improvements:
+                parts.append(f"    [{imp.impact.upper()}] ({imp.area}) {imp.suggestion}")
         return "\n".join(parts)
 
     def _summarise_repair(self, repair_pass: RepairPassResult) -> str:

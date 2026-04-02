@@ -16,6 +16,9 @@ Built as a deterministic workflow orchestrator with bounded specialist agents.
   prep guide — each generated in a separate focused pass.
 - **Local web app**: Run a browser UI locally for upload, generation, refinement, and
   session browsing.
+- **Career Builder**: Use a guided wizard (`/career`) to build a structured career
+  repository through directed questions — or import from existing resume files
+  (PDF, DOCX, TXT, MD) and let an AI agent extract the data for you.
 - **Targeted refinement**: Give feedback on specific documents and regenerate only those.
   Every refinement is saved as a new version.
 - **Strict truthfulness pass**: Generated content is checked against the career profile.
@@ -75,20 +78,42 @@ RESUME_REFINERY_REVIEW_MAX_TOKENS=4096
 RESUME_REFINERY_NUM_CTX=16384
 
 # Custom session storage path (default: ~/.resume_refinery/sessions)
+# Both the web app and CLI read/write sessions here.
 # RESUME_REFINERY_SESSIONS_DIR=/path/to/sessions
 ```
 
-See [`.env.example`](.env.example) for the full reference with descriptions.
+See [`.env.example`](.env.example) for the full reference with descriptions, or the
+[Environment Variables](docs/usage.md#environment-variables) section of the Usage Guide
+for a complete table.
 
 ---
 
 ## Quick Start
 
+### Web App (recommended)
+
+Make sure Ollama is running (`ollama serve`) before starting the web app.
+
 ```bash
-# Start the local web app (recommended)
 resume-refinery-web
 # Opens on http://127.0.0.1:8765
+```
 
+The web app gives you:
+
+| Page | What it does |
+|---|---|
+| **Home** (`/`) | Upload a career profile, voice profile, and job description to generate documents. Links to Sessions and Career Builder. |
+| **Career Builder** (`/career`) | Build a structured career repository through a guided wizard, or import from existing resume files (PDF, DOCX, TXT, MD). The result can be selected directly when creating a new session. |
+| **Sessions** (`/sessions`) | Browse all sessions, view generated documents side-by-side, download DOCX files, and submit refinement feedback. |
+
+> **Tip — fastest on-ramp:** Go to `/career`, click **Import from Documents**, upload
+> your existing resume, then start a new session from the home page using the imported
+> career repository.
+
+### CLI
+
+```bash
 # 1. Generate documents for a job
 resume-refinery new \
   examples/career_profile.md \
@@ -173,5 +198,6 @@ resume_refinery/
 
 ## Documentation
 
-- [Usage Guide](docs/usage.md) — commands and input file formats
+- [Usage Guide](docs/usage.md) — full web-app walkthrough, CLI commands, input file
+  formats, environment variables, and library API
 - [Architecture](docs/architecture.md) — orchestrator, specialist agents, and data flow

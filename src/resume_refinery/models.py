@@ -362,10 +362,32 @@ class TruthfulnessResult(BaseModel):
     interview_guide: DocumentTruthResult
 
 
+class HiringManagerImprovementItem(BaseModel):
+    """A single improvement suggestion from the hiring manager review."""
+
+    area: str = Field(description="Which document or section the suggestion targets")
+    suggestion: str = Field(description="Specific actionable improvement")
+    impact: Literal["high", "medium", "low"] = "medium"
+
+
+class HiringManagerReview(BaseModel):
+    """Simulated hiring-manager assessment of the full application package."""
+
+    advance_likelihood: int = Field(
+        ge=0, le=100,
+        description="Percentage likelihood of advancing the candidate to the next stage",
+    )
+    summary: str = Field(default="", description="Overall hiring-manager impression")
+    strengths: StrList = Field(default_factory=list)
+    concerns: StrList = Field(default_factory=list)
+    improvements: list[HiringManagerImprovementItem] = Field(default_factory=list)
+
+
 class ReviewBundle(BaseModel):
     voice: Optional[VoiceReviewResult] = None
     ai_detection: Optional[AIDetectionResult] = None
     truthfulness: Optional[TruthfulnessResult] = None
+    hiring_manager: Optional[HiringManagerReview] = None
 
 
 class RepairEdit(BaseModel):

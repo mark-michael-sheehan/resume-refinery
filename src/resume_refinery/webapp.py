@@ -101,6 +101,36 @@ def _truth_summary(truth) -> str:
     )
 
 
+def _hiring_manager_summary(hm) -> str:
+    if not hm:
+        return "<p class='muted'>No hiring-manager review available.</p>"
+    pct = hm.advance_likelihood
+    klass = "ok" if pct >= 70 else "bad" if pct < 40 else "muted"
+    parts = [
+        f"<p>Advance likelihood: <span class='{klass}' style='font-size:1.3em'>{pct}%</span></p>",
+    ]
+    if hm.summary:
+        parts.append(f"<p>{html.escape(hm.summary)}</p>")
+    if hm.strengths:
+        parts.append("<h3>Strengths</h3><ul>")
+        parts.extend(f"<li>{html.escape(s)}</li>" for s in hm.strengths)
+        parts.append("</ul>")
+    if hm.concerns:
+        parts.append("<h3>Concerns</h3><ul>")
+        parts.extend(f"<li>{html.escape(c)}</li>" for c in hm.concerns)
+        parts.append("</ul>")
+    if hm.improvements:
+        parts.append("<h3>Suggested Improvements</h3><ul>")
+        for imp in hm.improvements:
+            impact_badge = {"high": "bad", "medium": "muted", "low": "muted"}[imp.impact]
+            parts.append(
+                f"<li><span class='{impact_badge}'>[{html.escape(imp.impact.upper())}]</span> "
+                f"<strong>{html.escape(imp.area)}</strong>: {html.escape(imp.suggestion)}</li>"
+            )
+        parts.append("</ul>")
+    return "".join(parts)
+
+
 def _artifact_summary(result: OrchestrationResult) -> str:
     evidence = result.evidence_pack
     style = result.voice_style_guide
@@ -405,6 +435,10 @@ def show_session(session_id: str) -> HTMLResponse:
   <p class=\"muted\">{html.escape(session.job_description.title or '—')} @ {html.escape(session.job_description.company or '—')}</p>
   {_truth_summary(reviews.truthfulness)}
   <p><a href=\"/sessions\">Back to sessions</a></p>
+</div>
+<div class=\"card\">
+  <h2>Hiring Manager Review</h2>
+  {_hiring_manager_summary(reviews.hiring_manager)}
 </div>
 {_artifact_summary(result)}
 <div class=\"card\">
