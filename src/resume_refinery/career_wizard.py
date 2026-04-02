@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Iterator, Optional
 
-from markupsafe import Markup
+
 
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -62,12 +62,8 @@ def _wizard_page(title: str, body: str, repo: CareerRepository | None = None) ->
     if repo:
         progress = _progress_bar(repo)
     safe_title = html.escape(title)
-    # Mark pre-escaped HTML fragments as safe so they can be interpolated
-    # into the template without being double-escaped.  All user-derived values
-    # inside *body* and *progress* are individually html.escape()'d at the
-    # point of construction.
-    safe_body = Markup(body)
-    safe_progress = Markup(progress)
+    safe_body = body
+    safe_progress = progress
     return HTMLResponse(f"""
 <!doctype html>
 <html lang="en">
@@ -557,8 +553,8 @@ def _render_roles(repo: CareerRepository) -> HTMLResponse:
   <strong>{_esc(role.title)}</strong> @ {_esc(role.company)}{conf_badge}
   <span class="muted">({_esc(role.start_date)} – {_esc(role.end_date)})</span>
   <div style="margin-top:0.4rem">
-    <a href="/career/{_esc(repo.repo_id)}/roles/{i}/edit" class="btn btn-sm btn-secondary">Edit</a>
-    <form method="post" action="/career/{_esc(repo.repo_id)}/roles/{i}/delete"
+    <a href="/career/{_esc(repo.repo_id)}/roles/{int(i)}/edit" class="btn btn-sm btn-secondary">Edit</a>
+    <form method="post" action="/career/{_esc(repo.repo_id)}/roles/{int(i)}/delete"
           style="display:inline"
           onsubmit="return confirm('Remove this role?')">
       <button type="submit" class="btn btn-sm btn-danger">Remove</button>
@@ -660,7 +656,7 @@ def edit_role_form(repo_id: str, role_idx: int) -> HTMLResponse:
     body = f"""
 <div class="card">
   <h2>Edit Role</h2>
-  <form method="post" action="/career/{_esc(repo.repo_id)}/roles/{role_idx}/edit">
+  <form method="post" action="/career/{_esc(repo.repo_id)}/roles/{int(role_idx)}/edit">
     <div class="grid">
       <div>
         <label>Company</label>
@@ -860,11 +856,11 @@ def _render_role_deepdive(repo: CareerRepository) -> HTMLResponse:
     for i, r in enumerate(repo.roles):
         style = "font-weight:700" if i == idx else ""
         nav_links.append(
-            f'<a href="/career/{_esc(repo.repo_id)}/role_deepdive/{i}" style="{style}">'
+            f'<a href="/career/{_esc(repo.repo_id)}/role_deepdive/{int(i)}" style="{style}">'
             f'{_esc(r.company)}</a>'
         )
     nav = " &middot; ".join(nav_links)
-    progress_text = f"Role {idx + 1} of {len(repo.roles)}"
+    progress_text = f"Role {int(idx) + 1} of {len(repo.roles)}"
 
     # Show extraction confidence when data came from ingestion
     confidence_html = ""
@@ -885,7 +881,7 @@ def _render_role_deepdive(repo: CareerRepository) -> HTMLResponse:
   <h2>Phase 3: Deep Dive — {_esc(role.title)} @ {_esc(role.company)}</h2>
   <p class="muted">{progress_text} &nbsp;|&nbsp; {nav}</p>
   {confidence_html}
-  <form method="post" action="/career/{_esc(repo.repo_id)}/role_deepdive/{idx}">
+  <form method="post" action="/career/{_esc(repo.repo_id)}/role_deepdive/{int(idx)}">
     <label>Company Context</label>
     <p class="hint">What did this company do? How big was it? Stage? Industry?</p>
     <textarea name="company_context" rows="3">{_esc(role.company_context)}</textarea>
@@ -923,7 +919,7 @@ def _render_role_deepdive(repo: CareerRepository) -> HTMLResponse:
 
 <div id="probe-area"></div>
 <button class="btn btn-secondary btn-sm"
-        hx-post="/career/{_esc(repo.repo_id)}/role_deepdive/{idx}/probe"
+        hx-post="/career/{_esc(repo.repo_id)}/role_deepdive/{int(idx)}/probe"
         hx-target="#probe-area"
         hx-swap="innerHTML"
         hx-indicator="#probe-loading">Get Follow-Up Questions</button>
@@ -935,7 +931,7 @@ def _render_role_deepdive(repo: CareerRepository) -> HTMLResponse:
   <div class="actions">
     <a href="/career/{_esc(repo.repo_id)}/roles" class="btn btn-secondary">Back to Roles</a>
     {"" if idx >= len(repo.roles) - 1 else
-     f'<a href="/career/{_esc(repo.repo_id)}/role_deepdive/{idx + 1}" class="btn btn-secondary">Next Role</a>'}
+     f'<a href="/career/{_esc(repo.repo_id)}/role_deepdive/{int(idx) + 1}" class="btn btn-secondary">Next Role</a>'}
     <form method="post" action="/career/{_esc(repo.repo_id)}/advance/skills" style="display:inline">
       <button type="submit">Done with Deep Dives &rarr; Skills</button>
     </form>
@@ -1009,7 +1005,7 @@ def _render_skills(repo: CareerRepository, edit_idx: int | None = None) -> HTMLR
             )
             skill_rows.append(
                 f'<tr><td colspan="6">'
-                f'<form method="post" action="/career/{_esc(repo.repo_id)}/skills/{i}/edit" '
+                f'<form method="post" action="/career/{_esc(repo.repo_id)}/skills/{int(i)}/edit" '
                 f'style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end">'
                 f'<div><label style="font-size:0.85rem">Name</label>'
                 f'<input type="text" name="name" value="{_esc(s.name)}" required style="width:130px" /></div>'
@@ -1041,9 +1037,9 @@ def _render_skills(repo: CareerRepository, edit_idx: int | None = None) -> HTMLR
             f"<td>{_esc(s.proficiency)}</td><td>{_esc(s.years or '-')}</td>"
             f"<td>{evidence_cell}</td>"
             f'<td style="white-space:nowrap">'
-            f'<a href="/career/{_esc(repo.repo_id)}/skills/{i}/edit" class="btn btn-sm btn-secondary" '
+            f'<a href="/career/{_esc(repo.repo_id)}/skills/{int(i)}/edit" class="btn btn-sm btn-secondary" '
             f'style="margin-right:0.3rem">Edit</a>'
-            f'<form method="post" action="/career/{_esc(repo.repo_id)}/skills/{i}/delete" style="display:inline">'
+            f'<form method="post" action="/career/{_esc(repo.repo_id)}/skills/{int(i)}/delete" style="display:inline">'
             f'<button type="submit" class="btn btn-sm btn-danger">X</button></form></td></tr>'
         )
 
@@ -1216,8 +1212,8 @@ def _render_stories(repo: CareerRepository) -> HTMLResponse:
   <strong>{_esc(s.title)}</strong> <span class="muted">({_esc(tags)})</span>{conf_badge}
   {star_html}
   <div style="margin-top:0.5rem">
-    <a href="/career/{_esc(repo.repo_id)}/stories/{i}/edit" class="btn btn-sm btn-secondary">Edit</a>
-    <form method="post" action="/career/{_esc(repo.repo_id)}/stories/{i}/delete"
+    <a href="/career/{_esc(repo.repo_id)}/stories/{int(i)}/edit" class="btn btn-sm btn-secondary">Edit</a>
+    <form method="post" action="/career/{_esc(repo.repo_id)}/stories/{int(i)}/delete"
           style="display:inline" onsubmit="return confirm('Remove this story?')">
       <button type="submit" class="btn btn-sm btn-danger">Remove</button>
     </form>
@@ -1327,7 +1323,7 @@ def edit_story_form(repo_id: str, story_idx: int) -> HTMLResponse:
     body = f"""
 <div class="card">
   <h2>Edit Story: {_esc(s.title)}</h2>
-  <form method="post" action="/career/{_esc(repo.repo_id)}/stories/{story_idx}/edit">
+  <form method="post" action="/career/{_esc(repo.repo_id)}/stories/{int(story_idx)}/edit">
     <label>Title</label>
     <input type="text" name="title" value="{_esc(s.title)}" required />
     <label>Tags</label>
