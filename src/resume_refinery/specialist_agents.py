@@ -21,6 +21,7 @@ from .models import (
     DraftingContext,
     EvidenceItem,
     EvidencePack,
+    HiringManagerReview,
     JobDescription,
     JobRequirement,
     RepairEdit,
@@ -462,6 +463,9 @@ class VerificationAgent:
 
     def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:
         return self.reviewer.review_ai_detection(docs)
+
+    def review_hiring_manager(self, docs: DocumentSet, job: JobDescription) -> HiringManagerReview:
+        return self.reviewer.review_hiring_manager(docs, job)
 
 
 class RepairAgent:

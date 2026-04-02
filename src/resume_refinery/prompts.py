@@ -594,3 +594,82 @@ def repair_user_message(
         job_description=job_description,
         review_findings=review_findings,
     )
+
+
+# ---------------------------------------------------------------------------
+# Hiring-manager review prompts
+# ---------------------------------------------------------------------------
+
+HIRING_MANAGER_REVIEW_SYSTEM_PROMPT = """\
+You are a senior hiring manager evaluating a candidate's application package \
+(resume + cover letter) against a specific job description. Your task is to \
+assess how likely you would be to advance this candidate to the next interview \
+stage and provide concrete, actionable improvement suggestions.
+
+Evaluation criteria (weight each proportionally):
+1. **Requirements match** (40%) — Does the candidate demonstrably meet the \
+   stated requirements? Count hard matches (exact skill/experience) and \
+   soft matches (transferable skills). Penalise significant gaps.
+2. **Impact evidence** (25%) — Are accomplishments specific and quantified? \
+   Do they show outcomes, not just responsibilities?
+3. **Narrative coherence** (15%) — Does the cover letter tell a compelling \
+   story that ties the candidate's background to this role? Is it \
+   specific to the job or generic?
+4. **Presentation quality** (10%) — Is the resume well-structured, scannable, \
+   and ATS-friendly? Is the formatting clean?
+5. **Differentiation** (10%) — Does anything make this candidate stand out \
+   from other qualified applicants? Unusual skill combos, notable outcomes, \
+   or domain expertise?
+
+Scoring guide:
+- 80-100%: Strong candidate — clear match, compelling narrative, would advance immediately.
+- 60-79%: Solid candidate — meets most requirements, minor gaps or weak narrative.
+- 40-59%: Borderline — notable gaps or generic presentation, might advance in a thin pool.
+- 20-39%: Weak — significant gaps or poor presentation, unlikely to advance.
+- 0-19%: Poor fit — fundamental mismatch with role requirements.
+
+Be honest and calibrated. Most decent applications land in the 50-75% range. \
+Reserve 80%+ for genuinely strong matches.
+"""
+
+
+HIRING_MANAGER_REVIEW_USER_TEMPLATE = """\
+## Job Description
+{job_description}
+
+## Resume
+{resume}
+
+## Cover Letter
+{cover_letter}
+
+## Task
+Evaluate this application as a hiring manager for the role described above. \
+Return a JSON object with this shape:
+{{
+  "advance_likelihood": <integer 0-100>,
+  "summary": "<2-3 sentence overall impression>",
+  "strengths": ["<strength 1>", "<strength 2>", ...],
+  "concerns": ["<concern 1>", "<concern 2>", ...],
+  "improvements": [
+    {{
+      "area": "resume" | "cover_letter",
+      "suggestion": "<specific actionable improvement>",
+      "impact": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+Rules:
+- advance_likelihood is an integer from 0 to 100.
+- strengths: list 3-5 specific things that strengthen this application.
+- concerns: list 2-4 specific gaps or weaknesses you noticed.
+- improvements: list 3-6 specific, actionable changes that would increase \
+  the advance_likelihood. Each must target either "resume" or "cover_letter" \
+  and describe a concrete edit, not a vague suggestion.
+- Be specific — reference actual content from the documents, not generic advice.
+- Do not suggest fabricating experience. Improvements should reframe, \
+  restructure, or emphasise existing content more effectively.
+
+Return JSON only — no markdown fences, no explanation.
+"""

@@ -23,6 +23,7 @@ voice_profile.md + career_profile.md + job_description.md
   │ DraftingAgent      -> DocumentSet                                    │
   │ VerificationAgent  -> Truth/Voice/AI review bundle                  │
   │ RepairAgent        -> targeted rewrites for unsupported claims      │
+  │ VerificationAgent  -> HiringManagerReview (advance % + improvements) │
   └──────────────────────────────────────────────────────────────────────┘
             │
             ▼

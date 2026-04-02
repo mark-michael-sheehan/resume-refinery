@@ -64,3 +64,4 @@
 | FR-6.2 | **Voice reviewer** — Documents must match the writing style described in the voice profile. Per-document match strength is rated as "strong", "moderate", or "weak". |
 | FR-6.3 | **AI detection reviewer** — Documents are scanned for phrases that commonly trigger AI-detection tools. Flagged phrases are listed per document. |
 | FR-6.4 | All reviewers use JSON-formatted output, temperature 0, and thinking disabled to maximise determinism. |
+| FR-6.5 | **Hiring-manager reviewer** — After the verification/repair loop completes, a simulated hiring-manager review evaluates the resume and cover letter against the job description. It returns: an `advance_likelihood` percentage (0–100), strengths, concerns, and specific actionable improvement suggestions targeting either the resume or cover letter. The review is displayed on the session detail page in the web app and emitted via the progress callback during generation/refinement. |

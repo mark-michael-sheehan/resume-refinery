@@ -14,6 +14,8 @@ from .models import (
     AIDetectionResult,
     DocumentSet,
     DocumentTruthResult,
+    HiringManagerImprovementItem,
+    HiringManagerReview,
     JobDescription,
     ReviewBundle,
     TruthfulnessResult,
@@ -24,6 +26,8 @@ from .models import (
 from .prompts import (
     AI_DETECTION_DOC_USER_TEMPLATE,
     AI_DETECTION_SYSTEM_PROMPT,
+    HIRING_MANAGER_REVIEW_SYSTEM_PROMPT,
+    HIRING_MANAGER_REVIEW_USER_TEMPLATE,
     TRUTHFULNESS_DOC_USER_TEMPLATE,
     TRUTHFULNESS_SYSTEM_PROMPT,
     VOICE_REVIEW_DOC_USER_TEMPLATE,
@@ -250,6 +254,49 @@ class DocumentReviewer:
             cover_letter_flags=flags_by_doc["Cover Letter"],
             resume_flags=flags_by_doc["Resume"],
             interview_guide_flags=flags_by_doc["Interview Guide"],
+        )
+
+    def review_hiring_manager(
+        self, docs: DocumentSet, job: JobDescription,
+    ) -> HiringManagerReview:
+        """Simulate a hiring-manager review of the resume + cover letter."""
+        user_msg = HIRING_MANAGER_REVIEW_USER_TEMPLATE.format(
+            job_description=job.raw_content,
+            resume=docs.resume or "(not provided)",
+            cover_letter=docs.cover_letter or "(not provided)",
+        )
+        raw = self._call(HIRING_MANAGER_REVIEW_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+
+        likelihood = data.get("advance_likelihood", 50)
+        if not isinstance(likelihood, int):
+            try:
+                likelihood = int(likelihood)
+            except (TypeError, ValueError):
+                likelihood = 50
+        likelihood = max(0, min(100, likelihood))
+
+        improvements = []
+        for item in data.get("improvements", []):
+            if isinstance(item, dict) and "suggestion" in item:
+                area = item.get("area", "resume")
+                if area not in ("resume", "cover_letter"):
+                    area = "resume"
+                impact = item.get("impact", "medium")
+                if impact not in ("high", "medium", "low"):
+                    impact = "medium"
+                improvements.append(HiringManagerImprovementItem(
+                    area=area,
+                    suggestion=item["suggestion"],
+                    impact=impact,
+                ))
+
+        return HiringManagerReview(
+            advance_likelihood=likelihood,
+            summary=data.get("summary", ""),
+            strengths=data.get("strengths", []),
+            concerns=data.get("concerns", []),
+            improvements=improvements,
         )
 
     def _call(self, system: str, user_msg: str, *, think: bool = False) -> str:

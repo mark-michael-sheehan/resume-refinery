@@ -8,6 +8,7 @@ import pytest
 from resume_refinery.models import (
     AIDetectionResult,
     DocumentSet,
+    HiringManagerReview,
     TruthfulnessResult,
     VoiceReviewResult,
 )
@@ -398,6 +399,91 @@ def test_different_model_no_warning(mock_client_cls, caplog):
     finally:
         rev_mod.MODEL = original_model
         rev_mod._GEN_MODEL = original_gen_model
+
+
+# ---------------------------------------------------------------------------
+# review_hiring_manager
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_hiring_manager_returns_result(mock_client_cls, document_set, job_description):
+    payload = json.dumps({
+        "advance_likelihood": 72,
+        "summary": "Strong technical match with relevant distributed systems experience.",
+        "strengths": ["Quantified achievements", "Relevant tech stack"],
+        "concerns": ["No staff-level leadership evidence"],
+        "improvements": [
+            {
+                "area": "resume",
+                "suggestion": "Add a bullet highlighting cross-team influence.",
+                "impact": "high",
+            },
+            {
+                "area": "cover_letter",
+                "suggestion": "Open with the deploy-time reduction metric.",
+                "impact": "medium",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_hiring_manager(document_set, job_description)
+
+    assert isinstance(result, HiringManagerReview)
+    assert result.advance_likelihood == 72
+    assert "Strong technical match" in result.summary
+    assert len(result.strengths) == 2
+    assert len(result.concerns) == 1
+    assert len(result.improvements) == 2
+    assert result.improvements[0].area == "resume"
+    assert result.improvements[0].impact == "high"
+    assert result.improvements[1].area == "cover_letter"
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_hiring_manager_clamps_likelihood(mock_client_cls, document_set, job_description):
+    """Likelihood values outside 0-100 are clamped."""
+    payload = json.dumps({
+        "advance_likelihood": 150,
+        "summary": "Excellent.",
+        "strengths": [],
+        "concerns": [],
+        "improvements": [],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_hiring_manager(document_set, job_description)
+
+    assert result.advance_likelihood == 100
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_hiring_manager_invalid_area_defaults(mock_client_cls, document_set, job_description):
+    """Invalid area values default to 'resume'."""
+    payload = json.dumps({
+        "advance_likelihood": 55,
+        "summary": "Decent candidate.",
+        "strengths": ["Good skills"],
+        "concerns": [],
+        "improvements": [
+            {"area": "interview_guide", "suggestion": "Fix something", "impact": "low"},
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_hiring_manager(document_set, job_description)
+
+    assert result.improvements[0].area == "resume"
 
 
 # ---------------------------------------------------------------------------
