@@ -39,6 +39,7 @@ from .models import (
     DraftingContext,
     EvidencePack,
     ExemptedPhrases,
+    HiringManagerReview,
     JobDescription,
     ReviewBundle,
     Session,
@@ -194,6 +195,10 @@ class SessionStore:
             (version_dir / "truth_review.json").write_text(
                 reviews.truthfulness.model_dump_json(indent=2), encoding="utf-8"
             )
+        if reviews.hiring_manager:
+            (version_dir / "hiring_manager_review.json").write_text(
+                reviews.hiring_manager.model_dump_json(indent=2), encoding="utf-8"
+            )
 
         # Mark current version as reviewed
         for v in session.versions:
@@ -211,7 +216,8 @@ class SessionStore:
         voice = _load_model_opt(version_dir / "voice_review.json", VoiceReviewResult)
         ai = _load_model_opt(version_dir / "ai_review.json", AIDetectionResult)
         truth = _load_model_opt(version_dir / "truth_review.json", TruthfulnessResult)
-        return ReviewBundle(voice=voice, ai_detection=ai, truthfulness=truth)
+        hm = _load_model_opt(version_dir / "hiring_manager_review.json", HiringManagerReview)
+        return ReviewBundle(voice=voice, ai_detection=ai, truthfulness=truth, hiring_manager=hm)
 
     # --- Context (EvidencePack + VoiceStyleGuide) --------------------------
 
