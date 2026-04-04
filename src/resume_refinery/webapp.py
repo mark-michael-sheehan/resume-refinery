@@ -6,6 +6,7 @@ import html
 import queue
 import re
 import threading
+from pathlib import Path
 from typing import Iterator, Optional
 
 import uvicorn
@@ -29,6 +30,38 @@ orchestrator = ResumeRefineryOrchestrator(store=store)
 career_store = CareerRepoStore()
 
 app.include_router(career_router)
+
+
+def _validate_output_dir(raw: str) -> Path:
+    """Validate an output directory path from user input.
+
+    Raises HTTPException(400) if the path is invalid or unusable.
+    """
+    stripped = raw.strip()
+    if not stripped:
+        raise HTTPException(status_code=400, detail="Output directory is required.")
+    try:
+        p = Path(stripped).resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid output directory path: {exc}")
+    if p.exists() and not p.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Output path exists but is not a directory: {p}",
+        )
+    if not p.exists():
+        parent = p.parent
+        if not parent.exists():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Parent directory does not exist: {parent}",
+            )
+        if not parent.is_dir():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Parent path is not a directory: {parent}",
+            )
+    return p
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -326,7 +359,8 @@ def home() -> HTMLResponse:
 
     <label>Job Description (.md or .txt)</label>
     <input type=\"file\" name=\"job_description\" required />
-
+    <label>Output Directory (absolute path on your machine)</label>
+    <input type="text" name="output_dir" placeholder="e.g. C:\\Users\\me\\Documents\\output" required />
     <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
     <label><input type=\"checkbox\" name=\"allow_unverified\" value=\"true\" /> Allow saving when strict truth check fails</label>
 
@@ -343,9 +377,13 @@ async def create_session(
     career_profile: Optional[UploadFile] = None,
     voice_profile: Optional[UploadFile] = None,
     career_repo_id: Optional[str] = Form(None),
+    output_dir: str = Form(...),
     skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
 ) -> StreamingResponse:
+    # Validate output directory
+    output_path = _validate_output_dir(output_dir)
+
     try:
         job_text = (await job_description.read()).decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -390,6 +428,7 @@ async def create_session(
     return _stream_orchestration(
         run_fn=lambda progress: orchestrator.create_session_run(
             career, voice, job,
+            output_dir=output_path,
             skip_review=_skip,
             allow_unverified=_allow,
             progress=progress,
@@ -452,8 +491,8 @@ def show_session(session_id: str) -> HTMLResponse:
       <option value=\"interview_guide\">Interview Guide</option>
     </select>
     <label>Feedback (free-form)</label>
-    <textarea name=\"feedback\" rows=\"5\" required></textarea>
-    <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
+    <textarea name=\"feedback\" rows=\"5\" required></textarea>    <label>Output Directory (absolute path on your machine)</label>
+    <input type="text" name="output_dir" placeholder="e.g. C:\\Users\\me\\Documents\\output" required />    <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
     <label><input type=\"checkbox\" name=\"allow_unverified\" value=\"true\" /> Allow saving when strict truth check fails</label>
     <button type=\"submit\">Refine</button>
   </form>
@@ -472,11 +511,14 @@ def refine_session(
     session_id: str,
     feedback: str = Form(...),
     doc: str = Form(""),
+    output_dir: str = Form(...),
     skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
 ):
     if doc and doc not in ("cover_letter", "resume", "interview_guide"):
         raise HTTPException(status_code=400, detail=f"Unknown document: {doc}")
+
+    output_path = _validate_output_dir(output_dir)
 
     _doc = doc or None
     _skip = bool(skip_review)
@@ -487,6 +529,7 @@ def refine_session(
             session_id,
             feedback,
             doc=_doc,
+            output_dir=output_path,
             skip_review=_skip,
             allow_unverified=_allow,
             progress=progress,

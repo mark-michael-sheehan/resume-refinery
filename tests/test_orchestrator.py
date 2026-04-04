@@ -121,6 +121,75 @@ class FakeRepairAgent:
         return RepairPassResult()
 
 
+def test_orchestrator_create_exports_to_custom_output_dir(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    sessions_dir = tmp_path / "sessions"
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(sessions_dir))
+    custom_out = tmp_path / "my_output"
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=FakeVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    result = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        output_dir=custom_out, skip_review=True,
+    )
+
+    # Returned paths point to the custom output directory
+    assert result.exported_paths
+    for path_str in result.exported_paths.values():
+        p = Path(path_str)
+        assert p.exists()
+        assert str(custom_out) in str(p)
+
+    # Session version directory also has DOCX copies for versioning
+    version_dir = store.session_dir(result.session.session_id) / f"v{result.session.current_version}"
+    assert (version_dir / "resume.docx").exists()
+    assert (version_dir / "cover_letter.docx").exists()
+    assert (version_dir / "interview_guide.docx").exists()
+
+
+def test_orchestrator_refine_exports_to_custom_output_dir(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    sessions_dir = tmp_path / "sessions"
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(sessions_dir))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=FakeVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    first = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+    custom_out = tmp_path / "refined_output"
+    second = orchestrator.refine_session_run(
+        first.session.session_id, "Tighten the opener",
+        output_dir=custom_out, skip_review=True,
+    )
+
+    # Returned paths point to the custom output directory
+    assert second.exported_paths
+    for path_str in second.exported_paths.values():
+        p = Path(path_str)
+        assert p.exists()
+        assert str(custom_out) in str(p)
+
+    # Session version directory also has DOCX copies for versioning
+    version_dir = store.session_dir(second.session.session_id) / f"v{second.session.current_version}"
+    assert (version_dir / "resume.docx").exists()
+    assert (version_dir / "cover_letter.docx").exists()
+    assert (version_dir / "interview_guide.docx").exists()
+
+
 def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     store = SessionStore()

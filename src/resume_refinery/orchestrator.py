@@ -72,6 +72,7 @@ class ResumeRefineryOrchestrator:
         voice: VoiceProfile,
         job: JobDescription,
         *,
+        output_dir: Path | None = None,
         skip_review: bool = False,
         allow_unverified: bool = False,
         progress: ProgressCallback | None = None,
@@ -122,7 +123,7 @@ class ResumeRefineryOrchestrator:
             self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
         if exempted.claims or exempted.ai_phrases or exempted.voice_issues:
             self.store.save_suppressions(session, exempted)
-        exported = self._export(session, docs)
+        exported = self._export(session, docs, output_dir=output_dir)
 
         # --- Hiring manager review (runs after repair, before final save) ---
         self._progress(progress, "Running hiring-manager review (1 LLM call)...")
@@ -154,6 +155,7 @@ class ResumeRefineryOrchestrator:
         feedback: str,
         *,
         doc: DocumentKey | None = None,
+        output_dir: Path | None = None,
         skip_review: bool = False,
         allow_unverified: bool = False,
         progress: ProgressCallback | None = None,
@@ -229,7 +231,7 @@ class ResumeRefineryOrchestrator:
             self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
         if exempted.claims or exempted.ai_phrases or exempted.voice_issues:
             self.store.save_suppressions(session, exempted)
-        exported = self._export(session, current_docs)
+        exported = self._export(session, current_docs, output_dir=output_dir)
 
         # --- Hiring manager review (runs after repair, before final save) ---
         self._progress(progress, "Running hiring-manager review (1 LLM call)...")
@@ -437,8 +439,18 @@ class ResumeRefineryOrchestrator:
             voice_issues=sorted(suppressed_voice_issues),
         )
 
-    def _export(self, session: Session, docs: DocumentSet) -> dict[str, Path]:
+    def _export(
+        self,
+        session: Session,
+        docs: DocumentSet,
+        output_dir: Path | None = None,
+    ) -> dict[str, Path]:
+        # Always export to the session version directory for versioning integrity
         version_dir = self.store.session_dir(session.session_id) / f"v{session.current_version}"
+        export_document_set(docs, version_dir)
+        # If the user specified a separate output directory, also copy there
+        if output_dir is not None:
+            return export_document_set(docs, output_dir)
         return export_document_set(docs, version_dir)
 
     def _progress(self, callback: ProgressCallback | None, message: str) -> None:
