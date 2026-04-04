@@ -41,6 +41,31 @@ def _get_orchestrator() -> ResumeRefineryOrchestrator:
     return _orchestrator
 
 
+def _validate_output_dir(path: Path) -> Path:
+    """Validate that the output directory path is usable.
+
+    Raises typer.BadParameter if the path is not a valid, writable directory.
+    """
+    try:
+        resolved = path.resolve()
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"Invalid output directory path: {exc}")
+    if resolved.exists() and not resolved.is_dir():
+        raise typer.BadParameter(f"Output path exists but is not a directory: {resolved}")
+    if not resolved.exists():
+        # Check that the parent is a writable directory so we can create it
+        parent = resolved.parent
+        if not parent.exists():
+            raise typer.BadParameter(
+                f"Parent directory does not exist: {parent}"
+            )
+        if not parent.is_dir():
+            raise typer.BadParameter(
+                f"Parent path is not a directory: {parent}"
+            )
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # new
 # ---------------------------------------------------------------------------
@@ -51,6 +76,7 @@ def new(
     career_profile: Annotated[Path, typer.Argument(help="Career profile markdown file")],
     voice_profile: Annotated[Path, typer.Argument(help="Voice profile markdown file")],
     job_description: Annotated[Path, typer.Argument(help="Job description markdown/text file")],
+    output_dir: Annotated[Path, typer.Argument(help="Directory to write generated documents to")],
     skip_review: bool = typer.Option(False, "--skip-review", help="Skip auto-review after generation"),
     allow_unverified: bool = typer.Option(
         False,
@@ -59,6 +85,7 @@ def new(
     ),
 ):
     """Start a new session: generate all documents then run truth + quality reviews."""
+    validated_dir = _validate_output_dir(output_dir)
     career = load_career_profile(career_profile)
     voice = load_voice_profile(voice_profile)
     job = load_job_description(job_description)
@@ -67,6 +94,7 @@ def new(
         career,
         voice,
         job,
+        output_dir=validated_dir,
         skip_review=skip_review,
         allow_unverified=allow_unverified,
         progress=_progress,
@@ -88,6 +116,7 @@ def new(
 @app.command()
 def refine(
     session_id: Annotated[str, typer.Argument(help="Session ID to refine")],
+    output_dir: Annotated[Path, typer.Argument(help="Directory to write generated documents to")],
     feedback: Annotated[str, typer.Option("--feedback", "-f", help="Feedback for the agent")],
     doc: Annotated[
         Optional[str],
@@ -101,6 +130,7 @@ def refine(
     ),
 ):
     """Regenerate one or all documents in a session with feedback."""
+    validated_dir = _validate_output_dir(output_dir)
     if doc:
         if doc not in ("cover_letter", "resume", "interview_guide"):
             console.print(f"[red]Unknown document: {doc}[/red]")
@@ -111,6 +141,7 @@ def refine(
             session_id,
             feedback,
             doc=key,  # type: ignore[arg-type]
+            output_dir=validated_dir,
             skip_review=skip_review,
             allow_unverified=allow_unverified,
             progress=_progress,

@@ -92,13 +92,18 @@ guided questions before generating documents.
 ### `new` — Start a new session
 
 ```bash
-resume-refinery new career_profile.md voice_profile.md job_description.md
+resume-refinery new career_profile.md voice_profile.md job_description.md ./output
 ```
+
+The fourth argument is the **output directory** where generated DOCX files will be
+written. If the directory does not exist it will be created. If the path is invalid
+(e.g. a parent directory does not exist or the path points to a file), the command
+will exit with an error message.
 
 This will:
 1. Create a new session with a unique ID (e.g. `acme-cloud_staff-engineer_2026-03-20`)
 2. Generate all three documents (streaming to terminal as they're written)
-3. Export DOCX files to `~/.resume_refinery/sessions/<session_id>/v1/`
+3. Export DOCX files to the specified output directory
 4. Run strict truthfulness verification and targeted repair passes
 5. Run voice-match and AI-detection reviews automatically
 6. Print per-document issues from each reviewer and find/replace edits applied per repair pass
@@ -116,14 +121,16 @@ claims, pass `--allow-unverified`.
 
 ```bash
 # Refine a specific document
-resume-refinery refine acme-cloud_staff-engineer_2026-03-20 \
+resume-refinery refine acme-cloud_staff-engineer_2026-03-20 ./output \
   --doc cover_letter \
   --feedback "The opener is too generic. Lead with the Redis cost-saving story instead."
 
 # Refine all documents at once
-resume-refinery refine acme-cloud_staff-engineer_2026-03-20 \
+resume-refinery refine acme-cloud_staff-engineer_2026-03-20 ./output \
   --feedback "Focus more on technical leadership and architectural decisions, less on day-to-day tasks."
 ```
+
+The second positional argument is the **output directory** (same rules as `new`).
 
 The agent sees the previous version and your feedback. A new version (`v2`, `v3`, etc.) is
 created automatically. Reviews run automatically after refinement.
@@ -166,7 +173,11 @@ resume-refinery show acme-cloud_staff-engineer_2026-03-20 --open
 
 ## Output Files
 
-For each version, the following files are created in `~/.resume_refinery/sessions/<session_id>/v<N>/`:
+DOCX documents are **always** saved in the session version directory
+(`~/.resume_refinery/sessions/<session_id>/v<N>/`) to preserve the full version
+history. When you specify an output directory (CLI argument or web app text field),
+the DOCX files are **also** copied there for easy access. The returned/displayed
+paths point to your chosen output directory.
 
 ### Documents
 
