@@ -13,7 +13,7 @@ import uvicorn
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
-from .models import OrchestrationResult
+from .models import DraftingContext, OrchestrationResult
 from .orchestrator import ResumeRefineryOrchestrator
 from .parsers import (
     parse_career_profile_content,
@@ -164,9 +164,9 @@ def _hiring_manager_summary(hm) -> str:
     return "".join(parts)
 
 
-def _artifact_summary(result: OrchestrationResult) -> str:
-    evidence = result.evidence_pack
-    style = result.voice_style_guide
+def _artifact_summary(context: DraftingContext | None) -> str:
+    evidence = context.evidence_pack if context else None
+    style = context.voice_style_guide if context else None
     if not evidence and not style:
         return "<p class='muted'>No orchestration artifacts available.</p>"
 
@@ -460,10 +460,10 @@ def list_sessions() -> HTMLResponse:
 
 @app.get("/sessions/{session_id}", response_class=HTMLResponse)
 def show_session(session_id: str) -> HTMLResponse:
-    result = orchestrator.review_session_run(session_id)
-    session = result.session
-    docs = result.documents
-    reviews = result.reviews
+    session = store.get(session_id)
+    docs = store.load_documents(session)
+    reviews = store.load_reviews(session)
+    context = store.load_context(session)
 
     def esc(text: str | None) -> str:
         return html.escape(text or "")
@@ -479,7 +479,7 @@ def show_session(session_id: str) -> HTMLResponse:
   <h2>Hiring Manager Review</h2>
   {_hiring_manager_summary(reviews.hiring_manager)}
 </div>
-{_artifact_summary(result)}
+{_artifact_summary(context)}
 <div class=\"card\">
   <h2>Refine</h2>
   <form method=\"post\" action=\"/sessions/{html.escape(session.session_id)}/refine\">
