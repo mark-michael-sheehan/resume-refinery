@@ -331,15 +331,12 @@ class VoiceReviewResult(BaseModel):
     overall_match: Literal["strong", "moderate", "weak"]
     cover_letter_match: Literal["strong", "moderate", "weak"] = "moderate"
     resume_match: Literal["strong", "moderate", "weak"] = "moderate"
-    interview_guide_match: Literal["strong", "moderate", "weak"] = "moderate"
     cover_letter_assessment: str
     resume_assessment: str
-    interview_guide_assessment: str
     specific_issues: StrList = Field(default_factory=list)
     # Per-document issues for targeted repair
     cover_letter_issues: StrList = Field(default_factory=list)
     resume_issues: StrList = Field(default_factory=list)
-    interview_guide_issues: StrList = Field(default_factory=list)
 
 
 class AIDetectionResult(BaseModel):
@@ -370,6 +367,19 @@ class HiringManagerImprovementItem(BaseModel):
     impact: Literal["high", "medium", "low"] = "medium"
 
 
+class HiringManagerIssue(BaseModel):
+    """A single targeted finding from the hiring manager review.
+
+    Each issue quotes a verbatim phrase from the document so the repair
+    agent can produce a surgical find/replace edit."""
+
+    document: Literal["resume", "cover_letter"]
+    phrase: str = Field(description="Verbatim quote from the document to improve")
+    issue: str = Field(description="What is weak from a hiring-manager perspective")
+    suggestion: str = Field(description="How to improve it")
+    impact: Literal["high", "medium", "low"] = "medium"
+
+
 class HiringManagerReview(BaseModel):
     """Simulated hiring-manager assessment of the full application package."""
 
@@ -381,6 +391,9 @@ class HiringManagerReview(BaseModel):
     strengths: StrList = Field(default_factory=list)
     concerns: StrList = Field(default_factory=list)
     improvements: list[HiringManagerImprovementItem] = Field(default_factory=list)
+    # Per-document issue lists with verbatim quotes for repair loop integration
+    cover_letter_issues: list[HiringManagerIssue] = Field(default_factory=list)
+    resume_issues: list[HiringManagerIssue] = Field(default_factory=list)
 
 
 class ReviewBundle(BaseModel):
@@ -404,6 +417,7 @@ class RepairPassResult(BaseModel):
     accepted_claims: StrList = Field(default_factory=list)
     accepted_ai_phrases: StrList = Field(default_factory=list)
     accepted_voice_issues: StrList = Field(default_factory=list)
+    accepted_hm_issues: StrList = Field(default_factory=list)
 
 
 class ExemptedPhrases(BaseModel):
@@ -419,6 +433,10 @@ class ExemptedPhrases(BaseModel):
     voice_issues: StrList = Field(
         default_factory=list,
         description="Voice-match issues accepted as reviewer false positives",
+    )
+    hm_issues: StrList = Field(
+        default_factory=list,
+        description="Hiring-manager issues accepted as reviewer false positives",
     )
 
 

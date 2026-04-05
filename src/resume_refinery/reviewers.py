@@ -15,6 +15,7 @@ from .models import (
     DocumentSet,
     DocumentTruthResult,
     HiringManagerImprovementItem,
+    HiringManagerIssue,
     HiringManagerReview,
     JobDescription,
     ReviewBundle,
@@ -142,12 +143,14 @@ class DocumentReviewer:
     def review_voice(self, docs: DocumentSet, voice: VoiceProfile) -> VoiceReviewResult:
         """Check how well each document matches the user's voice profile.
 
+        Only the cover letter and resume are reviewed — the interview guide
+        is personal preparation and is not subject to voice checks.
+
         Each document is reviewed in its own call to stay within context limits.
         """
         doc_map = [
             ("Cover Letter", docs.cover_letter),
             ("Resume", docs.resume),
-            ("Interview Guide", docs.interview_guide),
         ]
 
         assessments: dict[str, str] = {}
@@ -160,12 +163,6 @@ class DocumentReviewer:
             if not content:
                 assessments[doc_type] = "(not generated)"
                 per_doc_match[doc_type] = "strong"  # nothing to review
-                per_doc_issues[doc_type] = []
-                continue
-            if doc_type == "Interview Guide":
-                # Interview guides are personal prep — skip voice check
-                assessments[doc_type] = "(skipped — personal prep)"
-                per_doc_match[doc_type] = "strong"
                 per_doc_issues[doc_type] = []
                 continue
             user_msg = VOICE_REVIEW_DOC_USER_TEMPLATE.format(
@@ -192,14 +189,11 @@ class DocumentReviewer:
             overall_match=overall_match,
             cover_letter_match=per_doc_match.get("Cover Letter", "moderate"),
             resume_match=per_doc_match.get("Resume", "moderate"),
-            interview_guide_match=per_doc_match.get("Interview Guide", "moderate"),
             cover_letter_assessment=assessments.get("Cover Letter", "(not reviewed)"),
             resume_assessment=assessments.get("Resume", "(not reviewed)"),
-            interview_guide_assessment=assessments.get("Interview Guide", "(not reviewed)"),
             specific_issues=all_issues,
             cover_letter_issues=per_doc_issues.get("Cover Letter", []),
             resume_issues=per_doc_issues.get("Resume", []),
-            interview_guide_issues=per_doc_issues.get("Interview Guide", []),
         )
 
     def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:
@@ -291,12 +285,38 @@ class DocumentReviewer:
                     impact=impact,
                 ))
 
+        # Parse per-document issues (verbatim-quote-based findings for repair)
+        cover_letter_issues: list[HiringManagerIssue] = []
+        resume_issues: list[HiringManagerIssue] = []
+        for item in data.get("issues", []):
+            if not isinstance(item, dict) or "phrase" not in item:
+                continue
+            document = item.get("document", "resume")
+            if document not in ("resume", "cover_letter"):
+                document = "resume"
+            impact = item.get("impact", "medium")
+            if impact not in ("high", "medium", "low"):
+                impact = "medium"
+            hm_issue = HiringManagerIssue(
+                document=document,
+                phrase=item["phrase"],
+                issue=item.get("issue", ""),
+                suggestion=item.get("suggestion", ""),
+                impact=impact,
+            )
+            if document == "cover_letter":
+                cover_letter_issues.append(hm_issue)
+            else:
+                resume_issues.append(hm_issue)
+
         return HiringManagerReview(
             advance_likelihood=likelihood,
             summary=data.get("summary", ""),
             strengths=data.get("strengths", []),
             concerns=data.get("concerns", []),
             improvements=improvements,
+            cover_letter_issues=cover_letter_issues,
+            resume_issues=resume_issues,
         )
 
     def _call(self, system: str, user_msg: str, *, think: bool = False) -> str:

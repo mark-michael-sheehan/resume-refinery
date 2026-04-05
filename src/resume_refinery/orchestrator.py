@@ -121,19 +121,9 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         for pass_num, snap, pass_reviews in repair_snapshots:
             self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
-        if exempted.claims or exempted.ai_phrases or exempted.voice_issues:
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, docs, output_dir=output_dir)
-
-        # --- Hiring manager review (runs after repair, before final save) ---
-        self._progress(progress, "Running hiring-manager review (1 LLM call)...")
-        try:
-            hm_review = self.verification_agent.review_hiring_manager(docs, job)
-            reviews = reviews.model_copy(update={"hiring_manager": hm_review})
-            self._progress(progress, self._summarise_hiring_manager(hm_review))
-        except Exception as exc:
-            logging.warning("Hiring-manager review failed (%s)", exc)
-            self._progress(progress, f"[yellow]Hiring-manager review skipped: {exc}[/yellow]")
 
         self.store.save_reviews(session, reviews)
 
@@ -229,19 +219,9 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         for pass_num, snap, pass_reviews in repair_snapshots:
             self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
-        if exempted.claims or exempted.ai_phrases or exempted.voice_issues:
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, current_docs, output_dir=output_dir)
-
-        # --- Hiring manager review (runs after repair, before final save) ---
-        self._progress(progress, "Running hiring-manager review (1 LLM call)...")
-        try:
-            hm_review = self.verification_agent.review_hiring_manager(current_docs, job)
-            reviews = reviews.model_copy(update={"hiring_manager": hm_review})
-            self._progress(progress, self._summarise_hiring_manager(hm_review))
-        except Exception as exc:
-            logging.warning("Hiring-manager review failed (%s)", exc)
-            self._progress(progress, f"[yellow]Hiring-manager review skipped: {exc}[/yellow]")
 
         self.store.save_reviews(session, reviews)
 
@@ -318,6 +298,7 @@ class ResumeRefineryOrchestrator:
         truth = None
         voice_result = None
         ai_result = None
+        hm_result: HiringManagerReview | None = None
 
         # Per-reviewer suppression sets — accumulated across all repair passes.
         # Each reviewer has its own independent set so a voice false positive
@@ -325,12 +306,13 @@ class ResumeRefineryOrchestrator:
         suppressed_claims: set[str] = set()
         suppressed_ai_phrases: set[str] = set()
         suppressed_voice_issues: set[str] = set()
+        suppressed_hm_issues: set[str] = set()
 
         for pass_num in range(max_passes):
             self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
 
-            # --- Run all three reviews (parallel when MAX_WORKERS > 1) ---
-            self._progress(progress, "  Running reviews (7 LLM calls)...")
+            # --- Run all four reviews (parallel when MAX_WORKERS > 1) ---
+            self._progress(progress, "  Running reviews (up to 9 LLM calls)...")
 
             def _run_truth():
                 try:
@@ -356,27 +338,40 @@ class ResumeRefineryOrchestrator:
                     self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
                     return None
 
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 3)) as pool:
+            def _run_hm():
+                try:
+                    return self.verification_agent.review_hiring_manager(docs, job)
+                except Exception as exc:
+                    logging.warning("Hiring-manager review failed (%s)", exc)
+                    self._progress(progress, f"[yellow]Hiring-manager review skipped: {exc}[/yellow]")
+                    return None
+
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 4)) as pool:
                 truth_future = pool.submit(_run_truth)
                 voice_future = pool.submit(_run_voice)
                 ai_future = pool.submit(_run_ai)
+                hm_future = pool.submit(_run_hm)
                 truth = truth_future.result()
                 voice_result = voice_future.result()
                 ai_result = ai_future.result()
+                hm_result = hm_future.result()
 
             # Filter out items accepted as false positives in earlier passes.
-            truth, voice_result, ai_result = self._apply_suppressions(
-                truth, voice_result, ai_result,
+            truth, voice_result, ai_result, hm_result = self._apply_suppressions(
+                truth, voice_result, ai_result, hm_result,
                 suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
+                suppressed_hm_issues,
             )
 
-            # --- Summarise all three ---
+            # --- Summarise all four ---
             if truth:
                 self._progress(progress, self._summarise_truth(truth))
             if voice_result:
                 self._progress(progress, self._summarise_voice(voice_result))
             if ai_result:
                 self._progress(progress, self._summarise_ai(ai_result))
+            if hm_result:
+                self._progress(progress, self._summarise_hiring_manager(hm_result))
 
             # --- Check if all passing ---
             # Truthfulness is always strict (no relaxation).
@@ -399,6 +394,9 @@ class ResumeRefineryOrchestrator:
                     ai_result.resume_flags,
                 ])
 
+            # Hiring manager is advisory — it feeds findings into repair but
+            # never blocks convergence (no hard gate).
+
             if truth_ok and voice_ok and ai_ok:
                 break
 
@@ -408,16 +406,18 @@ class ResumeRefineryOrchestrator:
                 docs, truth, voice_result, ai_result,
                 career, voice, job, context,
                 feedback=feedback,
+                hm_review=hm_result,
             )
             repair_results.append(repair_pass)
             # Accumulate per-reviewer acceptances into suppression sets.
             suppressed_claims.update(repair_pass.accepted_claims)
             suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
             suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
+            suppressed_hm_issues.update(repair_pass.accepted_hm_issues)
             if repair_pass.edits:
                 self._progress(progress, self._summarise_repair(repair_pass))
             # Emit explicit output for every item accepted as a false positive.
-            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues:
+            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues:
                 self._progress(progress, self._summarise_acceptances(repair_pass))
 
             # Snapshot documents and reviews after this repair pass for auditing.
@@ -426,6 +426,7 @@ class ResumeRefineryOrchestrator:
                     truthfulness=truth,
                     voice=voice_result,
                     ai_detection=ai_result,
+                    hiring_manager=hm_result,
                 )
                 on_repair_pass(pass_num, docs, pass_reviews)
 
@@ -433,10 +434,12 @@ class ResumeRefineryOrchestrator:
             truthfulness=truth,
             voice=voice_result,
             ai_detection=ai_result,
+            hiring_manager=hm_result,
         ), repair_results, ExemptedPhrases(
             claims=sorted(suppressed_claims),
             ai_phrases=sorted(suppressed_ai_phrases),
             voice_issues=sorted(suppressed_voice_issues),
+            hm_issues=sorted(suppressed_hm_issues),
         )
 
     def _export(
@@ -466,10 +469,12 @@ class ResumeRefineryOrchestrator:
         truth: TruthfulnessResult | None,
         voice_result: VoiceReviewResult | None,
         ai_result: AIDetectionResult | None,
+        hm_result: HiringManagerReview | None,
         suppressed_claims: set[str],
         suppressed_ai_phrases: set[str],
         suppressed_voice_issues: set[str],
-    ) -> tuple[TruthfulnessResult | None, VoiceReviewResult | None, AIDetectionResult | None]:
+        suppressed_hm_issues: set[str],
+    ) -> tuple[TruthfulnessResult | None, VoiceReviewResult | None, AIDetectionResult | None, HiringManagerReview | None]:
         """Return copies of review results with suppressed items removed.
 
         Each reviewer has its own independent suppression set so that accepting
@@ -513,11 +518,24 @@ class ResumeRefineryOrchestrator:
             filtered_voice = voice_result.model_copy(update={
                 "cover_letter_issues": [i for i in voice_result.cover_letter_issues if i not in suppressed_voice_issues],
                 "resume_issues": [i for i in voice_result.resume_issues if i not in suppressed_voice_issues],
-                "interview_guide_issues": [i for i in voice_result.interview_guide_issues if i not in suppressed_voice_issues],
                 "specific_issues": [i for i in voice_result.specific_issues if i not in suppressed_voice_issues],
             })
 
-        return filtered_truth, filtered_voice, filtered_ai
+        # --- Hiring manager ---
+        filtered_hm = hm_result
+        if hm_result and suppressed_hm_issues:
+            filtered_hm = hm_result.model_copy(update={
+                "cover_letter_issues": [
+                    i for i in hm_result.cover_letter_issues
+                    if i.phrase not in suppressed_hm_issues
+                ],
+                "resume_issues": [
+                    i for i in hm_result.resume_issues
+                    if i.phrase not in suppressed_hm_issues
+                ],
+            })
+
+        return filtered_truth, filtered_voice, filtered_ai, filtered_hm
 
     # ------------------------------------------------------------------
     # Review-result summaries emitted via the progress callback
@@ -544,7 +562,6 @@ class ResumeRefineryOrchestrator:
         for label, match, issues in [
             ("Cover Letter", voice.cover_letter_match, voice.cover_letter_issues),
             ("Resume", voice.resume_match, voice.resume_issues),
-            ("Interview Guide", voice.interview_guide_match, voice.interview_guide_issues),
         ]:
             mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
             parts.append(f"  {label}: [{mc}]{match}[/{mc}]")
@@ -614,6 +631,10 @@ class ResumeRefineryOrchestrator:
         if repair_pass.accepted_voice_issues:
             parts.append("  [cyan]Voice-match issues (accepted as reviewer false positives):[/cyan]")
             for issue in repair_pass.accepted_voice_issues:
+                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
+        if repair_pass.accepted_hm_issues:
+            parts.append("  [cyan]Hiring-manager issues (accepted as false positives):[/cyan]")
+            for issue in repair_pass.accepted_hm_issues:
                 parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
         return "\n".join(parts)
 

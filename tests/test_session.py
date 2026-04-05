@@ -322,7 +322,6 @@ def test_save_and_load_repair_pass_with_reviews(tmp_path, career_profile, voice_
         overall_match="strong",
         cover_letter_assessment="good",
         resume_assessment="good",
-        interview_guide_assessment="good",
     )
     ai = AIDetectionResult(
         risk_level="low",

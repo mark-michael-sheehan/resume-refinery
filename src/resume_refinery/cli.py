@@ -291,7 +291,6 @@ def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
         for label, match, issues in [
             ("Cover Letter", r.cover_letter_match, r.cover_letter_issues),
             ("Resume", r.resume_match, r.resume_issues),
-            ("Interview Guide", r.interview_guide_match, r.interview_guide_issues),
         ]:
             mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
             lines.append(f"\n[bold]{label}[/bold]: [{mc}]{match}[/{mc}]")

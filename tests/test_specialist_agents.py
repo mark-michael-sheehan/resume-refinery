@@ -293,7 +293,6 @@ class FakeReviewer:
             overall_match="strong",
             cover_letter_assessment="Good",
             resume_assessment="Good",
-            interview_guide_assessment="Good",
         )
 
     def review_ai_detection(self, docs):
@@ -549,10 +548,8 @@ def test_repair_unified_combines_all_findings(career_profile, voice_profile, job
         overall_match="weak",
         cover_letter_match="weak",
         resume_match="strong",
-        interview_guide_match="strong",
         cover_letter_assessment="Off-voice",
         resume_assessment="Good",
-        interview_guide_assessment="Good",
         cover_letter_issues=["opener too formal"],
     )
     ai_review = AIDetectionResult(
@@ -604,7 +601,7 @@ def test_repair_unified_populates_accepted_phrases(career_profile, voice_profile
     # Repairer decides the AI flag is a false positive and accepts it
     agent._plan_edits = MagicMock(return_value=(
         [],
-        {"accepted_claims": [], "accepted_ai_phrases": ["I am a Senior Software Engineer"], "accepted_voice_issues": []},
+        {"accepted_claims": [], "accepted_ai_phrases": ["I am a Senior Software Engineer"], "accepted_voice_issues": [], "accepted_hm_issues": []},
     ))
 
     result = agent.repair_unified(
@@ -629,6 +626,7 @@ def test_repair_plan_edits_parses_json_object():
         "accepted_claims": [],
         "accepted_ai_phrases": [],
         "accepted_voice_issues": [],
+        "accepted_hm_issues": [],
     })
     agent.client = MagicMock()
     agent.client.chat.return_value = mock_response
@@ -641,6 +639,7 @@ def test_repair_plan_edits_parses_json_object():
     assert acceptances["accepted_claims"] == []
     assert acceptances["accepted_ai_phrases"] == []
     assert acceptances["accepted_voice_issues"] == []
+    assert acceptances["accepted_hm_issues"] == []
 
 
 def test_repair_plan_edits_returns_acceptances():
@@ -652,6 +651,7 @@ def test_repair_plan_edits_returns_acceptances():
         "accepted_claims": ["unsupported claim"],
         "accepted_ai_phrases": [],
         "accepted_voice_issues": ["off voice phrase"],
+        "accepted_hm_issues": [],
     })
     agent.client = MagicMock()
     agent.client.chat.return_value = mock_response
@@ -675,7 +675,7 @@ def test_repair_plan_edits_handles_empty_response():
     edits, acceptances = agent._plan_edits("system", "user")
 
     assert edits == []
-    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": []}
+    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": []}
 
 
 def test_repair_build_review_findings_truthfulness():
@@ -712,10 +712,8 @@ def test_repair_build_review_findings_empty_when_passing():
         overall_match="strong",
         cover_letter_match="strong",
         resume_match="strong",
-        interview_guide_match="strong",
         cover_letter_assessment="Good",
         resume_assessment="Good",
-        interview_guide_assessment="Good",
     )
     ai_review = AIDetectionResult(risk_level="low")
 

@@ -348,7 +348,6 @@ def test_voice_review_stores_per_doc_match(mock_client_cls, document_set, voice_
 
     assert result.cover_letter_match == "strong"
     assert result.resume_match == "weak"
-    assert result.interview_guide_match == "strong"  # skipped → default strong
     assert result.overall_match == "weak"  # worst-of aggregation (CL + Resume only)
 
 
@@ -518,8 +517,6 @@ def test_voice_review_stores_per_doc_issues(mock_client_cls, document_set, voice
     # Per-doc fields
     assert result.cover_letter_issues == ["opener too formal"]
     assert result.resume_issues == []
-    # Interview guide is skipped — empty defaults
-    assert result.interview_guide_issues == []
     # Aggregated fields contain only CL + Resume items
     assert "opener too formal" in result.specific_issues
 

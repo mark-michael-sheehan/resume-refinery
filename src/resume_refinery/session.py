@@ -281,6 +281,10 @@ class SessionStore:
                 (pass_dir / "ai_review.json").write_text(
                     reviews.ai_detection.model_dump_json(indent=2), encoding="utf-8"
                 )
+            if reviews.hiring_manager:
+                (pass_dir / "hiring_manager_review.json").write_text(
+                    reviews.hiring_manager.model_dump_json(indent=2), encoding="utf-8"
+                )
 
     def load_repair_pass(
         self, session: Session, pass_num: int, version: int | None = None
@@ -298,9 +302,10 @@ class SessionStore:
         truth = _load_model_opt(pass_dir / "truth_review.json", TruthfulnessResult)
         voice = _load_model_opt(pass_dir / "voice_review.json", VoiceReviewResult)
         ai = _load_model_opt(pass_dir / "ai_review.json", AIDetectionResult)
-        if truth is None and voice is None and ai is None:
+        hm = _load_model_opt(pass_dir / "hiring_manager_review.json", HiringManagerReview)
+        if truth is None and voice is None and ai is None and hm is None:
             return docs, None
-        reviews = ReviewBundle(truthfulness=truth, voice=voice, ai_detection=ai)
+        reviews = ReviewBundle(truthfulness=truth, voice=voice, ai_detection=ai, hiring_manager=hm)
         return docs, reviews
 
     def load_inputs(self, session: Session) -> tuple[CareerProfile, VoiceProfile]:

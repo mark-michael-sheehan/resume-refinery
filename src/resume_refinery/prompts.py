@@ -479,6 +479,8 @@ by the Career Profile (reviewer false positive).
 genuinely specific, quantified, and appropriate (reviewer false positive).
        • "accepted_voice_issues" — voice flag for a phrase that actually \
 matches the Voice Profile correctly (reviewer false positive).
+       • "accepted_hm_issues"    — hiring-manager flag for a phrase that is \
+already effective and needs no change (reviewer false positive).
 
 Only accept a finding when it is clearly a reviewer false positive. When in \
 doubt, fix it. Accepted phrases will not be flagged again in subsequent passes.
@@ -511,6 +513,14 @@ AI-detection reviewer rules:
 - Do NOT flag industry terminology, quantified claims, or specific technical \
   descriptions.
 
+Hiring-manager reviewer rules:
+- Each issue quotes a specific phrase from the document that a hiring manager \
+  would see as weak, generic, responsibility-only (no impact), or failing to \
+  connect to the target role.
+- Fix by reframing to show outcomes, quantifying achievements, or sharpening \
+  the connection to the target role — using only facts already in the document.
+- Do NOT invent new achievements, metrics, or experiences.
+
 For each finding you choose to FIX, apply this pattern:
 - TRUTHFULNESS issue  → remove or soften the unsupported phrase; do NOT \
   invent replacement facts or copy text from the Career Profile or Job Description.
@@ -518,6 +528,9 @@ For each finding you choose to FIX, apply this pattern:
   phrasing style visible in the Voice Profile.
 - AI DETECTION issue  → remove the flagged phrase or replace it with a \
   specific, quantified version using only details already present in the document.
+- HIRING MANAGER issue → reframe the flagged phrase to show impact, quantify \
+  outcomes, or sharpen the connection to the target role — using only facts \
+  already present in the document. Do NOT invent new achievements or metrics.
 
 EDIT RULES:
 1. Each edit must fix exactly one flagged issue.
@@ -563,7 +576,8 @@ phrase to the matching accepted array). Return a single JSON object:
   ],
   "accepted_claims":       ["<verbatim truthfulness-flagged phrase that IS supported>"],
   "accepted_ai_phrases":   ["<verbatim AI-flagged phrase that is genuinely specific/appropriate>"],
-  "accepted_voice_issues": ["<verbatim voice-flagged phrase that actually matches the Voice Profile>"]
+  "accepted_voice_issues": ["<verbatim voice-flagged phrase that actually matches the Voice Profile>"],
+  "accepted_hm_issues":    ["<verbatim hiring-manager-flagged phrase that is already effective>"]
 }}
 
 Rules:
@@ -657,6 +671,15 @@ Return a JSON object with this shape:
       "suggestion": "<specific actionable improvement>",
       "impact": "high" | "medium" | "low"
     }}
+  ],
+  "issues": [
+    {{
+      "document": "resume" | "cover_letter",
+      "phrase": "<exact verbatim quote from the document>",
+      "issue": "<what is weak from a hiring-manager perspective>",
+      "suggestion": "<how to improve it>",
+      "impact": "high" | "medium" | "low"
+    }}
   ]
 }}
 
@@ -667,6 +690,14 @@ Rules:
 - improvements: list 3-6 specific, actionable changes that would increase \
   the advance_likelihood. Each must target either "resume" or "cover_letter" \
   and describe a concrete edit, not a vague suggestion.
+- issues: list 3-8 specific phrases from the documents that a hiring manager \
+  would see as weak, generic, or failing to show impact. For each issue:
+  - "phrase" must be an EXACT verbatim quote from the document — copy it \
+    character-for-character. Do not paraphrase.
+  - "issue" explains why the phrase is weak from a hiring perspective.
+  - "suggestion" describes how to improve it (reframe, quantify, sharpen).
+  - Only target phrases that can be improved by editing — do not flag \
+    structural issues or missing sections.
 - Be specific — reference actual content from the documents, not generic advice.
 - Do not suggest fabricating experience. Improvements should reframe, \
   restructure, or emphasise existing content more effectively.

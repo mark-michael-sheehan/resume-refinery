@@ -71,7 +71,6 @@ def voice_review() -> VoiceReviewResult:
         overall_match="moderate",
         cover_letter_assessment="Mostly on-voice but opener feels generic.",
         resume_assessment="Quantified well; matches direct tone.",
-        interview_guide_assessment="Slightly formal compared to profile.",
         specific_issues=["'results-driven' opener feels off-voice"],
     )
 

@@ -29,6 +29,7 @@ ensure convergence.
 | CR-3.2 | AI detection: on passes before `RELAXED_PASS_START`, cover letter + resume must have zero flags. From `RELAXED_PASS_START` onward, total flags ≤ `AI_FLAG_TOLERANCE`. |
 | CR-3.3 | Truthfulness: `pass_strict=True` is required on every pass. No relaxation. |
 | CR-3.4 | Interview guide is exempt from voice and AI-detection reviews (it is personal preparation, not a submitted document). |
+| CR-3.5 | Hiring-manager review is advisory only — it feeds findings into the repair agent but NEVER blocks convergence. This prevents feedback loops where the HM asks for bolder claims that the truthfulness reviewer then rejects. |
 
 ## CR-4 Feedback Hygiene
 
@@ -58,10 +59,10 @@ ensure convergence.
 
 | ID | Requirement |
 |---|---|
-| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of three per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice). |
-| CR-7.2 | The orchestrator maintains three independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
+| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of four per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice), `accepted_hm_issues` (hiring manager). |
+| CR-7.2 | The orchestrator maintains four independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
 | CR-7.3 | Before each pass's gate check and repair call, raw reviewer results are filtered through the corresponding suppression set. Suppressed items are removed from flag/issue/claim lists; truthfulness `pass_strict` and `all_supported` are recalculated; AI `risk_level` is recalculated from the remaining flag count. Voice match levels are preserved as-is (they reflect holistic LLM judgment, not issue count). |
 | CR-7.4 | A phrase accepted in any pass is suppressed for all subsequent passes in the same run. Suppression sets do not persist beyond a single `create_session_run` or `refine_session_run` call. |
 | CR-7.5 | Each reviewer's suppression set is independent — accepting a voice false positive cannot suppress a truthfulness or AI-detection finding (and vice versa). |
 | CR-7.6 | Whenever the repair agent adds items to any acceptance list, the orchestrator emits an explicit progress message naming each accepted phrase/claim/issue and the reviewer it came from, before proceeding to the next pass. |
-| CR-7.7 | At the end of each `create_session_run` or `refine_session_run` call, if any items were exempted, the cumulative suppression sets are persisted to `exempted_phrases.json` in the active version directory as an `ExemptedPhrases` model (fields: `claims`, `ai_phrases`, `voice_issues`). No file is written when no items were exempted. |
+| CR-7.7 | At the end of each `create_session_run` or `refine_session_run` call, if any items were exempted, the cumulative suppression sets are persisted to `exempted_phrases.json` in the active version directory as an `ExemptedPhrases` model (fields: `claims`, `ai_phrases`, `voice_issues`, `hm_issues`). No file is written when no items were exempted. |

@@ -69,11 +69,9 @@ def test_voice_review_per_doc_match_defaults():
         overall_match="strong",
         cover_letter_assessment="Good",
         resume_assessment="Good",
-        interview_guide_assessment="Good",
     )
     assert vr.cover_letter_match == "moderate"
     assert vr.resume_match == "moderate"
-    assert vr.interview_guide_match == "moderate"
 
 
 def test_voice_review_per_doc_match_explicit():
@@ -82,14 +80,11 @@ def test_voice_review_per_doc_match_explicit():
         overall_match="weak",
         cover_letter_match="strong",
         resume_match="weak",
-        interview_guide_match="moderate",
         cover_letter_assessment="On-voice",
         resume_assessment="Off-voice",
-        interview_guide_assessment="Okay",
     )
     assert vr.cover_letter_match == "strong"
     assert vr.resume_match == "weak"
-    assert vr.interview_guide_match == "moderate"
 
 
 def test_voice_review_per_doc_issues_defaults():
@@ -98,11 +93,9 @@ def test_voice_review_per_doc_issues_defaults():
         overall_match="strong",
         cover_letter_assessment="Good",
         resume_assessment="Good",
-        interview_guide_assessment="Good",
     )
     assert vr.cover_letter_issues == []
     assert vr.resume_issues == []
-    assert vr.interview_guide_issues == []
 
 
 def test_voice_review_per_doc_issues_explicit():
@@ -111,14 +104,11 @@ def test_voice_review_per_doc_issues_explicit():
         overall_match="weak",
         cover_letter_assessment="Off",
         resume_assessment="Good",
-        interview_guide_assessment="Okay",
         cover_letter_issues=["too formal"],
         resume_issues=[],
-        interview_guide_issues=["scripted"],
     )
     assert vr.cover_letter_issues == ["too formal"]
     assert vr.resume_issues == []
-    assert vr.interview_guide_issues == ["scripted"]
 
 
 def test_voice_review_per_doc_match_invalid_literal():
@@ -128,7 +118,6 @@ def test_voice_review_per_doc_match_invalid_literal():
             cover_letter_match="excellent",  # invalid
             cover_letter_assessment="",
             resume_assessment="",
-            interview_guide_assessment="",
         )
 
 
@@ -138,7 +127,6 @@ def test_voice_review_invalid_literal():
             overall_match="excellent",  # not a valid literal
             cover_letter_assessment="",
             resume_assessment="",
-            interview_guide_assessment="",
         )
 
 
@@ -254,7 +242,6 @@ def test_review_bundle_all_populated():
             overall_match="strong",
             cover_letter_assessment="Good",
             resume_assessment="Good",
-            interview_guide_assessment="Good",
         ),
         ai_detection=AIDetectionResult(risk_level="low"),
     )

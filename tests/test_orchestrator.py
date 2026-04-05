@@ -9,6 +9,7 @@ from resume_refinery.models import (
     DocumentSet,
     DocumentTruthResult,
     EvidencePack,
+    HiringManagerReview,
     JobRequirement,
     RepairPassResult,
     ReviewBundle,
@@ -70,7 +71,6 @@ class FakeVerificationAgent:
             overall_match=match,
             cover_letter_assessment="Mostly on-voice.",
             resume_assessment="Consistent.",
-            interview_guide_assessment="Slightly formal.",
             specific_issues=[] if match == "strong" else ["opener feels generic"],
         )
 
@@ -97,7 +97,6 @@ class FakeVerificationAgent:
                 overall_match="strong",
                 cover_letter_assessment="Good",
                 resume_assessment="Good",
-                interview_guide_assessment="Good",
                 specific_issues=[],
             ),
             ai_detection=AIDetectionResult(
@@ -108,12 +107,18 @@ class FakeVerificationAgent:
             ),
         )
 
+    def review_hiring_manager(self, docs, job):
+        return HiringManagerReview(
+            advance_likelihood=70,
+            summary="Decent candidate.",
+        )
+
 
 class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None):
         self.unified_calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
@@ -289,11 +294,16 @@ class AlwaysPassVerificationAgent:
             overall_match="strong",
             cover_letter_assessment="Good",
             resume_assessment="Good",
-            interview_guide_assessment="Good",
         )
 
     def review_ai_detection(self, docs):
         return AIDetectionResult(risk_level="low")
+
+    def review_hiring_manager(self, docs, job):
+        return HiringManagerReview(
+            advance_likelihood=75,
+            summary="Good candidate.",
+        )
 
     def review_all(self, docs, career, voice, job):
         return ReviewBundle(
@@ -405,7 +415,7 @@ class AcceptsAIPhraseRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
 
@@ -462,7 +472,6 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
             overall_match="weak",
             cover_letter_assessment="Off-voice",
             resume_assessment="Off-voice",
-            interview_guide_assessment="Off-voice",
             specific_issues=["too formal"],
         )
 

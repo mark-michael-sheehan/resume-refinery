@@ -21,9 +21,8 @@ voice_profile.md + career_profile.md + job_description.md
   │ EvidenceAgent      -> EvidencePack (requirements + matched evidence) │
   │ VoiceAgent         -> VoiceStyleGuide                                │
   │ DraftingAgent      -> DocumentSet                                    │
-  │ VerificationAgent  -> Truth/Voice/AI review bundle                  │
+  │ VerificationAgent  -> Truth/Voice/AI/HM review bundle (in loop)     │
   │ RepairAgent        -> targeted rewrites for unsupported claims      │
-  │ VerificationAgent  -> HiringManagerReview (advance % + improvements) │
   └──────────────────────────────────────────────────────────────────────┘
             │
             ▼
@@ -147,6 +146,7 @@ Override with `RESUME_REFINERY_SESSIONS_DIR` env var.
     │   ├── interview_guide.docx
     │   ├── voice_review.json
     │   ├── ai_review.json
+    │   ├── hiring_manager_review.json
     │   ├── exempted_phrases.json   ← Phrases/claims exempted during repair (only when any exemptions occurred)
     │   └── repair_pass_0/         ← Snapshot after each repair pass (if repair ran)
     │       └── ...
@@ -189,14 +189,11 @@ orchestrator and correspond to Pydantic models in `models.py`.
   "overall_match": "moderate",
   "cover_letter_match": "strong",
   "resume_match": "moderate",
-  "interview_guide_match": "moderate",
   "cover_letter_assessment": "Matches the direct, analytical tone well.",
   "resume_assessment": "Slightly more formal than the voice profile suggests.",
-  "interview_guide_assessment": "Good conversational tone.",
   "specific_issues": ["Resume bullet 3 uses passive voice"],
   "cover_letter_issues": [],
-  "resume_issues": ["Resume bullet 3 uses passive voice"],
-  "interview_guide_issues": []
+  "resume_issues": ["Resume bullet 3 uses passive voice"]
 }
 ```
 
@@ -219,7 +216,8 @@ Only written when the repair agent accepted at least one item as a false positiv
 {
   "claims": ["Led cross-functional initiatives"],
   "ai_phrases": ["results-driven"],
-  "voice_issues": []
+  "voice_issues": [],
+  "hm_issues": []
 }
 ```
 

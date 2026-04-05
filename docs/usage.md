@@ -218,6 +218,7 @@ Each repair pass creates a `repair_pass_<N>/` subdirectory containing the docume
 | `repair_pass_<N>/truth_review.json` | Truthfulness result that preceded repair pass N |
 | `repair_pass_<N>/voice_review.json` | Voice-match result that preceded repair pass N |
 | `repair_pass_<N>/ai_review.json` | AI-detection result that preceded repair pass N |
+| `repair_pass_<N>/hiring_manager_review.json` | Hiring-manager result that preceded repair pass N |
 
 ---
 

@@ -490,6 +490,7 @@ class RepairAgent:
         job: JobDescription,
         context: DraftingContext,
         feedback: str | None = None,
+        hm_review: HiringManagerReview | None = None,
     ) -> RepairPassResult:
         """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
@@ -499,10 +500,11 @@ class RepairAgent:
         all_accepted_claims: list[str] = []
         all_accepted_ai_phrases: list[str] = []
         all_accepted_voice_issues: list[str] = []
+        all_accepted_hm_issues: list[str] = []
 
         def _plan_for_key(key: str) -> tuple[str, list[dict], dict[str, list[str]]] | None:
             review_findings = self._build_review_findings(
-                key, truth, voice_review, ai_review, feedback,
+                key, truth, voice_review, ai_review, feedback, hm_review,
             )
             if not review_findings:
                 return None
@@ -533,12 +535,14 @@ class RepairAgent:
             all_accepted_claims.extend(acceptances.get("accepted_claims", []))
             all_accepted_ai_phrases.extend(acceptances.get("accepted_ai_phrases", []))
             all_accepted_voice_issues.extend(acceptances.get("accepted_voice_issues", []))
+            all_accepted_hm_issues.extend(acceptances.get("accepted_hm_issues", []))
             logging.debug(
-                "[repair:%s] LLM returned %d edit(s), %d/%d/%d accepted (claims/ai/voice)",
+                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d accepted (claims/ai/voice/hm)",
                 key, len(edits),
                 len(acceptances.get("accepted_claims", [])),
                 len(acceptances.get("accepted_ai_phrases", [])),
                 len(acceptances.get("accepted_voice_issues", [])),
+                len(acceptances.get("accepted_hm_issues", [])),
             )
             if edits:
                 for i, e in enumerate(edits):
@@ -564,6 +568,7 @@ class RepairAgent:
             accepted_claims=all_accepted_claims,
             accepted_ai_phrases=all_accepted_ai_phrases,
             accepted_voice_issues=all_accepted_voice_issues,
+            accepted_hm_issues=all_accepted_hm_issues,
         )
 
     # ------------------------------------------------------------------
@@ -575,8 +580,9 @@ class RepairAgent:
 
         edits: list of {find, replace, reason} dicts.
         acceptances: dict with keys accepted_claims, accepted_ai_phrases,
-            accepted_voice_issues — verbatim phrases the repairer determined
-            are reviewer false positives that should be suppressed going forward.
+            accepted_voice_issues, accepted_hm_issues — verbatim phrases the
+            repairer determined are reviewer false positives that should be
+            suppressed going forward.
         """
         from .reviewers import _normalize_llm_json
 
@@ -605,8 +611,9 @@ class RepairAgent:
                     "accepted_claims":       {"type": "array", "items": {"type": "string"}},
                     "accepted_ai_phrases":   {"type": "array", "items": {"type": "string"}},
                     "accepted_voice_issues": {"type": "array", "items": {"type": "string"}},
+                    "accepted_hm_issues":    {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues"],
+                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues"],
             },
             options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS * 2},
         )
@@ -614,16 +621,16 @@ class RepairAgent:
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
         if not raw:
             logging.warning("Repair LLM returned empty content")
-            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": []}
+            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": []}
         raw = _normalize_llm_json(raw)
         _empty: dict[str, list[str]] = {
-            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": []
+            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": []
         }
 
         def _extract_acceptances(d: dict) -> dict[str, list[str]]:
             return {
                 k: [x for x in d.get(k, []) if isinstance(x, str)]
-                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues")
+                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues")
             }
 
         try:
@@ -676,6 +683,7 @@ class RepairAgent:
         voice_review: VoiceReviewResult | None,
         ai_review: AIDetectionResult | None,
         feedback: str | None,
+        hm_review: HiringManagerReview | None = None,
     ) -> str:
         """Return a human-readable summary of review findings for *key*.
 
@@ -718,19 +726,17 @@ class RepairAgent:
                         + "\n".join(f"- {e}" for e in doc_truth.evidence_examples)
                     )
 
-        # --- Voice (skip for interview guide — personal prep) ---
-        if voice_review and key != "interview_guide":
-            voice_matches: dict[DocumentKey, str] = {
+        # --- Voice (cover letter and resume only) ---
+        if voice_review and key in ("cover_letter", "resume"):
+            voice_matches: dict[str, str] = {
                 "cover_letter": voice_review.cover_letter_match,
                 "resume": voice_review.resume_match,
-                "interview_guide": voice_review.interview_guide_match,
             }
             if voice_matches[key] not in ("strong",):
                 has_issues = True
-                doc_issues_map: dict[DocumentKey, list[str]] = {
+                doc_issues_map: dict[str, list[str]] = {
                     "cover_letter": voice_review.cover_letter_issues,
                     "resume": voice_review.resume_issues,
-                    "interview_guide": voice_review.interview_guide_issues,
                 }
                 issues = doc_issues_map[key] or voice_review.specific_issues
                 if issues:
@@ -743,14 +749,13 @@ class RepairAgent:
                         + "\n".join(f"- {i}" for i in issues)
                     )
 
-        # --- AI detection (skip for interview guide — personal prep) ---
-        if ai_review and key != "interview_guide":
-            flag_map: dict[DocumentKey, list[str]] = {
+        # --- AI detection (cover letter and resume only) ---
+        if ai_review and key in ("cover_letter", "resume"):
+            flag_map: dict[str, list[str]] = {
                 "cover_letter": ai_review.cover_letter_flags,
                 "resume": ai_review.resume_flags,
-                "interview_guide": ai_review.interview_guide_flags,
             }
-            flags = flag_map[key]
+            flags = flag_map.get(key, [])
             if flags:
                 has_issues = True
                 logging.debug(
@@ -760,6 +765,26 @@ class RepairAgent:
                 parts.append(
                     "AI DETECTION — Flagged phrases (verbatim from document):\n"
                     + "\n".join(f'- "{f}"' for f in flags)
+                )
+
+        # --- Hiring manager (cover letter and resume only) ---
+        if hm_review and key in ("cover_letter", "resume"):
+            doc_issues = (
+                hm_review.cover_letter_issues if key == "cover_letter"
+                else hm_review.resume_issues
+            )
+            if doc_issues:
+                has_issues = True
+                logging.debug(
+                    "[repair:%s] hiring-manager: %d issue(s) — passing ALL to repair",
+                    key, len(doc_issues),
+                )
+                parts.append(
+                    "HIRING MANAGER — Issues (verbatim from document):\n"
+                    + "\n".join(
+                        f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
+                        for i in doc_issues
+                    )
                 )
 
         if not has_issues:
