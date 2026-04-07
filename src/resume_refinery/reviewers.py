@@ -140,9 +140,9 @@ class DocumentReviewer:
             raw = self._call(TRUTHFULNESS_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             results[doc_type] = DocumentTruthResult(
-                pass_strict=data.get("pass_strict", True),
-                unsupported_claims=data.get("unsupported_claims", []),
-                evidence_examples=data.get("evidence_examples", []),
+                pass_strict=True if data.get("pass_strict") is None else data["pass_strict"],
+                unsupported_claims=data.get("unsupported_claims") or [],
+                evidence_examples=data.get("evidence_examples") or [],
             )
 
         cl = results["Cover Letter"]
@@ -188,11 +188,11 @@ class DocumentReviewer:
             )
             raw = self._call(VOICE_REVIEW_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
-            assessments[doc_type] = data.get("assessment", "")
-            doc_issues = data.get("issues", [])
+            assessments[doc_type] = data.get("assessment") or ""
+            doc_issues = data.get("issues") or []
             per_doc_issues[doc_type] = doc_issues
             all_issues.extend(doc_issues)
-            doc_match = data.get("overall_match", "moderate")
+            doc_match = data.get("overall_match") or "moderate"
             per_doc_match[doc_type] = doc_match
             match_scores.append(doc_match)
 
@@ -243,7 +243,7 @@ class DocumentReviewer:
             raw = self._call(AI_DETECTION_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             # Deduplicate flags — LLMs sometimes repeat the same phrase many times.
-            raw_flags = data.get("flags", [])
+            raw_flags = data.get("flags") or []
             seen: set[str] = set()
             deduped: list[str] = []
             for f in raw_flags:
@@ -278,7 +278,9 @@ class DocumentReviewer:
         raw = self._call(HIRING_MANAGER_REVIEW_SYSTEM_PROMPT, user_msg)
         data = json.loads(raw)
 
-        likelihood = data.get("advance_likelihood", 50)
+        likelihood = data.get("advance_likelihood")
+        if likelihood is None:
+            likelihood = 50
         if not isinstance(likelihood, int):
             try:
                 likelihood = int(likelihood)
@@ -287,7 +289,7 @@ class DocumentReviewer:
         likelihood = max(0, min(100, likelihood))
 
         improvements = []
-        for item in data.get("improvements", []):
+        for item in data.get("improvements") or []:
             if isinstance(item, dict) and "suggestion" in item:
                 area = item.get("area", "resume")
                 if area not in ("resume", "cover_letter"):
@@ -304,7 +306,7 @@ class DocumentReviewer:
         # Parse per-document issues (verbatim-quote-based findings for repair)
         cover_letter_issues: list[HiringManagerIssue] = []
         resume_issues: list[HiringManagerIssue] = []
-        for item in data.get("issues", []):
+        for item in data.get("issues") or []:
             if not isinstance(item, dict) or "phrase" not in item:
                 continue
             document = item.get("document", "resume")
@@ -327,9 +329,9 @@ class DocumentReviewer:
 
         return HiringManagerReview(
             advance_likelihood=likelihood,
-            summary=data.get("summary", ""),
-            strengths=data.get("strengths", []),
-            concerns=data.get("concerns", []),
+            summary=data.get("summary") or "",
+            strengths=data.get("strengths") or [],
+            concerns=data.get("concerns") or [],
             improvements=improvements,
             cover_letter_issues=cover_letter_issues,
             resume_issues=resume_issues,
@@ -359,12 +361,12 @@ class DocumentReviewer:
             raw = self._call(RELEVANCE_PRUNING_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
 
-            density = data.get("overall_density", "balanced")
+            density = data.get("overall_density") or "balanced"
             if density not in ("lean", "balanced", "bloated"):
                 density = "balanced"
             density_scores.append(density)
 
-            for item in data.get("removal_candidates", []):
+            for item in data.get("removal_candidates") or []:
                 if not isinstance(item, dict) or "phrase" not in item:
                     continue
                 category = item.get("category", "filler")
@@ -412,12 +414,12 @@ class DocumentReviewer:
         raw = self._call(ATS_KEYWORD_SYSTEM_PROMPT, user_msg)
         data = json.loads(raw)
 
-        score = data.get("alignment_score", "moderate")
+        score = data.get("alignment_score") or "moderate"
         if score not in ("strong", "moderate", "weak"):
             score = "moderate"
 
         missing: list[ATSKeywordIssue] = []
-        for item in data.get("missing_keywords", []):
+        for item in data.get("missing_keywords") or []:
             if not isinstance(item, dict) or "keyword" not in item:
                 continue
             priority = item.get("priority", "medium")
@@ -432,7 +434,7 @@ class DocumentReviewer:
             ))
 
         stuffing: list[ATSKeywordIssue] = []
-        for item in data.get("stuffing_keywords", []):
+        for item in data.get("stuffing_keywords") or []:
             if not isinstance(item, dict) or "keyword" not in item:
                 continue
             priority = item.get("priority", "medium")
@@ -468,7 +470,7 @@ class DocumentReviewer:
         data = json.loads(raw)
 
         issues: list[ConsistencyIssue] = []
-        for item in data.get("issues", []):
+        for item in data.get("issues") or []:
             if not isinstance(item, dict) or "quote_a" not in item or "quote_b" not in item:
                 continue
             doc_a = item.get("document_a", "resume")
@@ -490,7 +492,7 @@ class DocumentReviewer:
                 severity=severity,
             ))
 
-        consistent = data.get("consistent", True)
+        consistent = True if data.get("consistent") is None else data["consistent"]
         if issues:
             consistent = False
 
@@ -525,10 +527,11 @@ class DocumentReviewer:
             raw = self._call(GRAMMAR_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
 
-            if not data.get("clean", True):
+            doc_clean = data.get("clean")
+            if doc_clean is not None and not doc_clean:
                 all_clean = False
 
-            for item in data.get("issues", []):
+            for item in data.get("issues") or []:
                 if not isinstance(item, dict) or "phrase" not in item:
                     continue
                 category = item.get("category", "grammar")
