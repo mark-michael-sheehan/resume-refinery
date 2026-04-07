@@ -316,8 +316,8 @@ class DocumentReviewer:
             hm_issue = HiringManagerIssue(
                 document=document,
                 phrase=item["phrase"],
-                issue=item.get("issue", ""),
-                suggestion=item.get("suggestion", ""),
+                issue=item.get("issue") or "",
+                suggestion=item.get("suggestion") or "",
                 impact=impact,
             )
             if document == "cover_letter":
@@ -376,7 +376,7 @@ class DocumentReviewer:
                 issue = RelevancePruningIssue(
                     document=doc_key,
                     phrase=item["phrase"],
-                    reason=item.get("reason", ""),
+                    reason=item.get("reason") or "",
                     category=category,
                     severity=severity,
                 )
@@ -426,8 +426,8 @@ class DocumentReviewer:
             missing.append(ATSKeywordIssue(
                 keyword=item["keyword"],
                 issue_type="missing",
-                section=item.get("section", ""),
-                suggestion=item.get("suggestion", ""),
+                section=item.get("section") or "",
+                suggestion=item.get("suggestion") or "",
                 priority=priority,
             ))
 
@@ -441,8 +441,8 @@ class DocumentReviewer:
             stuffing.append(ATSKeywordIssue(
                 keyword=item["keyword"],
                 issue_type="stuffing",
-                section=item.get("section", ""),
-                suggestion=item.get("suggestion", ""),
+                section=item.get("section") or "",
+                suggestion=item.get("suggestion") or "",
                 priority=priority,
             ))
 
@@ -482,7 +482,7 @@ class DocumentReviewer:
             if severity not in ("high", "medium", "low"):
                 severity = "medium"
             issues.append(ConsistencyIssue(
-                field=item.get("field", ""),
+                field=item.get("field") or "",
                 document_a=doc_a,
                 quote_a=item["quote_a"],
                 document_b=doc_b,
@@ -540,8 +540,8 @@ class DocumentReviewer:
                 issue = GrammarIssue(
                     document=doc_key,
                     phrase=item["phrase"],
-                    issue=item.get("issue", ""),
-                    suggestion=item.get("suggestion", ""),
+                    issue=item.get("issue") or "",
+                    suggestion=item.get("suggestion") or "",
                     category=category,
                     severity=severity,
                 )
