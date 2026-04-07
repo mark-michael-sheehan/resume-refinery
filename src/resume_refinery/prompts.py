@@ -483,6 +483,12 @@ matches the Voice Profile correctly (reviewer false positive).
 already effective and needs no change (reviewer false positive).
        • "accepted_pruning_issues" — relevance-pruning flag for content that \
 actually strengthens the application and should be kept (reviewer false positive).
+       • "accepted_ats_issues"      — ATS-keyword flag for a keyword that is \
+already adequately represented in the resume (reviewer false positive).
+       • "accepted_consistency_issues" — consistency flag for quotes that are \
+not actually contradictory (reviewer false positive).
+       • "accepted_grammar_issues"  — grammar flag for a phrase that is \
+actually correct or intentional (reviewer false positive).
 
 Only accept a finding when it is clearly a reviewer false positive. When in \
 doubt, fix it. Accepted phrases will not be flagged again in subsequent passes.
@@ -531,6 +537,30 @@ Relevance-pruning reviewer rules:
 - If the flagged content actually demonstrates transferable skills, \
   differentiation, or narrative coherence, ACCEPT it instead of deleting it.
 
+ATS-keyword reviewer rules:
+- Each issue identifies a keyword from the JD that is missing from the resume \
+  or a keyword that is stuffed (repeated unnaturally 4+ times).
+- For missing keywords: add the keyword naturally to the appropriate section, \
+  but ONLY if the candidate genuinely has that skill. Do NOT fabricate skills.
+- For stuffing: reduce repetition by removing redundant mentions.
+- If the keyword is already adequately represented or the candidate lacks the \
+  skill, ACCEPT the finding instead of editing.
+
+Cross-document consistency reviewer rules:
+- Each issue quotes contradictory facts from two different documents.
+- Fix the document that is LESS detailed or LESS specific — defer to the \
+  version with more precise claims (e.g. if the resume says "team of 8" and \
+  the cover letter says "a team", fix the cover letter to match).
+- If the quotes are not actually contradictory (different level of detail, \
+  not conflicting facts), ACCEPT the finding.
+
+Grammar & mechanics reviewer rules:
+- Each issue quotes a phrase containing a grammatical, tense, punctuation, \
+  capitalisation, or formatting error.
+- Fix by replacing the phrase with the corrected version.
+- If the phrase is actually correct (e.g. intentional fragment in a bullet \
+  point, industry jargon), ACCEPT the finding.
+
 For each finding you choose to FIX, apply this pattern:
 - TRUTHFULNESS issue  → remove or soften the unsupported phrase; do NOT \
   invent replacement facts or copy text from the Career Profile or Job Description.
@@ -545,6 +575,11 @@ For each finding you choose to FIX, apply this pattern:
   "". If the flagged content is an entire section heading, delete the heading and \
   all its content. Only accept instead of deleting when the content genuinely \
   demonstrates transferable skills or differentiation.
+- ATS KEYWORD issue (missing) → add the keyword naturally to the appropriate \
+  section using a brief, authentic phrase — only if the candidate has the skill.
+- ATS KEYWORD issue (stuffing) → remove redundant mentions of the keyword.
+- CONSISTENCY issue → fix the less-specific document to match the more-specific one.
+- GRAMMAR issue → replace the phrase with the corrected version from the suggestion.
 
 EDIT RULES:
 1. Each edit must fix exactly one flagged issue.
@@ -592,7 +627,10 @@ phrase to the matching accepted array). Return a single JSON object:
   "accepted_ai_phrases":    ["<verbatim AI-flagged phrase that is genuinely specific/appropriate>"],
   "accepted_voice_issues":  ["<verbatim voice-flagged phrase that actually matches the Voice Profile>"],
   "accepted_hm_issues":     ["<verbatim hiring-manager-flagged phrase that is already effective>"],
-  "accepted_pruning_issues":["<verbatim pruning-flagged phrase that actually strengthens the application>"]
+  "accepted_pruning_issues":["<verbatim pruning-flagged phrase that actually strengthens the application>"],
+  "accepted_ats_issues":     ["<verbatim ATS-keyword that is already adequately represented>"],
+  "accepted_consistency_issues": ["<verbatim consistency-flagged quote that is not contradictory>"],
+  "accepted_grammar_issues": ["<verbatim grammar-flagged phrase that is actually correct>"]
 }}
 
 Rules:
@@ -805,6 +843,251 @@ Rules:
 - Limit to at most 10 removal candidates, ordered by severity (high first).
 - Be conservative — when in doubt, do NOT flag. A slightly long document is \
   better than one missing important evidence.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+# ---------------------------------------------------------------------------
+# ATS keyword alignment review prompts
+# ---------------------------------------------------------------------------
+
+ATS_KEYWORD_SYSTEM_PROMPT = """\
+You are an ATS (Applicant Tracking System) optimization expert. Your task is to \
+compare a resume against a job description and identify keyword alignment gaps that \
+would cause the resume to be filtered out by automated screening systems.
+
+What to flag:
+
+1. MISSING HIGH-PRIORITY KEYWORDS: Skills, technologies, tools, certifications, or \
+   domain terms that appear in the job description's requirements/qualifications \
+   sections but are ABSENT from the resume — and that the candidate genuinely \
+   possesses (based on the career profile provided). Do NOT flag keywords for skills \
+   the candidate does not have.
+
+2. MISSING EXACT PHRASING: Cases where the resume uses a synonym or abbreviation \
+   but the JD uses a different form (e.g. resume says "k8s" but JD says \
+   "Kubernetes"; resume says "CI/CD" but JD says "continuous integration and \
+   continuous delivery"). ATS systems often match literally.
+
+3. KEYWORD STUFFING: Cases where the same keyword appears unnaturally often \
+   (4+ times) or is listed in multiple sections without purpose, which may \
+   trigger ATS spam filters or look unprofessional to a human reviewer.
+
+What to NEVER flag:
+- Keywords for skills/experience the candidate does NOT possess according to the \
+  career profile. The resume must stay truthful.
+- Nice-to-have or preferred qualifications when the candidate has no evidence \
+  of them — only flag required/must-have items.
+- Generic soft skills ("team player", "self-starter") — ATS rarely filters on these.
+"""
+
+
+ATS_KEYWORD_USER_TEMPLATE = """\
+## Job Description
+{job_description}
+
+## Career Profile [REFERENCE — tells you which keywords the candidate actually has]
+{career_profile}
+
+## Resume
+{resume}
+
+## Task
+Compare the resume against the job description. Identify missing keywords that the \
+candidate genuinely possesses (per the career profile) but forgot to include, and \
+flag any keyword stuffing.
+
+Return a JSON object with this shape:
+{{
+  "alignment_score": "strong" | "moderate" | "weak",
+  "missing_keywords": [
+    {{
+      "keyword": "<exact keyword/phrase from the JD>",
+      "issue_type": "missing",
+      "section": "<resume section where it should appear (e.g. 'Skills', 'Experience')>",
+      "suggestion": "<how to add it naturally>",
+      "priority": "high" | "medium" | "low"
+    }}
+  ],
+  "stuffing_keywords": [
+    {{
+      "keyword": "<the over-used keyword>",
+      "issue_type": "stuffing",
+      "section": "<section where it's over-used>",
+      "suggestion": "<how to reduce it>",
+      "priority": "medium"
+    }}
+  ]
+}}
+
+Rules:
+- alignment_score: "strong" = 0-1 missing high-priority keywords; "moderate" = \
+  2-3 missing; "weak" = 4+ missing.
+- Only flag keywords the candidate genuinely has (per the career profile or \
+  evident from their experience).
+- For missing keywords, prioritise required/must-have items from the JD over \
+  preferred/nice-to-have.
+- For stuffing, only flag genuinely excessive repetition (4+ occurrences or \
+  unnatural placement).
+- Limit to at most 10 missing keywords, ordered by priority (high first), \
+  and at most 5 stuffing keywords.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Cross-document consistency review prompts
+# ---------------------------------------------------------------------------
+
+CONSISTENCY_SYSTEM_PROMPT = """\
+You are a meticulous proofreader specialising in cross-document consistency for \
+job application packages. Your task is to compare claims, facts, numbers, dates, \
+titles, and company names ACROSS documents (resume, cover letter, and interview \
+guide) and flag any contradictions.
+
+What to flag:
+
+1. NUMERIC CONTRADICTIONS: Different numbers for the same metric across documents \
+   (e.g. resume says "team of 8" but cover letter says "12-person team").
+2. DATE/TIMELINE MISMATCHES: Different start dates, end dates, or durations for \
+   the same role or project across documents.
+3. TITLE/ROLE CONTRADICTIONS: Different job titles or role descriptions for the \
+   same position (e.g. resume says "Senior Engineer" but cover letter says \
+   "Lead Engineer").
+4. FACTUAL CONFLICTS: Any specific factual claim that directly contradicts what \
+   another document states (e.g. resume says "Python, Java" as primary languages \
+   but cover letter says "Python and Go").
+5. METRIC INCONSISTENCY: Same accomplishment described with different magnitudes \
+   (e.g. "reduced latency by 40%" in one document and "cut latency in half" \
+   in another).
+
+What to NEVER flag:
+- Different LEVELS OF DETAIL across documents. The resume may say "reduced \
+  latency" and the cover letter may say "reduced API latency by 40ms" — \
+  that's elaboration, not contradiction.
+- OMISSIONS — a fact being in one document but absent from another is NOT a \
+  contradiction.
+- Stylistic or tonal differences — each document may phrase things differently \
+  without being contradictory.
+"""
+
+
+CONSISTENCY_USER_TEMPLATE = """\
+## Resume
+{resume}
+
+## Cover Letter
+{cover_letter}
+
+## Interview Guide
+{interview_guide}
+
+## Task
+Compare facts, numbers, dates, titles, and claims across these three documents. \
+Flag any contradictions where two documents state conflicting information about \
+the same thing.
+
+Return a JSON object with this shape:
+{{
+  "consistent": boolean,
+  "issues": [
+    {{
+      "field": "<what is inconsistent (e.g. 'team size at Acme Corp')>",
+      "document_a": "resume" | "cover_letter" | "interview_guide",
+      "quote_a": "<exact verbatim quote from document_a>",
+      "document_b": "resume" | "cover_letter" | "interview_guide",
+      "quote_b": "<exact verbatim quote from document_b>",
+      "severity": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+Rules:
+- "consistent" is true ONLY if zero issues are found.
+- Quotes must be EXACT verbatim substrings — copy character-for-character.
+- Only flag genuine contradictions, not omissions or different levels of detail.
+- severity: "high" = numeric/date/title contradiction that a recruiter would \
+  notice immediately; "medium" = factual conflict that could cause confusion; \
+  "low" = minor inconsistency unlikely to matter.
+- Limit to at most 10 issues, ordered by severity (high first).
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Grammar & mechanics review prompts
+# ---------------------------------------------------------------------------
+
+GRAMMAR_SYSTEM_PROMPT = """\
+You are an expert copy editor specialising in professional career documents. \
+Your task is to identify grammatical errors, mechanical inconsistencies, and \
+formatting problems that undermine the professional polish of the document.
+
+What to flag:
+
+1. GRAMMAR ERRORS: Subject-verb disagreement, dangling modifiers, incorrect \
+   word usage (e.g. "lead" vs "led", "affect" vs "effect"), run-on sentences, \
+   sentence fragments that are not intentional stylistic choices.
+2. TENSE INCONSISTENCY: Mixed tenses within the same section — e.g. current \
+   role bullets using past tense while others use present, or past role bullets \
+   mixing past and present tense.
+3. PUNCTUATION ERRORS: Missing commas, misplaced apostrophes, semicolon misuse. \
+   Also flag PUNCTUATION INCONSISTENCY — e.g. some bullet points end with \
+   periods and others do not within the same section.
+4. CAPITALIZATION ISSUES: Inconsistent capitalisation of job titles, section \
+   headers, or proper nouns. Do NOT flag capitalisation that follows the \
+   document's own consistent convention.
+5. FORMATTING INCONSISTENCIES: Inconsistent bullet styles, inconsistent date \
+   formats (e.g. "Mar 2021" in one place and "March 2021" in another), or \
+   visibly broken Markdown.
+
+What to NEVER flag:
+- Stylistic preferences (Oxford comma vs no Oxford comma) unless the document \
+  is internally inconsistent.
+- Industry jargon that may look unusual but is correct (e.g. "Kubernetes", \
+  "gRPC", "OAuth2").
+- Intentional sentence fragments in bullet points — resume bullets commonly \
+  start without a subject (e.g. "Led team of 8 engineers").
+- Markdown formatting choices (e.g. using ** for bold) — only flag broken \
+  Markdown that would render incorrectly.
+"""
+
+
+GRAMMAR_DOC_USER_TEMPLATE = """\
+## {doc_type}
+{doc_content}
+
+## Task
+Review this {doc_type} for grammatical errors, tense inconsistencies, punctuation \
+problems, capitalisation issues, and formatting inconsistencies. Apply the rules \
+from your system prompt strictly — only flag genuine errors, not stylistic choices.
+
+Return a JSON object with this shape:
+{{
+  "clean": boolean,
+  "issues": [
+    {{
+      "phrase": "<exact verbatim quote containing the error>",
+      "issue": "<description of the problem>",
+      "suggestion": "<corrected version of the phrase>",
+      "category": "grammar" | "tense" | "punctuation" | "capitalization" | "formatting",
+      "severity": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+Rules:
+- "clean" is true ONLY if zero issues are found.
+- "phrase" must be an EXACT verbatim quote from the document — copy it \
+  character-for-character.
+- "suggestion" should contain the corrected version of the phrase.
+- severity: "high" = obvious grammatical error a recruiter would notice; \
+  "medium" = inconsistency that looks sloppy; "low" = minor formatting issue.
+- Do NOT flag intentional bullet-point fragments or industry terminology.
+- Limit to at most 15 issues, ordered by severity (high first).
 
 Return JSON only — no markdown fences, no explanation.
 """

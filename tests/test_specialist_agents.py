@@ -7,10 +7,13 @@ import pytest
 
 from resume_refinery.models import (
     AIDetectionResult,
+    ATSKeywordResult,
+    ConsistencyResult,
     DocumentSet,
     DocumentTruthResult,
     DraftingContext,
     EvidencePack,
+    GrammarResult,
     JobRequirement,
     RepairPassResult,
     ReviewBundle,
@@ -298,6 +301,15 @@ class FakeReviewer:
     def review_ai_detection(self, docs):
         return AIDetectionResult(risk_level="low")
 
+    def review_ats_keyword(self, docs, job, career):
+        return ATSKeywordResult(alignment_score="strong")
+
+    def review_consistency(self, docs):
+        return ConsistencyResult(consistent=True)
+
+    def review_grammar(self, docs):
+        return GrammarResult(clean=True)
+
 
 def test_verification_agent_review_all(document_set, career_profile, voice_profile, job_description):
     agent = VerificationAgent(reviewer=FakeReviewer())
@@ -325,6 +337,24 @@ def test_verification_agent_review_ai_detection(document_set):
     agent = VerificationAgent(reviewer=FakeReviewer())
     result = agent.review_ai_detection(document_set)
     assert result.risk_level == "low"
+
+
+def test_verification_agent_review_ats_keyword(document_set, career_profile, job_description):
+    agent = VerificationAgent(reviewer=FakeReviewer())
+    result = agent.review_ats_keyword(document_set, job_description, career_profile)
+    assert result.alignment_score == "strong"
+
+
+def test_verification_agent_review_consistency(document_set):
+    agent = VerificationAgent(reviewer=FakeReviewer())
+    result = agent.review_consistency(document_set)
+    assert result.consistent is True
+
+
+def test_verification_agent_review_grammar(document_set):
+    agent = VerificationAgent(reviewer=FakeReviewer())
+    result = agent.review_grammar(document_set)
+    assert result.clean is True
 
 
 # ---------------------------------------------------------------------------
@@ -675,7 +705,7 @@ def test_repair_plan_edits_handles_empty_response():
     edits, acceptances = agent._plan_edits("system", "user")
 
     assert edits == []
-    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": []}
+    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_consistency_issues": [], "accepted_grammar_issues": []}
 
 
 def test_repair_build_review_findings_truthfulness():

@@ -414,12 +414,71 @@ class HiringManagerReview(BaseModel):
     resume_issues: list[HiringManagerIssue] = Field(default_factory=list)
 
 
+class ATSKeywordIssue(BaseModel):
+    """A single keyword alignment finding."""
+
+    keyword: str = Field(description="The JD keyword/phrase that is missing or over-used")
+    issue_type: Literal["missing", "stuffing"] = "missing"
+    section: str = Field(default="", description="Resume section where the issue was found (or should appear)")
+    suggestion: str = Field(default="", description="How to address the issue")
+    priority: Literal["high", "medium", "low"] = "medium"
+
+
+class ATSKeywordResult(BaseModel):
+    """Result of ATS keyword alignment review on the resume."""
+
+    alignment_score: Literal["strong", "moderate", "weak"] = "moderate"
+    missing_keywords: list[ATSKeywordIssue] = Field(default_factory=list)
+    stuffing_keywords: list[ATSKeywordIssue] = Field(default_factory=list)
+
+
+class ConsistencyIssue(BaseModel):
+    """A single cross-document contradiction."""
+
+    field: str = Field(description="What is inconsistent (e.g. 'team size', 'job title', 'date range')")
+    document_a: Literal["resume", "cover_letter", "interview_guide"]
+    quote_a: str = Field(description="Verbatim quote from document_a")
+    document_b: Literal["resume", "cover_letter", "interview_guide"]
+    quote_b: str = Field(description="Verbatim quote from document_b")
+    severity: Literal["high", "medium", "low"] = "medium"
+
+
+class ConsistencyResult(BaseModel):
+    """Result of cross-document consistency review."""
+
+    consistent: bool = True
+    issues: list[ConsistencyIssue] = Field(default_factory=list)
+
+
+class GrammarIssue(BaseModel):
+    """A single grammar or mechanics finding."""
+
+    document: Literal["resume", "cover_letter", "interview_guide"]
+    phrase: str = Field(description="Verbatim quote containing the error")
+    issue: str = Field(description="Description of the grammatical or mechanical problem")
+    suggestion: str = Field(default="", description="Corrected version")
+    category: Literal["grammar", "tense", "punctuation", "capitalization", "formatting"] = "grammar"
+    severity: Literal["high", "medium", "low"] = "medium"
+
+
+class GrammarResult(BaseModel):
+    """Result of grammar & mechanics review."""
+
+    clean: bool = True
+    cover_letter_issues: list[GrammarIssue] = Field(default_factory=list)
+    resume_issues: list[GrammarIssue] = Field(default_factory=list)
+    interview_guide_issues: list[GrammarIssue] = Field(default_factory=list)
+
+
 class ReviewBundle(BaseModel):
     voice: Optional[VoiceReviewResult] = None
     ai_detection: Optional[AIDetectionResult] = None
     truthfulness: Optional[TruthfulnessResult] = None
     hiring_manager: Optional[HiringManagerReview] = None
     relevance_pruning: Optional[RelevancePruningResult] = None
+    ats_keyword: Optional[ATSKeywordResult] = None
+    consistency: Optional[ConsistencyResult] = None
+    grammar: Optional[GrammarResult] = None
 
 
 class RepairEdit(BaseModel):
@@ -438,6 +497,9 @@ class RepairPassResult(BaseModel):
     accepted_voice_issues: StrList = Field(default_factory=list)
     accepted_hm_issues: StrList = Field(default_factory=list)
     accepted_pruning_issues: StrList = Field(default_factory=list)
+    accepted_ats_issues: StrList = Field(default_factory=list)
+    accepted_consistency_issues: StrList = Field(default_factory=list)
+    accepted_grammar_issues: StrList = Field(default_factory=list)
 
 
 class ExemptedPhrases(BaseModel):
@@ -461,6 +523,18 @@ class ExemptedPhrases(BaseModel):
     pruning_issues: StrList = Field(
         default_factory=list,
         description="Relevance-pruning issues accepted as reviewer false positives",
+    )
+    ats_issues: StrList = Field(
+        default_factory=list,
+        description="ATS-keyword issues accepted as reviewer false positives",
+    )
+    consistency_issues: StrList = Field(
+        default_factory=list,
+        description="Cross-document consistency issues accepted as reviewer false positives",
+    )
+    grammar_issues: StrList = Field(
+        default_factory=list,
+        description="Grammar/mechanics issues accepted as reviewer false positives",
     )
 
 

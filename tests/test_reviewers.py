@@ -7,7 +7,10 @@ import pytest
 
 from resume_refinery.models import (
     AIDetectionResult,
+    ATSKeywordResult,
+    ConsistencyResult,
     DocumentSet,
+    GrammarResult,
     HiringManagerReview,
     RelevancePruningResult,
     TruthfulnessResult,
@@ -646,4 +649,304 @@ def test_review_relevance_pruning_invalid_values_default(mock_client_cls, docume
     assert result.overall_density == "balanced"  # unknown → default
     assert result.cover_letter_issues[0].category == "filler"  # nonexistent → default
     assert result.cover_letter_issues[0].severity == "medium"  # critical → default
+
+
+# ---------------------------------------------------------------------------
+# review_ats_keyword
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_ats_keyword_returns_result(mock_client_cls, document_set, job_description, career_profile):
+    payload = json.dumps({
+        "alignment_score": "moderate",
+        "missing_keywords": [
+            {
+                "keyword": "distributed systems",
+                "section": "Experience",
+                "suggestion": "Add distributed systems to backend migration bullet",
+                "priority": "high",
+            },
+        ],
+        "stuffing_keywords": [
+            {
+                "keyword": "Python",
+                "section": "Skills",
+                "suggestion": "Reduce to one mention",
+                "priority": "low",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_ats_keyword(document_set, job_description, career_profile)
+
+    assert isinstance(result, ATSKeywordResult)
+    assert result.alignment_score == "moderate"
+    assert len(result.missing_keywords) == 1
+    assert result.missing_keywords[0].keyword == "distributed systems"
+    assert result.missing_keywords[0].issue_type == "missing"
+    assert result.missing_keywords[0].priority == "high"
+    assert len(result.stuffing_keywords) == 1
+    assert result.stuffing_keywords[0].keyword == "Python"
+    assert result.stuffing_keywords[0].issue_type == "stuffing"
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_ats_keyword_skips_missing_resume(mock_client_cls, job_description, career_profile):
+    docs = DocumentSet(cover_letter="Some content.", resume=None, interview_guide=None)
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_ats_keyword(docs, job_description, career_profile)
+
+    assert result.alignment_score == "strong"
+    assert result.missing_keywords == []
+    assert result.stuffing_keywords == []
+    assert mock_client.chat.call_count == 0
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_ats_keyword_invalid_values_default(mock_client_cls, document_set, job_description, career_profile):
+    """Invalid alignment_score/priority values default to safe values."""
+    payload = json.dumps({
+        "alignment_score": "excellent",
+        "missing_keywords": [
+            {"keyword": "k1", "priority": "critical"},
+        ],
+        "stuffing_keywords": [],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_ats_keyword(document_set, job_description, career_profile)
+
+    assert result.alignment_score == "moderate"  # excellent → default
+    assert result.missing_keywords[0].priority == "medium"  # critical → default
+
+
+# ---------------------------------------------------------------------------
+# review_consistency
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_consistency_returns_result(mock_client_cls, document_set):
+    payload = json.dumps({
+        "consistent": False,
+        "issues": [
+            {
+                "field": "team size",
+                "document_a": "resume",
+                "quote_a": "Led a team of 5",
+                "document_b": "cover_letter",
+                "quote_b": "Managed a team of 12",
+                "severity": "high",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_consistency(document_set)
+
+    assert isinstance(result, ConsistencyResult)
+    assert result.consistent is False
+    assert len(result.issues) == 1
+    assert result.issues[0].field == "team size"
+    assert result.issues[0].document_a == "resume"
+    assert result.issues[0].quote_a == "Led a team of 5"
+    assert result.issues[0].document_b == "cover_letter"
+    assert result.issues[0].quote_b == "Managed a team of 12"
+    assert result.issues[0].severity == "high"
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_consistency_skips_single_doc(mock_client_cls):
+    docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide=None)
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_consistency(docs)
+
+    assert result.consistent is True
+    assert result.issues == []
+    assert mock_client.chat.call_count == 0
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_consistency_forces_inconsistent_when_issues_exist(mock_client_cls, document_set):
+    """Even if the LLM says consistent=True but returns issues, result should be inconsistent."""
+    payload = json.dumps({
+        "consistent": True,
+        "issues": [
+            {
+                "field": "date",
+                "document_a": "resume",
+                "quote_a": "2020-2023",
+                "document_b": "cover_letter",
+                "quote_b": "2019-2023",
+                "severity": "medium",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_consistency(document_set)
+
+    assert result.consistent is False
+    assert len(result.issues) == 1
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_consistency_invalid_doc_names_default(mock_client_cls, document_set):
+    """Invalid document names default to safe values."""
+    payload = json.dumps({
+        "consistent": False,
+        "issues": [
+            {
+                "field": "title",
+                "document_a": "cv",
+                "quote_a": "Senior",
+                "document_b": "summary",
+                "quote_b": "Staff",
+                "severity": "extreme",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_consistency(document_set)
+
+    assert result.issues[0].document_a == "resume"  # cv → default
+    assert result.issues[0].document_b == "cover_letter"  # summary → default
+    assert result.issues[0].severity == "medium"  # extreme → default
+
+
+# ---------------------------------------------------------------------------
+# review_grammar
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_grammar_returns_result(mock_client_cls, document_set):
+    cl_payload = json.dumps({
+        "clean": False,
+        "issues": [
+            {
+                "phrase": "I've spent five years building",
+                "issue": "Contraction in formal letter",
+                "suggestion": "I have spent five years building",
+                "category": "grammar",
+                "severity": "low",
+            },
+        ],
+    })
+    resume_payload = json.dumps({
+        "clean": True,
+        "issues": [],
+    })
+    ig_payload = json.dumps({
+        "clean": True,
+        "issues": [],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_mock_response(cl_payload),
+        _make_mock_response(resume_payload),
+        _make_mock_response(ig_payload),
+    ]
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_grammar(document_set)
+
+    assert isinstance(result, GrammarResult)
+    assert result.clean is False
+    assert len(result.cover_letter_issues) == 1
+    assert result.cover_letter_issues[0].phrase == "I've spent five years building"
+    assert result.cover_letter_issues[0].document == "cover_letter"
+    assert result.cover_letter_issues[0].category == "grammar"
+    assert result.resume_issues == []
+    assert result.interview_guide_issues == []
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_grammar_skips_missing_docs(mock_client_cls):
+    docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide=None)
+    payload = json.dumps({
+        "clean": True,
+        "issues": [],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_grammar(docs)
+
+    assert result.clean is True
+    assert mock_client.chat.call_count == 1  # Only resume reviewed
+    assert result.cover_letter_issues == []
+    assert result.resume_issues == []
+    assert result.interview_guide_issues == []
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_grammar_invalid_values_default(mock_client_cls, document_set):
+    """Invalid category/severity values default to safe values."""
+    payload = json.dumps({
+        "clean": False,
+        "issues": [
+            {
+                "phrase": "some text",
+                "issue": "bad grammar",
+                "category": "syntax",
+                "severity": "critical",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_grammar(document_set)
+
+    assert result.cover_letter_issues[0].category == "grammar"  # syntax → default
+    assert result.cover_letter_issues[0].severity == "medium"  # critical → default
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_grammar_multiple_docs_all_clean(mock_client_cls, document_set):
+    """When all docs are clean, result should be clean."""
+    payload = json.dumps({"clean": True, "issues": []})
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_grammar(document_set)
+
+    assert result.clean is True
+    assert result.cover_letter_issues == []
+    assert result.resume_issues == []
+    assert result.interview_guide_issues == []
+    # 3 docs = 3 API calls
+    assert mock_client.chat.call_count == 3
 

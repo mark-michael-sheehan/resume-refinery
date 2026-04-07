@@ -134,6 +134,51 @@ def _truth_summary(truth) -> str:
     )
 
 
+def _voice_summary(voice) -> str:
+    if not voice:
+        return "<p class='muted'>No voice review available.</p>"
+    match = voice.overall_match
+    klass = "ok" if match == "strong" else "muted" if match == "moderate" else "bad"
+    parts = [
+        f"<p>Voice match: <span class='{klass}' style='font-size:1.1em'>{html.escape(match)}</span></p>",
+    ]
+    for label, assessment, per_match in [
+        ("Cover Letter", voice.cover_letter_assessment, getattr(voice, "cover_letter_match", None)),
+        ("Resume", voice.resume_assessment, getattr(voice, "resume_match", None)),
+    ]:
+        badge = ""
+        if per_match:
+            m_cls = "ok" if per_match == "strong" else "muted" if per_match == "moderate" else "bad"
+            badge = f" <span class='{m_cls}'>[{html.escape(per_match)}]</span>"
+        parts.append(f"<p><strong>{label}</strong>{badge}: {html.escape(assessment or '—')}</p>")
+    if voice.specific_issues:
+        parts.append("<h3>Issues</h3><ul>")
+        for issue in voice.specific_issues:
+            parts.append(f"<li>{html.escape(issue)}</li>")
+        parts.append("</ul>")
+    return "".join(parts)
+
+
+def _ai_detection_summary(ai) -> str:
+    if not ai:
+        return "<p class='muted'>No AI detection review available.</p>"
+    risk = ai.risk_level
+    klass = "ok" if risk == "low" else "muted" if risk == "medium" else "bad"
+    parts = [
+        f"<p>AI-detection risk: <span class='{klass}' style='font-size:1.1em'>{html.escape(risk)}</span></p>",
+    ]
+    for label, flags in [
+        ("Cover Letter", ai.cover_letter_flags),
+        ("Resume", ai.resume_flags),
+    ]:
+        if flags:
+            parts.append(f"<h3>{label} Flags</h3><ul>")
+            for flag in flags:
+                parts.append(f"<li>&ldquo;{html.escape(flag)}&rdquo;</li>")
+            parts.append("</ul>")
+    return "".join(parts)
+
+
 def _hiring_manager_summary(hm) -> str:
     if not hm:
         return "<p class='muted'>No hiring-manager review available.</p>"
@@ -183,6 +228,82 @@ def _relevance_pruning_summary(pruning) -> str:
                     f"<li><span class='{impact_badge}'>[{html.escape(issue.severity.upper())}]</span> "
                     f"<strong>{html.escape(issue.category)}</strong>: "
                     f"&ldquo;{html.escape(issue.phrase[:120])}&rdquo; &mdash; {html.escape(issue.reason)}</li>"
+                )
+            parts.append("</ul>")
+    return "".join(parts)
+
+
+def _ats_keyword_summary(ats) -> str:
+    if not ats:
+        return "<p class='muted'>No ATS keyword review available.</p>"
+    score = ats.alignment_score
+    klass = "ok" if score == "strong" else "muted" if score == "moderate" else "bad"
+    total_missing = len(ats.missing_keywords)
+    total_stuffing = len(ats.stuffing_keywords)
+    parts = [
+        f"<p>Alignment: <span class='{klass}' style='font-size:1.1em'>{html.escape(score)}</span>"
+        f" ({total_missing} missing, {total_stuffing} stuffing)</p>",
+    ]
+    if ats.missing_keywords:
+        parts.append("<h3>Missing Keywords</h3><ul>")
+        for kw in ats.missing_keywords:
+            badge = "bad" if kw.priority == "high" else "muted"
+            parts.append(
+                f"<li><span class='{badge}'>[{html.escape(kw.priority.upper())}]</span> "
+                f"<strong>{html.escape(kw.keyword)}</strong> &mdash; {html.escape(kw.suggestion)}"
+                f" <em>({html.escape(kw.section)})</em></li>"
+            )
+        parts.append("</ul>")
+    if ats.stuffing_keywords:
+        parts.append("<h3>Keyword Stuffing</h3><ul>")
+        for kw in ats.stuffing_keywords:
+            parts.append(
+                f"<li><strong>{html.escape(kw.keyword)}</strong> in {html.escape(kw.section)}"
+                f" &mdash; {html.escape(kw.suggestion)}</li>"
+            )
+        parts.append("</ul>")
+    return "".join(parts)
+
+
+def _consistency_summary(consistency) -> str:
+    if not consistency:
+        return "<p class='muted'>No cross-document consistency review available.</p>"
+    if consistency.consistent:
+        return "<p class='ok'>No contradictions found across documents.</p>"
+    parts = [f"<p class='bad'>{len(consistency.issues)} contradiction(s) found.</p><ul>"]
+    for issue in consistency.issues:
+        badge = "bad" if issue.severity == "high" else "muted"
+        parts.append(
+            f"<li><span class='{badge}'>[{html.escape(issue.severity.upper())}]</span> "
+            f"<strong>{html.escape(issue.field)}</strong>: "
+            f"&ldquo;{html.escape(issue.quote_a[:80])}&rdquo; ({html.escape(issue.document_a)}) vs "
+            f"&ldquo;{html.escape(issue.quote_b[:80])}&rdquo; ({html.escape(issue.document_b)})</li>"
+        )
+    parts.append("</ul>")
+    return "".join(parts)
+
+
+def _grammar_summary(grammar) -> str:
+    if not grammar:
+        return "<p class='muted'>No grammar review available.</p>"
+    total = len(grammar.cover_letter_issues) + len(grammar.resume_issues) + len(grammar.interview_guide_issues)
+    if grammar.clean:
+        return "<p class='ok'>No grammar or mechanics issues found.</p>"
+    parts = [f"<p class='bad'>{total} issue(s) found.</p>"]
+    for label, issues in [
+        ("Cover Letter", grammar.cover_letter_issues),
+        ("Resume", grammar.resume_issues),
+        ("Interview Guide", grammar.interview_guide_issues),
+    ]:
+        if issues:
+            parts.append(f"<h3>{label}</h3><ul>")
+            for issue in issues:
+                badge = "bad" if issue.severity == "high" else "muted"
+                parts.append(
+                    f"<li><span class='{badge}'>[{html.escape(issue.severity.upper())}]</span> "
+                    f"<strong>{html.escape(issue.category)}</strong>: "
+                    f"&ldquo;{html.escape(issue.phrase[:100])}&rdquo; &mdash; {html.escape(issue.issue)}"
+                    f" <em>Suggestion: {html.escape(issue.suggestion[:100])}</em></li>"
                 )
             parts.append("</ul>")
     return "".join(parts)
@@ -496,8 +617,19 @@ def show_session(session_id: str) -> HTMLResponse:
 <div class=\"card\">
   <h1>{html.escape(session.session_id)}</h1>
   <p class=\"muted\">{html.escape(session.job_description.title or '—')} @ {html.escape(session.job_description.company or '—')}</p>
-  {_truth_summary(reviews.truthfulness)}
   <p><a href=\"/sessions\">Back to sessions</a></p>
+</div>
+<div class=\"card\">
+  <h2>Truthfulness</h2>
+  {_truth_summary(reviews.truthfulness)}
+</div>
+<div class=\"card\">
+  <h2>Voice Match</h2>
+  {_voice_summary(reviews.voice)}
+</div>
+<div class=\"card\">
+  <h2>AI Detection</h2>
+  {_ai_detection_summary(reviews.ai_detection)}
 </div>
 <div class=\"card\">
   <h2>Hiring Manager Review</h2>
@@ -506,6 +638,18 @@ def show_session(session_id: str) -> HTMLResponse:
 <div class=\"card\">
   <h2>Relevance Pruning</h2>
   {_relevance_pruning_summary(reviews.relevance_pruning)}
+</div>
+<div class=\"card\">
+  <h2>ATS Keyword Alignment</h2>
+  {_ats_keyword_summary(reviews.ats_keyword)}
+</div>
+<div class=\"card\">
+  <h2>Cross-Document Consistency</h2>
+  {_consistency_summary(reviews.consistency)}
+</div>
+<div class=\"card\">
+  <h2>Grammar &amp; Mechanics</h2>
+  {_grammar_summary(reviews.grammar)}
 </div>
 {_artifact_summary(context)}
 <div class=\"card\">

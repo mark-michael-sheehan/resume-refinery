@@ -12,8 +12,14 @@ from dotenv import load_dotenv
 
 from .models import (
     AIDetectionResult,
+    ATSKeywordIssue,
+    ATSKeywordResult,
+    ConsistencyIssue,
+    ConsistencyResult,
     DocumentSet,
     DocumentTruthResult,
+    GrammarIssue,
+    GrammarResult,
     HiringManagerImprovementItem,
     HiringManagerIssue,
     HiringManagerReview,
@@ -29,6 +35,12 @@ from .models import (
 from .prompts import (
     AI_DETECTION_DOC_USER_TEMPLATE,
     AI_DETECTION_SYSTEM_PROMPT,
+    ATS_KEYWORD_SYSTEM_PROMPT,
+    ATS_KEYWORD_USER_TEMPLATE,
+    CONSISTENCY_SYSTEM_PROMPT,
+    CONSISTENCY_USER_TEMPLATE,
+    GRAMMAR_DOC_USER_TEMPLATE,
+    GRAMMAR_SYSTEM_PROMPT,
     HIRING_MANAGER_REVIEW_SYSTEM_PROMPT,
     HIRING_MANAGER_REVIEW_USER_TEMPLATE,
     RELEVANCE_PRUNING_DOC_USER_TEMPLATE,
@@ -383,6 +395,164 @@ class DocumentReviewer:
             overall_density=overall_density,
             cover_letter_issues=cover_letter_issues,
             resume_issues=resume_issues,
+        )
+
+    def review_ats_keyword(
+        self, docs: DocumentSet, job: JobDescription, career: CareerProfile,
+    ) -> ATSKeywordResult:
+        """Check resume for ATS keyword alignment against the job description."""
+        if not docs.resume:
+            return ATSKeywordResult(alignment_score="strong")
+
+        user_msg = ATS_KEYWORD_USER_TEMPLATE.format(
+            job_description=job.raw_content,
+            career_profile=career.raw_content,
+            resume=docs.resume,
+        )
+        raw = self._call(ATS_KEYWORD_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+
+        score = data.get("alignment_score", "moderate")
+        if score not in ("strong", "moderate", "weak"):
+            score = "moderate"
+
+        missing: list[ATSKeywordIssue] = []
+        for item in data.get("missing_keywords", []):
+            if not isinstance(item, dict) or "keyword" not in item:
+                continue
+            priority = item.get("priority", "medium")
+            if priority not in ("high", "medium", "low"):
+                priority = "medium"
+            missing.append(ATSKeywordIssue(
+                keyword=item["keyword"],
+                issue_type="missing",
+                section=item.get("section", ""),
+                suggestion=item.get("suggestion", ""),
+                priority=priority,
+            ))
+
+        stuffing: list[ATSKeywordIssue] = []
+        for item in data.get("stuffing_keywords", []):
+            if not isinstance(item, dict) or "keyword" not in item:
+                continue
+            priority = item.get("priority", "medium")
+            if priority not in ("high", "medium", "low"):
+                priority = "medium"
+            stuffing.append(ATSKeywordIssue(
+                keyword=item["keyword"],
+                issue_type="stuffing",
+                section=item.get("section", ""),
+                suggestion=item.get("suggestion", ""),
+                priority=priority,
+            ))
+
+        return ATSKeywordResult(
+            alignment_score=score,
+            missing_keywords=missing,
+            stuffing_keywords=stuffing,
+        )
+
+    def review_consistency(self, docs: DocumentSet) -> ConsistencyResult:
+        """Compare facts across documents and flag contradictions."""
+        # Need at least two documents to compare
+        doc_count = sum(1 for d in [docs.cover_letter, docs.resume, docs.interview_guide] if d)
+        if doc_count < 2:
+            return ConsistencyResult(consistent=True)
+
+        user_msg = CONSISTENCY_USER_TEMPLATE.format(
+            resume=docs.resume or "(not provided)",
+            cover_letter=docs.cover_letter or "(not provided)",
+            interview_guide=docs.interview_guide or "(not provided)",
+        )
+        raw = self._call(CONSISTENCY_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+
+        issues: list[ConsistencyIssue] = []
+        for item in data.get("issues", []):
+            if not isinstance(item, dict) or "quote_a" not in item or "quote_b" not in item:
+                continue
+            doc_a = item.get("document_a", "resume")
+            doc_b = item.get("document_b", "cover_letter")
+            valid_docs = ("resume", "cover_letter", "interview_guide")
+            if doc_a not in valid_docs:
+                doc_a = "resume"
+            if doc_b not in valid_docs:
+                doc_b = "cover_letter"
+            severity = item.get("severity", "medium")
+            if severity not in ("high", "medium", "low"):
+                severity = "medium"
+            issues.append(ConsistencyIssue(
+                field=item.get("field", ""),
+                document_a=doc_a,
+                quote_a=item["quote_a"],
+                document_b=doc_b,
+                quote_b=item["quote_b"],
+                severity=severity,
+            ))
+
+        consistent = data.get("consistent", True)
+        if issues:
+            consistent = False
+
+        return ConsistencyResult(consistent=consistent, issues=issues)
+
+    def review_grammar(self, docs: DocumentSet) -> GrammarResult:
+        """Check each document for grammar, tense, and mechanics errors."""
+        doc_map = [
+            ("Cover Letter", "cover_letter", docs.cover_letter),
+            ("Resume", "resume", docs.resume),
+            ("Interview Guide", "interview_guide", docs.interview_guide),
+        ]
+
+        cover_letter_issues: list[GrammarIssue] = []
+        resume_issues: list[GrammarIssue] = []
+        interview_guide_issues: list[GrammarIssue] = []
+        all_clean = True
+
+        issue_lists = {
+            "cover_letter": cover_letter_issues,
+            "resume": resume_issues,
+            "interview_guide": interview_guide_issues,
+        }
+
+        for doc_type, doc_key, content in doc_map:
+            if not content:
+                continue
+            user_msg = GRAMMAR_DOC_USER_TEMPLATE.format(
+                doc_type=doc_type,
+                doc_content=content,
+            )
+            raw = self._call(GRAMMAR_SYSTEM_PROMPT, user_msg)
+            data = json.loads(raw)
+
+            if not data.get("clean", True):
+                all_clean = False
+
+            for item in data.get("issues", []):
+                if not isinstance(item, dict) or "phrase" not in item:
+                    continue
+                category = item.get("category", "grammar")
+                if category not in ("grammar", "tense", "punctuation", "capitalization", "formatting"):
+                    category = "grammar"
+                severity = item.get("severity", "medium")
+                if severity not in ("high", "medium", "low"):
+                    severity = "medium"
+                issue = GrammarIssue(
+                    document=doc_key,
+                    phrase=item["phrase"],
+                    issue=item.get("issue", ""),
+                    suggestion=item.get("suggestion", ""),
+                    category=category,
+                    severity=severity,
+                )
+                issue_lists[doc_key].append(issue)
+                all_clean = False
+
+        return GrammarResult(
+            clean=all_clean,
+            cover_letter_issues=cover_letter_issues,
+            resume_issues=resume_issues,
+            interview_guide_issues=interview_guide_issues,
         )
 
     def _call(self, system: str, user_msg: str, *, think: bool = False) -> str:

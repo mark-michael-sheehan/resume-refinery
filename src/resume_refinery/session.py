@@ -14,8 +14,14 @@ Layout:
             cover_letter.md
             resume.md
             interview_guide.md
-            voice_review.json   (optional)
-            ai_review.json      (optional)
+            voice_review.json               (optional)
+            ai_review.json                  (optional)
+            truth_review.json               (optional)
+            hiring_manager_review.json      (optional)
+            relevance_pruning_review.json   (optional)
+            ats_keyword_review.json         (optional)
+            consistency_review.json         (optional)
+            grammar_review.json             (optional)
         v2/
             ...
 """
@@ -33,14 +39,18 @@ from typing import Optional
 
 from .models import (
     AIDetectionResult,
+    ATSKeywordResult,
     CareerProfile,
+    ConsistencyResult,
     DocumentKey,
     DocumentSet,
     DraftingContext,
     EvidencePack,
     ExemptedPhrases,
+    GrammarResult,
     HiringManagerReview,
     JobDescription,
+    RelevancePruningResult,
     ReviewBundle,
     Session,
     TruthfulnessResult,
@@ -183,22 +193,21 @@ class SessionStore:
     def save_reviews(self, session: Session, reviews: ReviewBundle) -> Session:
         """Persist review results for the current version."""
         version_dir = self.root / session.session_id / f"v{session.current_version}"
-        if reviews.voice:
-            (version_dir / "voice_review.json").write_text(
-                reviews.voice.model_dump_json(indent=2), encoding="utf-8"
-            )
-        if reviews.ai_detection:
-            (version_dir / "ai_review.json").write_text(
-                reviews.ai_detection.model_dump_json(indent=2), encoding="utf-8"
-            )
-        if reviews.truthfulness:
-            (version_dir / "truth_review.json").write_text(
-                reviews.truthfulness.model_dump_json(indent=2), encoding="utf-8"
-            )
-        if reviews.hiring_manager:
-            (version_dir / "hiring_manager_review.json").write_text(
-                reviews.hiring_manager.model_dump_json(indent=2), encoding="utf-8"
-            )
+        _save_pairs: list[tuple[str, object | None]] = [
+            ("voice_review.json", reviews.voice),
+            ("ai_review.json", reviews.ai_detection),
+            ("truth_review.json", reviews.truthfulness),
+            ("hiring_manager_review.json", reviews.hiring_manager),
+            ("relevance_pruning_review.json", reviews.relevance_pruning),
+            ("ats_keyword_review.json", reviews.ats_keyword),
+            ("consistency_review.json", reviews.consistency),
+            ("grammar_review.json", reviews.grammar),
+        ]
+        for filename, model in _save_pairs:
+            if model is not None:
+                (version_dir / filename).write_text(
+                    model.model_dump_json(indent=2), encoding="utf-8"
+                )
 
         # Mark current version as reviewed
         for v in session.versions:
@@ -213,11 +222,16 @@ class SessionStore:
         """Load reviews for a given version (defaults to current)."""
         v = version or session.current_version
         version_dir = self.root / session.session_id / f"v{v}"
-        voice = _load_model_opt(version_dir / "voice_review.json", VoiceReviewResult)
-        ai = _load_model_opt(version_dir / "ai_review.json", AIDetectionResult)
-        truth = _load_model_opt(version_dir / "truth_review.json", TruthfulnessResult)
-        hm = _load_model_opt(version_dir / "hiring_manager_review.json", HiringManagerReview)
-        return ReviewBundle(voice=voice, ai_detection=ai, truthfulness=truth, hiring_manager=hm)
+        return ReviewBundle(
+            voice=_load_model_opt(version_dir / "voice_review.json", VoiceReviewResult),
+            ai_detection=_load_model_opt(version_dir / "ai_review.json", AIDetectionResult),
+            truthfulness=_load_model_opt(version_dir / "truth_review.json", TruthfulnessResult),
+            hiring_manager=_load_model_opt(version_dir / "hiring_manager_review.json", HiringManagerReview),
+            relevance_pruning=_load_model_opt(version_dir / "relevance_pruning_review.json", RelevancePruningResult),
+            ats_keyword=_load_model_opt(version_dir / "ats_keyword_review.json", ATSKeywordResult),
+            consistency=_load_model_opt(version_dir / "consistency_review.json", ConsistencyResult),
+            grammar=_load_model_opt(version_dir / "grammar_review.json", GrammarResult),
+        )
 
     # --- Context (EvidencePack + VoiceStyleGuide) --------------------------
 

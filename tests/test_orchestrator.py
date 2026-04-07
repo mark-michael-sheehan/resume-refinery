@@ -6,9 +6,12 @@ from pathlib import Path
 
 from resume_refinery.models import (
     AIDetectionResult,
+    ATSKeywordResult,
+    ConsistencyResult,
     DocumentSet,
     DocumentTruthResult,
     EvidencePack,
+    GrammarResult,
     HiringManagerReview,
     JobRequirement,
     RepairPassResult,
@@ -121,12 +124,21 @@ class FakeVerificationAgent:
             resume_issues=[],
         )
 
+    def review_ats_keyword(self, docs, job, career):
+        return ATSKeywordResult(alignment_score="strong")
+
+    def review_consistency(self, docs):
+        return ConsistencyResult(consistent=True)
+
+    def review_grammar(self, docs):
+        return GrammarResult(clean=True)
+
 
 class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None):
         self.unified_calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
@@ -313,6 +325,19 @@ class AlwaysPassVerificationAgent:
             summary="Good candidate.",
         )
 
+    def review_relevance_pruning(self, docs, job):
+        from resume_refinery.models import RelevancePruningResult
+        return RelevancePruningResult(overall_density="lean", cover_letter_issues=[], resume_issues=[])
+
+    def review_ats_keyword(self, docs, job, career):
+        return ATSKeywordResult(alignment_score="strong")
+
+    def review_consistency(self, docs):
+        return ConsistencyResult(consistent=True)
+
+    def review_grammar(self, docs):
+        return GrammarResult(clean=True)
+
     def review_all(self, docs, career, voice, job):
         return ReviewBundle(
             truthfulness=self.review_truthfulness(docs, career, job),
@@ -423,7 +448,7 @@ class AcceptsAIPhraseRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
 

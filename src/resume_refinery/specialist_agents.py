@@ -15,12 +15,15 @@ from dotenv import load_dotenv
 from .agent import ResumeRefineryAgent
 from .models import (
     AIDetectionResult,
+    ATSKeywordResult,
     CareerProfile,
+    ConsistencyResult,
     DocumentKey,
     DocumentSet,
     DraftingContext,
     EvidenceItem,
     EvidencePack,
+    GrammarResult,
     HiringManagerReview,
     JobDescription,
     JobRequirement,
@@ -471,6 +474,15 @@ class VerificationAgent:
     def review_relevance_pruning(self, docs: DocumentSet, job: JobDescription) -> RelevancePruningResult:
         return self.reviewer.review_relevance_pruning(docs, job)
 
+    def review_ats_keyword(self, docs: DocumentSet, job: JobDescription, career: CareerProfile) -> ATSKeywordResult:
+        return self.reviewer.review_ats_keyword(docs, job, career)
+
+    def review_consistency(self, docs: DocumentSet) -> ConsistencyResult:
+        return self.reviewer.review_consistency(docs)
+
+    def review_grammar(self, docs: DocumentSet) -> GrammarResult:
+        return self.reviewer.review_grammar(docs)
+
 
 class RepairAgent:
     """Produces surgical find/replace edits and applies them programmatically."""
@@ -496,6 +508,9 @@ class RepairAgent:
         feedback: str | None = None,
         hm_review: HiringManagerReview | None = None,
         pruning_review: RelevancePruningResult | None = None,
+        ats_review: ATSKeywordResult | None = None,
+        consistency_review: ConsistencyResult | None = None,
+        grammar_review: GrammarResult | None = None,
     ) -> RepairPassResult:
         """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
@@ -507,10 +522,14 @@ class RepairAgent:
         all_accepted_voice_issues: list[str] = []
         all_accepted_hm_issues: list[str] = []
         all_accepted_pruning_issues: list[str] = []
+        all_accepted_ats_issues: list[str] = []
+        all_accepted_consistency_issues: list[str] = []
+        all_accepted_grammar_issues: list[str] = []
 
         def _plan_for_key(key: str) -> tuple[str, list[dict], dict[str, list[str]]] | None:
             review_findings = self._build_review_findings(
                 key, truth, voice_review, ai_review, feedback, hm_review, pruning_review,
+                ats_review, consistency_review, grammar_review,
             )
             if not review_findings:
                 return None
@@ -543,14 +562,20 @@ class RepairAgent:
             all_accepted_voice_issues.extend(acceptances.get("accepted_voice_issues", []))
             all_accepted_hm_issues.extend(acceptances.get("accepted_hm_issues", []))
             all_accepted_pruning_issues.extend(acceptances.get("accepted_pruning_issues", []))
+            all_accepted_ats_issues.extend(acceptances.get("accepted_ats_issues", []))
+            all_accepted_consistency_issues.extend(acceptances.get("accepted_consistency_issues", []))
+            all_accepted_grammar_issues.extend(acceptances.get("accepted_grammar_issues", []))
             logging.debug(
-                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d/%d accepted (claims/ai/voice/hm/pruning)",
+                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d/%d/%d/%d/%d accepted (claims/ai/voice/hm/pruning/ats/consistency/grammar)",
                 key, len(edits),
                 len(acceptances.get("accepted_claims", [])),
                 len(acceptances.get("accepted_ai_phrases", [])),
                 len(acceptances.get("accepted_voice_issues", [])),
                 len(acceptances.get("accepted_hm_issues", [])),
                 len(acceptances.get("accepted_pruning_issues", [])),
+                len(acceptances.get("accepted_ats_issues", [])),
+                len(acceptances.get("accepted_consistency_issues", [])),
+                len(acceptances.get("accepted_grammar_issues", [])),
             )
             if edits:
                 for i, e in enumerate(edits):
@@ -578,6 +603,9 @@ class RepairAgent:
             accepted_voice_issues=all_accepted_voice_issues,
             accepted_hm_issues=all_accepted_hm_issues,
             accepted_pruning_issues=all_accepted_pruning_issues,
+            accepted_ats_issues=all_accepted_ats_issues,
+            accepted_consistency_issues=all_accepted_consistency_issues,
+            accepted_grammar_issues=all_accepted_grammar_issues,
         )
 
     # ------------------------------------------------------------------
@@ -622,8 +650,11 @@ class RepairAgent:
                     "accepted_voice_issues":  {"type": "array", "items": {"type": "string"}},
                     "accepted_hm_issues":     {"type": "array", "items": {"type": "string"}},
                     "accepted_pruning_issues":{"type": "array", "items": {"type": "string"}},
+                    "accepted_ats_issues":    {"type": "array", "items": {"type": "string"}},
+                    "accepted_consistency_issues":{"type": "array", "items": {"type": "string"}},
+                    "accepted_grammar_issues":{"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues"],
+                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_consistency_issues", "accepted_grammar_issues"],
             },
             options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS * 2},
         )
@@ -631,16 +662,16 @@ class RepairAgent:
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
         if not raw:
             logging.warning("Repair LLM returned empty content")
-            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": []}
+            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_consistency_issues": [], "accepted_grammar_issues": []}
         raw = _normalize_llm_json(raw)
         _empty: dict[str, list[str]] = {
-            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": []
+            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_consistency_issues": [], "accepted_grammar_issues": []
         }
 
         def _extract_acceptances(d: dict) -> dict[str, list[str]]:
             return {
                 k: [x for x in d.get(k, []) if isinstance(x, str)]
-                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues")
+                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_consistency_issues", "accepted_grammar_issues")
             }
 
         try:
@@ -695,6 +726,9 @@ class RepairAgent:
         feedback: str | None,
         hm_review: HiringManagerReview | None = None,
         pruning_review: RelevancePruningResult | None = None,
+        ats_review: ATSKeywordResult | None = None,
+        consistency_review: ConsistencyResult | None = None,
+        grammar_review: GrammarResult | None = None,
     ) -> str:
         """Return a human-readable summary of review findings for *key*.
 
@@ -815,6 +849,68 @@ class RepairAgent:
                     + "\n".join(
                         f'- "{i.phrase}" — {i.reason} (category: {i.category}, severity: {i.severity})'
                         for i in doc_pruning_issues
+                    )
+                )
+
+        # --- ATS keyword alignment (resume only) ---
+        if ats_review and key == "resume":
+            ats_issues = ats_review.missing_keywords + ats_review.stuffing_keywords
+            if ats_issues:
+                has_issues = True
+                logging.debug(
+                    "[repair:%s] ats-keyword: %d issue(s) — passing ALL to repair",
+                    key, len(ats_issues),
+                )
+                parts.append(
+                    "ATS KEYWORD — Alignment issues:\n"
+                    + "\n".join(
+                        f'- [{i.issue_type.upper()}] "{i.keyword}" — section: {i.section}. Suggestion: {i.suggestion}'
+                        for i in ats_issues
+                    )
+                )
+
+        # --- Cross-document consistency (all documents) ---
+        if consistency_review and consistency_review.issues:
+            # Only include issues where this document is involved
+            doc_consistency_issues = [
+                i for i in consistency_review.issues
+                if i.document_a == key or i.document_b == key
+            ]
+            if doc_consistency_issues:
+                has_issues = True
+                logging.debug(
+                    "[repair:%s] consistency: %d issue(s) — passing ALL to repair",
+                    key, len(doc_consistency_issues),
+                )
+                lines = []
+                for i in doc_consistency_issues:
+                    lines.append(
+                        f'- {i.field}: "{i.quote_a}" (in {i.document_a}) vs "{i.quote_b}" (in {i.document_b}) — severity: {i.severity}'
+                    )
+                parts.append(
+                    "CROSS-DOCUMENT CONSISTENCY — Contradictions involving this document:\n"
+                    + "\n".join(lines)
+                )
+
+        # --- Grammar & mechanics ---
+        if grammar_review and key in ("cover_letter", "resume", "interview_guide"):
+            doc_grammar_map = {
+                "cover_letter": grammar_review.cover_letter_issues,
+                "resume": grammar_review.resume_issues,
+                "interview_guide": grammar_review.interview_guide_issues,
+            }
+            doc_grammar_issues = doc_grammar_map.get(key, [])
+            if doc_grammar_issues:
+                has_issues = True
+                logging.debug(
+                    "[repair:%s] grammar: %d issue(s) — passing ALL to repair",
+                    key, len(doc_grammar_issues),
+                )
+                parts.append(
+                    "GRAMMAR & MECHANICS — Issues (verbatim from document):\n"
+                    + "\n".join(
+                        f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion} (category: {i.category})'
+                        for i in doc_grammar_issues
                     )
                 )
 

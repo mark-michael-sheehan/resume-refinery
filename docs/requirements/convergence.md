@@ -30,6 +30,10 @@ ensure convergence.
 | CR-3.3 | Truthfulness: `pass_strict=True` is required on every pass. No relaxation. |
 | CR-3.4 | Interview guide is exempt from voice and AI-detection reviews (it is personal preparation, not a submitted document). |
 | CR-3.5 | Hiring-manager review is advisory only — it feeds findings into the repair agent but NEVER blocks convergence. This prevents feedback loops where the HM asks for bolder claims that the truthfulness reviewer then rejects. |
+| CR-3.6 | Relevance-pruning review is advisory only — it feeds findings into the repair agent but NEVER blocks convergence. |
+| CR-3.7 | ATS keyword alignment: "strong" or "moderate" `alignment_score` is accepted. "weak" blocks convergence and triggers repair. |
+| CR-3.8 | Cross-document consistency: `consistent=True` is accepted. Any contradictions (`consistent=False`) block convergence and trigger repair. |
+| CR-3.9 | Grammar & mechanics: on passes before `RELAXED_PASS_START`, `clean=True` is required (zero issues). From `RELAXED_PASS_START` onward, total issues ≤ 2 is accepted. |
 
 ## CR-4 Feedback Hygiene
 
@@ -59,10 +63,10 @@ ensure convergence.
 
 | ID | Requirement |
 |---|---|
-| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of four per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice), `accepted_hm_issues` (hiring manager). |
-| CR-7.2 | The orchestrator maintains four independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
-| CR-7.3 | Before each pass's gate check and repair call, raw reviewer results are filtered through the corresponding suppression set. Suppressed items are removed from flag/issue/claim lists; truthfulness `pass_strict` and `all_supported` are recalculated; AI `risk_level` is recalculated from the remaining flag count. Voice match levels are preserved as-is (they reflect holistic LLM judgment, not issue count). |
+| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of seven per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice), `accepted_hm_issues` (hiring manager), `accepted_pruning_issues` (relevance pruning), `accepted_ats_issues` (ATS keyword), `accepted_consistency_issues` (consistency), `accepted_grammar_issues` (grammar). |
+| CR-7.2 | The orchestrator maintains seven independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
+| CR-7.3 | Before each pass's gate check and repair call, raw reviewer results are filtered through the corresponding suppression set. Suppressed items are removed from flag/issue/claim lists; truthfulness `pass_strict` and `all_supported` are recalculated; AI `risk_level` is recalculated from the remaining flag count; ATS `alignment_score` is recalculated from remaining missing/stuffing keywords; consistency `consistent` is recalculated from remaining issues; grammar `clean` is recalculated from remaining issue counts. Voice match levels are preserved as-is (they reflect holistic LLM judgment, not issue count). |
 | CR-7.4 | A phrase accepted in any pass is suppressed for all subsequent passes in the same run. Suppression sets do not persist beyond a single `create_session_run` or `refine_session_run` call. |
 | CR-7.5 | Each reviewer's suppression set is independent — accepting a voice false positive cannot suppress a truthfulness or AI-detection finding (and vice versa). |
 | CR-7.6 | Whenever the repair agent adds items to any acceptance list, the orchestrator emits an explicit progress message naming each accepted phrase/claim/issue and the reviewer it came from, before proceeding to the next pass. |
-| CR-7.7 | At the end of each `create_session_run` or `refine_session_run` call, if any items were exempted, the cumulative suppression sets are persisted to `exempted_phrases.json` in the active version directory as an `ExemptedPhrases` model (fields: `claims`, `ai_phrases`, `voice_issues`, `hm_issues`). No file is written when no items were exempted. |
+| CR-7.7 | At the end of each `create_session_run` or `refine_session_run` call, if any items were exempted, the cumulative suppression sets are persisted to `exempted_phrases.json` in the active version directory as an `ExemptedPhrases` model (fields: `claims`, `ai_phrases`, `voice_issues`, `hm_issues`, `pruning_issues`, `ats_issues`, `consistency_issues`, `grammar_issues`). No file is written when no items were exempted. |
