@@ -253,6 +253,18 @@ Only written when the repair agent accepted at least one item as a false positiv
 **Bounded agentic design:** Specialist agents are role-constrained and never control
 the global workflow. The orchestrator owns step order, retries, and persistence.
 
+**Compact career context for drafting:** The DraftingAgent receives a compact career
+summary (identity, role timeline, technologies, anti-claims, education, certifications,
+skills, story titles, and strategic meta) rather than the full career profile. Role
+narratives are omitted since the EvidencePack already captures matched evidence. This
+frees token budget for richer evidence. Reviewers and the RepairAgent still receive the
+full career profile independently for fact-checking.
+
+**Evidence extraction limits:** The EvidenceAgent extracts up to 15 job requirements
+(from the LLM or keyword fallback) and matches up to 5 evidence items per requirement.
+All matched evidence, requirements, and gaps are forwarded to the DraftingAgent with no
+further display-level caps.
+
 **Intermediate artifacts for explainability:** `EvidencePack` and `VoiceStyleGuide`
 are explicit artifacts that can be inspected in the UI and reasoned about in reviews.
 

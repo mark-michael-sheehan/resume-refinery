@@ -110,7 +110,7 @@ class EvidenceAgent:
                     gaps.append(req_text)
 
         career_lines = self._career_lines(career.raw_content)
-        summary = [line for line in career_lines if len(line) > 20][:8]
+        summary = [line for line in career_lines if len(line) > 20][:15]
         return EvidencePack(
             job_requirements=requirements,
             matched_evidence=matched,
@@ -134,7 +134,7 @@ class EvidenceAgent:
         if not isinstance(data, list):
             raise ValueError(f"Expected JSON array, got {type(data).__name__}")
         requirements: list[JobRequirement] = []
-        for item in data[:10]:
+        for item in data[:15]:
             if isinstance(item, dict) and "requirement" in item:
                 category = item.get("category", "other")
                 if category not in ("skill", "experience", "leadership", "domain", "other"):
@@ -177,7 +177,7 @@ class EvidenceAgent:
                 if line.lower().startswith("company:"):
                     continue
                 requirements.append(JobRequirement(requirement=line, source_excerpt=line))
-        return requirements[:10]
+        return requirements[:15]
 
     def _match_evidence(self, requirement: str, career_content: str) -> list[EvidenceItem]:
         """Match evidence using LLM, falling back to keyword overlap."""
@@ -199,7 +199,7 @@ class EvidenceAgent:
         if not isinstance(data, list):
             raise ValueError(f"Expected JSON array, got {type(data).__name__}")
         items: list[EvidenceItem] = []
-        for entry in data[:3]:
+        for entry in data[:5]:
             if isinstance(entry, dict) and "evidence" in entry:
                 score = entry.get("relevance_score", 3)
                 if not isinstance(score, int) or score < 1 or score > 5:
@@ -225,7 +225,7 @@ class EvidenceAgent:
                 scored.append((overlap, line))
         scored.sort(key=lambda item: (-item[0], -len(item[1])))
         items: list[EvidenceItem] = []
-        for rank, (_, evidence) in enumerate(scored[:3], start=1):
+        for rank, (_, evidence) in enumerate(scored[:5], start=1):
             items.append(
                 EvidenceItem(
                     requirement=requirement,
@@ -395,15 +395,15 @@ class DraftingAgent:
         summary_lines = [
             "## Evidence Pack",
             "**Use the evidence pack below as your PRIMARY source for claims. "
-            "The full career profile is provided only for additional detail.**",
+            "The career summary provides structure, contact details, and constraints only.**",
             "",
-            "### Top Job Requirements",
+            "### Job Requirements",
         ]
-        summary_lines.extend(f"- {item.requirement}" for item in evidence_pack.job_requirements[:8])
+        summary_lines.extend(f"- {item.requirement}" for item in evidence_pack.job_requirements)
 
         # Sort matched evidence by relevance score descending
         sorted_evidence = sorted(
-            evidence_pack.matched_evidence[:12],
+            evidence_pack.matched_evidence,
             key=lambda e: e.relevance_score,
             reverse=True,
         )
@@ -416,16 +416,69 @@ class DraftingAgent:
             )
         if evidence_pack.gaps:
             summary_lines.append("\n### Potential Gaps")
-            summary_lines.extend(f"- {gap}" for gap in evidence_pack.gaps[:6])
+            summary_lines.extend(f"- {gap}" for gap in evidence_pack.gaps)
             summary_lines.append(
                 "\n**Important**: The gaps above are requirements from the job description "
                 "that have no direct evidence in the career profile. Do NOT fabricate "
                 "experience to cover them. Either omit them or frame related transferable "
                 "skills honestly."
             )
-        summary_lines.append("\n### Full Career Profile")
-        summary_lines.append(career.raw_content)
+        summary_lines.append("\n### Career Summary (structure & constraints)")
+        summary_lines.append(self._compact_career_summary(career))
         return career.model_copy(update={"raw_content": "\n".join(summary_lines)})
+
+    def _compact_career_summary(self, career: CareerProfile) -> str:
+        """Build a compact career summary for the drafting prompt.
+
+        Retains identity/contact, role timeline (titles/dates/tech only),
+        education, certifications, skills, domain knowledge, story titles,
+        and strategic meta (anti-claims, gaps, differentiators).
+        Drops verbose role narratives already captured in the evidence pack.
+        """
+        raw = career.raw_content
+        section_pattern = re.compile(r"^(## .+)$", re.MULTILINE)
+        parts = section_pattern.split(raw)
+
+        sections: list[tuple[str, str]] = [("_header", parts[0])]
+        for i in range(1, len(parts), 2):
+            heading = parts[i]
+            content = parts[i + 1] if i + 1 < len(parts) else ""
+            sections.append((heading, content))
+
+        compact: list[str] = []
+        for heading, content in sections:
+            if heading == "_header":
+                compact.append(content.strip())
+            elif "Work Experience" in heading:
+                compact.append(f"\n{heading}")
+                compact.append("*(Narratives omitted — see Evidence Pack for details)*")
+                in_anti = False
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("### "):
+                        in_anti = False
+                        compact.append(stripped)
+                    elif stripped.startswith("**Technologies:**"):
+                        in_anti = False
+                        compact.append(stripped)
+                    elif stripped.startswith("**Do NOT claim:**"):
+                        in_anti = True
+                        compact.append(stripped)
+                    elif in_anti and stripped and not stripped.startswith("**") and stripped != "---":
+                        compact.append(stripped)
+                    elif stripped.startswith("**"):
+                        in_anti = False
+            elif "Key Stories" in heading:
+                compact.append(f"\n{heading}")
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("### ") or stripped.startswith("Tags:") or stripped.startswith("**What this shows:**"):
+                        compact.append(stripped)
+            else:
+                compact.append(f"\n{heading}")
+                compact.append(content.rstrip())
+
+        return "\n".join(compact)
 
     def _voice_context(self, voice: VoiceProfile, guide: VoiceStyleGuide) -> VoiceProfile:
         lines = ["## Distilled Voice Guide"]

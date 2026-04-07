@@ -122,22 +122,22 @@ def test_evidence_agent_source_summary(career_profile, job_description):
 
 
 def test_evidence_agent_limits_requirements():
-    """LLM extraction already caps at 10 via [:10] slice."""
+    """LLM extraction caps at 15 via [:15] slice."""
     from resume_refinery.models import CareerProfile, JobDescription
-    lines = "\n".join(f"- Required: skill_{i} experience" for i in range(20))
+    lines = "\n".join(f"- Required: skill_{i} experience" for i in range(25))
     job = JobDescription(raw_content=f"# Job\n{lines}", title="Job", company="Co")
     career = CareerProfile(raw_content="# Name\nDoes things.")
-    # Return 15 requirements from LLM — slice should cap at 10
-    big_reqs = json.dumps([{"requirement": f"skill_{i}", "category": "skill"} for i in range(15)])
+    # Return 20 requirements from LLM — slice should cap at 15
+    big_reqs = json.dumps([{"requirement": f"skill_{i}", "category": "skill"} for i in range(20)])
     mock_client = MagicMock()
-    # First call = extraction; subsequent calls = evidence matching (10 calls for 10 reqs)
+    # First call = extraction; subsequent calls = evidence matching (15 calls for 15 reqs)
     mock_client.chat.side_effect = [_make_llm_resp(big_reqs)] + [
-        _make_llm_resp(json.dumps([])) for _ in range(10)
+        _make_llm_resp(json.dumps([])) for _ in range(15)
     ]
     agent = EvidenceAgent(client=mock_client)
     pack = agent.build_evidence_pack(career, job)
 
-    assert len(pack.job_requirements) <= 10
+    assert len(pack.job_requirements) <= 15
 
 
 # ---------------------------------------------------------------------------

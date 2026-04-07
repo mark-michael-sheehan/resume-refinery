@@ -425,7 +425,7 @@ Rules:
 - Include years-of-experience or seniority requirements.
 - Include domain knowledge (e.g. fintech, healthcare).
 - Deduplicate — don't list the same requirement twice.
-- Limit to the 10 most important requirements, ordered by importance.
+- Limit to the 15 most important requirements, ordered by importance.
 
 Return JSON only — no markdown fences, no explanation.
 """
@@ -443,7 +443,7 @@ EVIDENCE_MATCHING_USER_TEMPLATE = """## Requirement
 {career_profile}
 
 ## Task
-Find the top 3 most relevant pieces of evidence from the career profile that demonstrate \
+Find the top 5 most relevant pieces of evidence from the career profile that demonstrate \
 the candidate meets the requirement above. Return a JSON array of objects:
 [
   {{
