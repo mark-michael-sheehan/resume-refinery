@@ -359,6 +359,24 @@ class TruthfulnessResult(BaseModel):
     interview_guide: DocumentTruthResult
 
 
+class RelevancePruningIssue(BaseModel):
+    """A single content item flagged for potential removal."""
+
+    document: Literal["resume", "cover_letter"]
+    phrase: str = Field(description="Verbatim quote from the document to consider removing")
+    reason: str = Field(description="Why this content does not add to the story")
+    category: Literal["redundant", "irrelevant", "filler", "low_impact", "space_waste"] = "filler"
+    severity: Literal["high", "medium", "low"] = "medium"
+
+
+class RelevancePruningResult(BaseModel):
+    """Result of relevance pruning review on the full application package."""
+
+    overall_density: Literal["lean", "balanced", "bloated"] = "balanced"
+    cover_letter_issues: list[RelevancePruningIssue] = Field(default_factory=list)
+    resume_issues: list[RelevancePruningIssue] = Field(default_factory=list)
+
+
 class HiringManagerImprovementItem(BaseModel):
     """A single improvement suggestion from the hiring manager review."""
 
@@ -401,6 +419,7 @@ class ReviewBundle(BaseModel):
     ai_detection: Optional[AIDetectionResult] = None
     truthfulness: Optional[TruthfulnessResult] = None
     hiring_manager: Optional[HiringManagerReview] = None
+    relevance_pruning: Optional[RelevancePruningResult] = None
 
 
 class RepairEdit(BaseModel):
@@ -418,6 +437,7 @@ class RepairPassResult(BaseModel):
     accepted_ai_phrases: StrList = Field(default_factory=list)
     accepted_voice_issues: StrList = Field(default_factory=list)
     accepted_hm_issues: StrList = Field(default_factory=list)
+    accepted_pruning_issues: StrList = Field(default_factory=list)
 
 
 class ExemptedPhrases(BaseModel):
@@ -437,6 +457,10 @@ class ExemptedPhrases(BaseModel):
     hm_issues: StrList = Field(
         default_factory=list,
         description="Hiring-manager issues accepted as reviewer false positives",
+    )
+    pruning_issues: StrList = Field(
+        default_factory=list,
+        description="Relevance-pruning issues accepted as reviewer false positives",
     )
 
 

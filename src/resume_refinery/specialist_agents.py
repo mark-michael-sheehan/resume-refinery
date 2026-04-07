@@ -24,6 +24,7 @@ from .models import (
     HiringManagerReview,
     JobDescription,
     JobRequirement,
+    RelevancePruningResult,
     RepairEdit,
     RepairPassResult,
     ReviewBundle,
@@ -467,6 +468,9 @@ class VerificationAgent:
     def review_hiring_manager(self, docs: DocumentSet, job: JobDescription) -> HiringManagerReview:
         return self.reviewer.review_hiring_manager(docs, job)
 
+    def review_relevance_pruning(self, docs: DocumentSet, job: JobDescription) -> RelevancePruningResult:
+        return self.reviewer.review_relevance_pruning(docs, job)
+
 
 class RepairAgent:
     """Produces surgical find/replace edits and applies them programmatically."""
@@ -491,6 +495,7 @@ class RepairAgent:
         context: DraftingContext,
         feedback: str | None = None,
         hm_review: HiringManagerReview | None = None,
+        pruning_review: RelevancePruningResult | None = None,
     ) -> RepairPassResult:
         """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
@@ -501,10 +506,11 @@ class RepairAgent:
         all_accepted_ai_phrases: list[str] = []
         all_accepted_voice_issues: list[str] = []
         all_accepted_hm_issues: list[str] = []
+        all_accepted_pruning_issues: list[str] = []
 
         def _plan_for_key(key: str) -> tuple[str, list[dict], dict[str, list[str]]] | None:
             review_findings = self._build_review_findings(
-                key, truth, voice_review, ai_review, feedback, hm_review,
+                key, truth, voice_review, ai_review, feedback, hm_review, pruning_review,
             )
             if not review_findings:
                 return None
@@ -536,13 +542,15 @@ class RepairAgent:
             all_accepted_ai_phrases.extend(acceptances.get("accepted_ai_phrases", []))
             all_accepted_voice_issues.extend(acceptances.get("accepted_voice_issues", []))
             all_accepted_hm_issues.extend(acceptances.get("accepted_hm_issues", []))
+            all_accepted_pruning_issues.extend(acceptances.get("accepted_pruning_issues", []))
             logging.debug(
-                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d accepted (claims/ai/voice/hm)",
+                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d/%d accepted (claims/ai/voice/hm/pruning)",
                 key, len(edits),
                 len(acceptances.get("accepted_claims", [])),
                 len(acceptances.get("accepted_ai_phrases", [])),
                 len(acceptances.get("accepted_voice_issues", [])),
                 len(acceptances.get("accepted_hm_issues", [])),
+                len(acceptances.get("accepted_pruning_issues", [])),
             )
             if edits:
                 for i, e in enumerate(edits):
@@ -569,6 +577,7 @@ class RepairAgent:
             accepted_ai_phrases=all_accepted_ai_phrases,
             accepted_voice_issues=all_accepted_voice_issues,
             accepted_hm_issues=all_accepted_hm_issues,
+            accepted_pruning_issues=all_accepted_pruning_issues,
         )
 
     # ------------------------------------------------------------------
@@ -580,9 +589,9 @@ class RepairAgent:
 
         edits: list of {find, replace, reason} dicts.
         acceptances: dict with keys accepted_claims, accepted_ai_phrases,
-            accepted_voice_issues, accepted_hm_issues — verbatim phrases the
-            repairer determined are reviewer false positives that should be
-            suppressed going forward.
+            accepted_voice_issues, accepted_hm_issues, accepted_pruning_issues
+            — verbatim phrases the repairer determined are reviewer false
+            positives that should be suppressed going forward.
         """
         from .reviewers import _normalize_llm_json
 
@@ -608,12 +617,13 @@ class RepairAgent:
                             "required": ["find", "replace"],
                         },
                     },
-                    "accepted_claims":       {"type": "array", "items": {"type": "string"}},
-                    "accepted_ai_phrases":   {"type": "array", "items": {"type": "string"}},
-                    "accepted_voice_issues": {"type": "array", "items": {"type": "string"}},
-                    "accepted_hm_issues":    {"type": "array", "items": {"type": "string"}},
+                    "accepted_claims":        {"type": "array", "items": {"type": "string"}},
+                    "accepted_ai_phrases":    {"type": "array", "items": {"type": "string"}},
+                    "accepted_voice_issues":  {"type": "array", "items": {"type": "string"}},
+                    "accepted_hm_issues":     {"type": "array", "items": {"type": "string"}},
+                    "accepted_pruning_issues":{"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues"],
+                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues"],
             },
             options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS * 2},
         )
@@ -621,16 +631,16 @@ class RepairAgent:
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
         if not raw:
             logging.warning("Repair LLM returned empty content")
-            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": []}
+            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": []}
         raw = _normalize_llm_json(raw)
         _empty: dict[str, list[str]] = {
-            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": []
+            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": []
         }
 
         def _extract_acceptances(d: dict) -> dict[str, list[str]]:
             return {
                 k: [x for x in d.get(k, []) if isinstance(x, str)]
-                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues")
+                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues")
             }
 
         try:
@@ -684,6 +694,7 @@ class RepairAgent:
         ai_review: AIDetectionResult | None,
         feedback: str | None,
         hm_review: HiringManagerReview | None = None,
+        pruning_review: RelevancePruningResult | None = None,
     ) -> str:
         """Return a human-readable summary of review findings for *key*.
 
@@ -784,6 +795,26 @@ class RepairAgent:
                     + "\n".join(
                         f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
                         for i in doc_issues
+                    )
+                )
+
+        # --- Relevance pruning (cover letter and resume only) ---
+        if pruning_review and key in ("cover_letter", "resume"):
+            doc_pruning_issues = (
+                pruning_review.cover_letter_issues if key == "cover_letter"
+                else pruning_review.resume_issues
+            )
+            if doc_pruning_issues:
+                has_issues = True
+                logging.debug(
+                    "[repair:%s] relevance-pruning: %d issue(s) — passing ALL to repair",
+                    key, len(doc_pruning_issues),
+                )
+                parts.append(
+                    "RELEVANCE PRUNING — Content flagged for removal (verbatim from document):\n"
+                    + "\n".join(
+                        f'- "{i.phrase}" — {i.reason} (category: {i.category}, severity: {i.severity})'
+                        for i in doc_pruning_issues
                     )
                 )
 

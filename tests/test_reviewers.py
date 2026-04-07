@@ -9,6 +9,7 @@ from resume_refinery.models import (
     AIDetectionResult,
     DocumentSet,
     HiringManagerReview,
+    RelevancePruningResult,
     TruthfulnessResult,
     VoiceReviewResult,
 )
@@ -519,4 +520,130 @@ def test_voice_review_stores_per_doc_issues(mock_client_cls, document_set, voice
     assert result.resume_issues == []
     # Aggregated fields contain only CL + Resume items
     assert "opener too formal" in result.specific_issues
+
+
+# ---------------------------------------------------------------------------
+# review_relevance_pruning
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_relevance_pruning_returns_result(mock_client_cls, document_set, job_description):
+    cl_payload = json.dumps({
+        "overall_density": "balanced",
+        "removal_candidates": [
+            {
+                "phrase": "I've spent five years building",
+                "reason": "Filler opening with no concrete info",
+                "category": "filler",
+                "severity": "medium",
+            },
+        ],
+    })
+    resume_payload = json.dumps({
+        "overall_density": "bloated",
+        "removal_candidates": [
+            {
+                "phrase": "Senior Engineer",
+                "reason": "Old role with no JD relevance",
+                "category": "space_waste",
+                "severity": "high",
+            },
+            {
+                "phrase": "jordan@example.com",
+                "reason": "Redundant contact line",
+                "category": "redundant",
+                "severity": "low",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_mock_response(cl_payload),
+        _make_mock_response(resume_payload),
+    ]
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_relevance_pruning(document_set, job_description)
+
+    assert isinstance(result, RelevancePruningResult)
+    # Worst-of density: bloated > balanced
+    assert result.overall_density == "bloated"
+    assert len(result.cover_letter_issues) == 1
+    assert result.cover_letter_issues[0].phrase == "I've spent five years building"
+    assert result.cover_letter_issues[0].category == "filler"
+    assert result.cover_letter_issues[0].document == "cover_letter"
+    assert len(result.resume_issues) == 2
+    assert result.resume_issues[0].severity == "high"
+    assert result.resume_issues[1].category == "redundant"
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_relevance_pruning_skips_missing_docs(mock_client_cls, job_description):
+    docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide=None)
+    payload = json.dumps({
+        "overall_density": "lean",
+        "removal_candidates": [],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_relevance_pruning(docs, job_description)
+
+    assert result.overall_density == "lean"
+    assert mock_client.chat.call_count == 1  # Only resume reviewed
+    assert result.cover_letter_issues == []
+    assert result.resume_issues == []
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_relevance_pruning_worst_of_density(mock_client_cls, document_set, job_description):
+    """Overall density should be the worst (maximum) across docs."""
+    lean = json.dumps({"overall_density": "lean", "removal_candidates": []})
+    bloated = json.dumps({
+        "overall_density": "bloated",
+        "removal_candidates": [
+            {"phrase": "some phrase", "reason": "filler", "category": "filler", "severity": "low"},
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_mock_response(lean),       # cover letter
+        _make_mock_response(bloated),    # resume
+    ]
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_relevance_pruning(document_set, job_description)
+
+    assert result.overall_density == "bloated"
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_relevance_pruning_invalid_values_default(mock_client_cls, document_set, job_description):
+    """Invalid category/severity/density values default to safe values."""
+    payload = json.dumps({
+        "overall_density": "unknown",
+        "removal_candidates": [
+            {
+                "phrase": "some phrase",
+                "reason": "filler",
+                "category": "nonexistent_category",
+                "severity": "critical",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_relevance_pruning(document_set, job_description)
+
+    assert result.overall_density == "balanced"  # unknown → default
+    assert result.cover_letter_issues[0].category == "filler"  # nonexistent → default
+    assert result.cover_letter_issues[0].severity == "medium"  # critical → default
 

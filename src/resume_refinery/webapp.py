@@ -164,6 +164,30 @@ def _hiring_manager_summary(hm) -> str:
     return "".join(parts)
 
 
+def _relevance_pruning_summary(pruning) -> str:
+    if not pruning:
+        return "<p class='muted'>No relevance-pruning review available.</p>"
+    density = pruning.overall_density
+    klass = "ok" if density == "lean" else "muted" if density == "balanced" else "bad"
+    total = len(pruning.cover_letter_issues) + len(pruning.resume_issues)
+    parts = [
+        f"<p>Overall density: <span class='{klass}' style='font-size:1.1em'>{html.escape(density)}</span>"
+        f" ({total} removal candidate{'s' if total != 1 else ''})</p>",
+    ]
+    for label, issues in [("Cover Letter", pruning.cover_letter_issues), ("Resume", pruning.resume_issues)]:
+        if issues:
+            parts.append(f"<h3>{label}</h3><ul>")
+            for issue in issues:
+                impact_badge = {"high": "bad", "medium": "muted", "low": "muted"}[issue.severity]
+                parts.append(
+                    f"<li><span class='{impact_badge}'>[{html.escape(issue.severity.upper())}]</span> "
+                    f"<strong>{html.escape(issue.category)}</strong>: "
+                    f"&ldquo;{html.escape(issue.phrase[:120])}&rdquo; &mdash; {html.escape(issue.reason)}</li>"
+                )
+            parts.append("</ul>")
+    return "".join(parts)
+
+
 def _artifact_summary(context: DraftingContext | None) -> str:
     evidence = context.evidence_pack if context else None
     style = context.voice_style_guide if context else None
@@ -478,6 +502,10 @@ def show_session(session_id: str) -> HTMLResponse:
 <div class=\"card\">
   <h2>Hiring Manager Review</h2>
   {_hiring_manager_summary(reviews.hiring_manager)}
+</div>
+<div class=\"card\">
+  <h2>Relevance Pruning</h2>
+  {_relevance_pruning_summary(reviews.relevance_pruning)}
 </div>
 {_artifact_summary(context)}
 <div class=\"card\">

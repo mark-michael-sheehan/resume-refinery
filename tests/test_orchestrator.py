@@ -113,12 +113,20 @@ class FakeVerificationAgent:
             summary="Decent candidate.",
         )
 
+    def review_relevance_pruning(self, docs, job):
+        from resume_refinery.models import RelevancePruningResult
+        return RelevancePruningResult(
+            overall_density="lean",
+            cover_letter_issues=[],
+            resume_issues=[],
+        )
+
 
 class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None):
         self.unified_calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
@@ -415,7 +423,7 @@ class AcceptsAIPhraseRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
 

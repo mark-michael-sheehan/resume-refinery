@@ -18,6 +18,8 @@ from .models import (
     HiringManagerIssue,
     HiringManagerReview,
     JobDescription,
+    RelevancePruningIssue,
+    RelevancePruningResult,
     ReviewBundle,
     TruthfulnessResult,
     CareerProfile,
@@ -29,6 +31,8 @@ from .prompts import (
     AI_DETECTION_SYSTEM_PROMPT,
     HIRING_MANAGER_REVIEW_SYSTEM_PROMPT,
     HIRING_MANAGER_REVIEW_USER_TEMPLATE,
+    RELEVANCE_PRUNING_DOC_USER_TEMPLATE,
+    RELEVANCE_PRUNING_SYSTEM_PROMPT,
     TRUTHFULNESS_DOC_USER_TEMPLATE,
     TRUTHFULNESS_SYSTEM_PROMPT,
     VOICE_REVIEW_DOC_USER_TEMPLATE,
@@ -315,6 +319,68 @@ class DocumentReviewer:
             strengths=data.get("strengths", []),
             concerns=data.get("concerns", []),
             improvements=improvements,
+            cover_letter_issues=cover_letter_issues,
+            resume_issues=resume_issues,
+        )
+
+    def review_relevance_pruning(
+        self, docs: DocumentSet, job: JobDescription,
+    ) -> RelevancePruningResult:
+        """Identify content that can be removed without weakening the application."""
+        doc_map = [
+            ("Cover Letter", "cover_letter", docs.cover_letter),
+            ("Resume", "resume", docs.resume),
+        ]
+
+        cover_letter_issues: list[RelevancePruningIssue] = []
+        resume_issues: list[RelevancePruningIssue] = []
+        density_scores: list[str] = []
+
+        for doc_type, doc_key, content in doc_map:
+            if not content:
+                continue
+            user_msg = RELEVANCE_PRUNING_DOC_USER_TEMPLATE.format(
+                job_description=job.raw_content,
+                doc_type=doc_type,
+                doc_content=content,
+            )
+            raw = self._call(RELEVANCE_PRUNING_SYSTEM_PROMPT, user_msg)
+            data = json.loads(raw)
+
+            density = data.get("overall_density", "balanced")
+            if density not in ("lean", "balanced", "bloated"):
+                density = "balanced"
+            density_scores.append(density)
+
+            for item in data.get("removal_candidates", []):
+                if not isinstance(item, dict) or "phrase" not in item:
+                    continue
+                category = item.get("category", "filler")
+                if category not in ("redundant", "irrelevant", "filler", "low_impact", "space_waste"):
+                    category = "filler"
+                severity = item.get("severity", "medium")
+                if severity not in ("high", "medium", "low"):
+                    severity = "medium"
+                issue = RelevancePruningIssue(
+                    document=doc_key,
+                    phrase=item["phrase"],
+                    reason=item.get("reason", ""),
+                    category=category,
+                    severity=severity,
+                )
+                if doc_key == "cover_letter":
+                    cover_letter_issues.append(issue)
+                else:
+                    resume_issues.append(issue)
+
+        _DENSITY_RANK = {"lean": 1, "balanced": 2, "bloated": 3}
+        overall_density = (
+            max(density_scores, key=lambda d: _DENSITY_RANK.get(d, 2))
+            if density_scores else "balanced"
+        )
+
+        return RelevancePruningResult(
+            overall_density=overall_density,
             cover_letter_issues=cover_letter_issues,
             resume_issues=resume_issues,
         )

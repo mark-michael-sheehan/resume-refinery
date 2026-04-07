@@ -675,7 +675,7 @@ def test_repair_plan_edits_handles_empty_response():
     edits, acceptances = agent._plan_edits("system", "user")
 
     assert edits == []
-    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": []}
+    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": []}
 
 
 def test_repair_build_review_findings_truthfulness():

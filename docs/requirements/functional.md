@@ -15,7 +15,7 @@
 | FR-2.1 | **Evidence extraction** — The EvidenceAgent analyses the career profile against the job description and produces an `EvidencePack` (matched evidence + gaps). |
 | FR-2.2 | **Voice extraction** — The VoiceAgent analyses the voice profile and produces a `VoiceStyleGuide` used to shape document tone. |
 | FR-2.3 | **Drafting** — The DraftingAgent generates three documents: cover letter, resume, and interview guide. Each document is a separate LLM call using thinking mode. |
-| FR-2.4 | **Verification** — The VerificationAgent runs three independent reviewers (truthfulness, voice match, AI detection) on each document. |
+| FR-2.4 | **Verification** — The VerificationAgent runs five independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning) on each document. |
 | FR-2.5 | **Repair** — The RepairAgent fixes documents that fail verification using surgical find/replace edits (see [convergence.md](convergence.md)). |
 | FR-2.6 | **Iteration** — Verification and repair repeat up to `MAX_REPAIR_PASSES` times or until all documents pass. |
 
@@ -66,3 +66,4 @@
 | FR-6.3 | **AI detection reviewer** — Documents are scanned for phrases that commonly trigger AI-detection tools. Flagged phrases are listed per document. |
 | FR-6.4 | All reviewers use JSON-formatted output, temperature 0, and thinking disabled to maximise determinism. |
 | FR-6.5 | **Hiring-manager reviewer** — After the verification/repair loop completes, a simulated hiring-manager review evaluates the resume and cover letter against the job description. It returns: an `advance_likelihood` percentage (0–100), strengths, concerns, and specific actionable improvement suggestions targeting either the resume or cover letter. The review is displayed on the session detail page in the web app and emitted via the progress callback during generation/refinement. |
+| FR-6.6 | **Relevance-pruning reviewer** — Identifies bullets, sentences, sections, or entire role entries in the resume and cover letter that do not meaningfully strengthen the applicant's case for the target role. Flags content as redundant, irrelevant, filler, low-impact, or space-wasting. Preserves content that demonstrates transferable skills, differentiation, or narrative coherence. Findings feed into the repair loop as advisory deletions (never blocks convergence). |

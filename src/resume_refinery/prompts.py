@@ -473,14 +473,16 @@ choose EXACTLY ONE action:
 
   A. FIX IT   — produce a {find, replace, reason} edit in "edits".
   B. ACCEPT IT — add the verbatim flagged phrase to the matching accepted array:
-       • "accepted_claims"       — truthfulness flag that IS actually supported \
+       • "accepted_claims"         — truthfulness flag that IS actually supported \
 by the Career Profile (reviewer false positive).
-       • "accepted_ai_phrases"   — AI-detector flag for a phrase that is \
+       • "accepted_ai_phrases"     — AI-detector flag for a phrase that is \
 genuinely specific, quantified, and appropriate (reviewer false positive).
-       • "accepted_voice_issues" — voice flag for a phrase that actually \
+       • "accepted_voice_issues"   — voice flag for a phrase that actually \
 matches the Voice Profile correctly (reviewer false positive).
-       • "accepted_hm_issues"    — hiring-manager flag for a phrase that is \
+       • "accepted_hm_issues"      — hiring-manager flag for a phrase that is \
 already effective and needs no change (reviewer false positive).
+       • "accepted_pruning_issues" — relevance-pruning flag for content that \
+actually strengthens the application and should be kept (reviewer false positive).
 
 Only accept a finding when it is clearly a reviewer false positive. When in \
 doubt, fix it. Accepted phrases will not be flagged again in subsequent passes.
@@ -521,6 +523,14 @@ Hiring-manager reviewer rules:
   the connection to the target role — using only facts already in the document.
 - Do NOT invent new achievements, metrics, or experiences.
 
+Relevance-pruning reviewer rules:
+- Each issue quotes content flagged for removal because it does not meaningfully \
+  strengthen the application (redundant, irrelevant, filler, low-impact routine \
+  duties, or space-wasting sections/roles with no bearing on the target JD).
+- Fix by deleting the flagged content (set "replace" to "").
+- If the flagged content actually demonstrates transferable skills, \
+  differentiation, or narrative coherence, ACCEPT it instead of deleting it.
+
 For each finding you choose to FIX, apply this pattern:
 - TRUTHFULNESS issue  → remove or soften the unsupported phrase; do NOT \
   invent replacement facts or copy text from the Career Profile or Job Description.
@@ -531,6 +541,10 @@ For each finding you choose to FIX, apply this pattern:
 - HIRING MANAGER issue → reframe the flagged phrase to show impact, quantify \
   outcomes, or sharpen the connection to the target role — using only facts \
   already present in the document. Do NOT invent new achievements or metrics.
+- RELEVANCE PRUNING issue → delete the flagged content by setting "replace" to \
+  "". If the flagged content is an entire section heading, delete the heading and \
+  all its content. Only accept instead of deleting when the content genuinely \
+  demonstrates transferable skills or differentiation.
 
 EDIT RULES:
 1. Each edit must fix exactly one flagged issue.
@@ -574,10 +588,11 @@ phrase to the matching accepted array). Return a single JSON object:
       "reason": "<which review finding this fixes>"
     }}
   ],
-  "accepted_claims":       ["<verbatim truthfulness-flagged phrase that IS supported>"],
-  "accepted_ai_phrases":   ["<verbatim AI-flagged phrase that is genuinely specific/appropriate>"],
-  "accepted_voice_issues": ["<verbatim voice-flagged phrase that actually matches the Voice Profile>"],
-  "accepted_hm_issues":    ["<verbatim hiring-manager-flagged phrase that is already effective>"]
+  "accepted_claims":        ["<verbatim truthfulness-flagged phrase that IS supported>"],
+  "accepted_ai_phrases":    ["<verbatim AI-flagged phrase that is genuinely specific/appropriate>"],
+  "accepted_voice_issues":  ["<verbatim voice-flagged phrase that actually matches the Voice Profile>"],
+  "accepted_hm_issues":     ["<verbatim hiring-manager-flagged phrase that is already effective>"],
+  "accepted_pruning_issues":["<verbatim pruning-flagged phrase that actually strengthens the application>"]
 }}
 
 Rules:
@@ -701,6 +716,95 @@ Rules:
 - Be specific — reference actual content from the documents, not generic advice.
 - Do not suggest fabricating experience. Improvements should reframe, \
   restructure, or emphasise existing content more effectively.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Relevance pruning review prompts
+# ---------------------------------------------------------------------------
+
+RELEVANCE_PRUNING_SYSTEM_PROMPT = """\
+You are an expert resume strategist who optimizes career documents by identifying \
+content that does not meaningfully strengthen the applicant's case for a specific role. \
+Your goal is to find bullets, claims, sentences, sections, or entire role entries that \
+can be REMOVED because they dilute the narrative rather than advancing it.
+
+You are NOT an editor — you do not rewrite content. You only flag content for removal.
+
+What to flag for removal:
+1. REDUNDANT CONTENT: Bullets that repeat the same accomplishment or skill already \
+   stated more effectively elsewhere in the same document.
+2. IRRELEVANT EXPERIENCE: Bullets about responsibilities or skills with no connection \
+   (direct or transferable) to the target role's requirements.
+3. FILLER CONTENT: Vague statements that add no concrete information — e.g. \
+   "Collaborated with cross-functional teams" with no outcome or context.
+4. LOW-IMPACT DUTIES: Bullets that describe routine responsibilities everyone in \
+   that role would have, with no quantified outcome or distinguishing detail.
+5. SPACE-WASTING SECTIONS: Entire sections or role entries that consume space without \
+   contributing to the story. For example, an older job role whose responsibilities \
+   and accomplishments have little bearing on the target job description may warrant \
+   removal as a whole. When flagging a full section or role, quote the section heading \
+   and first bullet (or opening sentence for cover letter paragraphs) as the "phrase" — \
+   then explain in "reason" that the entire section/role is the removal candidate.
+
+What to NEVER flag for removal:
+- Content that demonstrates TRANSFERABLE SKILLS relevant to the target role \
+  (leadership, architecture, mentoring, cross-team influence) even if the \
+  domain or technology differs.
+- Content that serves DIFFERENTIATION — unusual skill combinations, notable \
+  outcomes, or unconventional career moves that make the applicant memorable.
+- Content required for NARRATIVE COHERENCE — e.g. a sentence that transitions \
+  between paragraphs in a cover letter, even if it carries little information \
+  on its own.
+- Content that preserves MINIMUM SECTION DENSITY — do not flag a bullet for \
+  removal if it would leave a resume section with fewer than 2 bullets.
+- Content that the VOICE PROFILE depends on — characteristic phrases or tone \
+  markers that make the document sound like the applicant.
+"""
+
+
+RELEVANCE_PRUNING_DOC_USER_TEMPLATE = """\
+## Job Description
+{job_description}
+
+## {doc_type}
+{doc_content}
+
+## Task
+Identify content in this {doc_type} that does not meaningfully contribute to \
+the applicant's case for the role described above. Apply the rules from your \
+system prompt strictly.
+
+Return a JSON object with this shape:
+{{
+  "overall_density": "lean" | "balanced" | "bloated",
+  "removal_candidates": [
+    {{
+      "phrase": "<exact verbatim quote from the document>",
+      "reason": "<why this content does not add to the story>",
+      "category": "redundant" | "irrelevant" | "filler" | "low_impact" | "space_waste",
+      "severity": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+Rules:
+- "phrase" must be an EXACT verbatim quote from the document — copy it \
+  character-for-character. For multi-sentence removals, quote the full \
+  passage. For entire sections or role entries, quote the section heading \
+  and first bullet (or opening sentence) as a representative excerpt.
+- Do NOT flag content that demonstrates transferable skills, differentiation, \
+  or narrative coherence — even if it doesn't directly keyword-match the JD.
+- Do NOT flag content if removing it would leave a resume section with \
+  fewer than 2 bullets.
+- overall_density: "lean" = document is already tight, 0-1 removal candidates; \
+  "balanced" = a few items could go, 2-3 candidates; "bloated" = significant \
+  pruning recommended, 4+ candidates.
+- Limit to at most 10 removal candidates, ordered by severity (high first).
+- Be conservative — when in doubt, do NOT flag. A slightly long document is \
+  better than one missing important evidence.
 
 Return JSON only — no markdown fences, no explanation.
 """

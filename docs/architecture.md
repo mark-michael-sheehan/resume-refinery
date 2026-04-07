@@ -21,7 +21,7 @@ voice_profile.md + career_profile.md + job_description.md
   │ EvidenceAgent      -> EvidencePack (requirements + matched evidence) │
   │ VoiceAgent         -> VoiceStyleGuide                                │
   │ DraftingAgent      -> DocumentSet                                    │
-  │ VerificationAgent  -> Truth/Voice/AI/HM review bundle (in loop)     │
+  │ VerificationAgent  -> Truth/Voice/AI/HM/Pruning review bundle (in loop) │
   │ RepairAgent        -> targeted rewrites for unsupported claims      │
   └──────────────────────────────────────────────────────────────────────┘
             │
