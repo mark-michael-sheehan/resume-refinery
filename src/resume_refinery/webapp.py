@@ -124,14 +124,21 @@ def _truth_summary(truth) -> str:
         return "<p class='muted'>No truth review available.</p>"
     status = "PASS" if truth.all_supported else "FAIL"
     klass = "ok" if truth.all_supported else "bad"
-    return (
-        f"<p>Strict truth check: <span class='{klass}'>{status}</span></p>"
-        f"<ul>"
-        f"<li>Cover letter unsupported claims: {len(truth.cover_letter.unsupported_claims)}</li>"
-        f"<li>Resume unsupported claims: {len(truth.resume.unsupported_claims)}</li>"
-        f"<li>Interview guide unsupported claims: {len(truth.interview_guide.unsupported_claims)}</li>"
-        f"</ul>"
-    )
+    parts = [f"<p>Strict truth check: <span class='{klass}'>{status}</span></p>"]
+    for label, doc_result in [
+        ("Cover Letter", truth.cover_letter),
+        ("Resume", truth.resume),
+        ("Interview Guide", truth.interview_guide),
+    ]:
+        claims = doc_result.unsupported_claims
+        if claims:
+            parts.append(f"<h3>{label} — {len(claims)} unsupported claim(s)</h3><ul>")
+            for claim in claims:
+                parts.append(f"<li>&ldquo;{html.escape(claim)}&rdquo;</li>")
+            parts.append("</ul>")
+        else:
+            parts.append(f"<p><strong>{label}</strong>: <span class='ok'>all claims supported</span></p>")
+    return "".join(parts)
 
 
 def _voice_summary(voice) -> str:
