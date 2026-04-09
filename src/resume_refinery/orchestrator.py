@@ -105,7 +105,12 @@ class ResumeRefineryOrchestrator:
                 )
             docs.set(key, text)
 
-        repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
+        # Save documents + context immediately after generation so results
+        # are available on disk before the (potentially long) review loop.
+        session = self.store.save_documents(session, docs)
+        self.store.save_context(session, context)
+        self._export(session, docs, output_dir=output_dir)
+
         if skip_review:
             self._progress(progress, "  Truthfulness review (3 LLM calls)...")
             try:
@@ -117,16 +122,18 @@ class ResumeRefineryOrchestrator:
             repair_passes: list[RepairPassResult] = []
             exempted = ExemptedPhrases()
         else:
+            def _on_repair_pass(p: int, d: DocumentSet, r: ReviewBundle) -> None:
+                self.store.save_repair_pass(session, p, d.model_copy(deep=True), r)
+                self.store.update_documents(session, d)
+                self._export(session, d, output_dir=output_dir)
+
             reviews, repair_passes, exempted = self._verify_and_repair(
                 docs, career, voice, job, context, progress=progress,
-                on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
+                on_repair_pass=_on_repair_pass,
             )
-        session = self.store.save_documents(session, docs)
-        self.store.save_context(session, context)
-        for pass_num, snap, pass_reviews in repair_snapshots:
-            self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
         if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.consistency_issues or exempted.grammar_issues:
             self.store.save_suppressions(session, exempted)
+        # Final export with the fully-repaired documents.
         exported = self._export(session, docs, output_dir=output_dir)
 
         self.store.save_reviews(session, reviews)
@@ -192,7 +199,17 @@ class ResumeRefineryOrchestrator:
                 )
                 current_docs.set(key, regenerated)
 
-        repair_snapshots: list[tuple[int, DocumentSet, ReviewBundle]] = []
+        # Save documents + context immediately after generation so results
+        # are available on disk before the (potentially long) review loop.
+        session = self.store.save_documents(
+            session,
+            current_docs,
+            feedback=feedback,
+            docs_regenerated=[key for key in keys_to_regen if key is not None],
+        )
+        self.store.save_context(session, context)
+        self._export(session, current_docs, output_dir=output_dir)
+
         if skip_review:
             self._progress(progress, "  Truthfulness review (3 LLM calls)...")
             try:
@@ -204,6 +221,11 @@ class ResumeRefineryOrchestrator:
             repair_passes: list[RepairPassResult] = []
             exempted = ExemptedPhrases()
         else:
+            def _on_repair_pass(p: int, d: DocumentSet, r: ReviewBundle) -> None:
+                self.store.save_repair_pass(session, p, d.model_copy(deep=True), r)
+                self.store.update_documents(session, d)
+                self._export(session, d, output_dir=output_dir)
+
             reviews, repair_passes, exempted = self._verify_and_repair(
                 current_docs,
                 career,
@@ -212,19 +234,11 @@ class ResumeRefineryOrchestrator:
                 context,
                 feedback=feedback,
                 progress=progress,
-                on_repair_pass=lambda p, d, r: repair_snapshots.append((p, d.model_copy(deep=True), r)),
+                on_repair_pass=_on_repair_pass,
             )
-        session = self.store.save_documents(
-            session,
-            current_docs,
-            feedback=feedback,
-            docs_regenerated=[key for key in keys_to_regen if key is not None],
-        )
-        self.store.save_context(session, context)
-        for pass_num, snap, pass_reviews in repair_snapshots:
-            self.store.save_repair_pass(session, pass_num, snap, pass_reviews)
         if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.consistency_issues or exempted.grammar_issues:
             self.store.save_suppressions(session, exempted)
+        # Final export with the fully-repaired documents.
         exported = self._export(session, current_docs, output_dir=output_dir)
 
         self.store.save_reviews(session, reviews)

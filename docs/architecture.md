@@ -26,7 +26,14 @@ voice_profile.md + career_profile.md + job_description.md
   └──────────────────────────────────────────────────────────────────────┘
             │
             ▼
-    SessionStore.save_documents() + save_reviews() + DOCX export
+    SessionStore.save_documents() + save_context() + DOCX export
+    (saved immediately after generation, before review loop)
+            │
+            ▼
+    Review + Repair loop (each repair pass updates docs on disk incrementally)
+            │
+            ▼
+    SessionStore.save_reviews() + final DOCX export
             │
             ▼
         Session versions (v1, v2, ...)

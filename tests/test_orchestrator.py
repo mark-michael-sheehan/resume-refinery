@@ -883,3 +883,72 @@ def test_progress_includes_pass_headers(tmp_path, monkeypatch, career_profile, v
     assert "Review Pass 1/" in combined
     # truth_calls = 2 (pass 1 fails, pass 2 passes)
     assert verification.truth_calls == 2
+
+
+# ---------------------------------------------------------------------------
+# Incremental saves: docs + context saved before review loop
+# ---------------------------------------------------------------------------
+
+
+def test_docs_saved_before_review_loop(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Documents and context should be on disk before the review loop starts."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+
+    store = SessionStore()
+    saved_during_review: dict[str, bool] = {}
+
+    class CheckingVerificationAgent(AlwaysPassVerificationAgent):
+        """On the first review call, check that docs already exist on disk."""
+
+        def __init__(self):
+            self.checked = False
+
+        def review_truthfulness(self, docs, career, job):
+            if not self.checked:
+                self.checked = True
+                sessions = store.list_sessions()
+                assert len(sessions) == 1
+                session = sessions[0]
+                loaded = store.load_documents(session)
+                saved_during_review["cover_letter"] = loaded.cover_letter is not None
+                saved_during_review["context"] = store.load_context(session) is not None
+            return super().review_truthfulness(docs, career, job)
+
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=CheckingVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    orchestrator.create_session_run(career_profile, voice_profile, job_description)
+
+    assert saved_during_review.get("cover_letter") is True
+    assert saved_during_review.get("context") is True
+
+
+def test_docs_updated_after_each_repair_pass(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """After each repair pass, updated documents should be written to disk."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=FakeVerificationAgent(),  # pass 1 fails, pass 2 passes → 1 repair
+        repair_agent=FakeRepairAgent(),
+    )
+
+    result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
+
+    # Repair happened and docs on disk should reflect repaired content
+    loaded = store.load_documents(result.session)
+    assert loaded.cover_letter == "cover_letter repaired"
+    assert loaded.resume == "resume repaired"
+
+    # Repair pass snapshot should also exist
+    snap_docs, _ = store.load_repair_pass(result.session, 0)
+    assert snap_docs is not None

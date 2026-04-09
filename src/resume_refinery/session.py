@@ -188,6 +188,18 @@ class SessionStore:
             interview_guide=_read_opt(version_dir / "interview_guide.md"),
         )
 
+    def update_documents(self, session: Session, docs: DocumentSet) -> None:
+        """Overwrite the current version's document files without bumping the version."""
+        version_dir = self.root / session.session_id / f"v{session.current_version}"
+        if docs.cover_letter:
+            (version_dir / "cover_letter.md").write_text(docs.cover_letter, encoding="utf-8")
+        if docs.resume:
+            (version_dir / "resume.md").write_text(docs.resume, encoding="utf-8")
+        if docs.interview_guide:
+            (version_dir / "interview_guide.md").write_text(
+                docs.interview_guide, encoding="utf-8"
+            )
+
     # --- Reviews -----------------------------------------------------------
 
     def save_reviews(self, session: Session, reviews: ReviewBundle) -> Session:

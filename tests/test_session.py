@@ -337,3 +337,26 @@ def test_save_and_load_repair_pass_with_reviews(tmp_path, career_profile, voice_
     assert loaded_reviews.truthfulness.all_supported is True
     assert loaded_reviews.voice.overall_match == "strong"
     assert loaded_reviews.ai_detection.risk_level == "low"
+
+
+# ---------------------------------------------------------------------------
+# update_documents — overwrite current version without bumping
+# ---------------------------------------------------------------------------
+
+
+def test_update_documents_overwrites_without_version_bump(tmp_path, career_profile, voice_profile, job_description, document_set, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+    session = store.save_documents(session, document_set)
+    assert session.current_version == 1
+
+    updated = DocumentSet(cover_letter="updated CL", resume="updated resume", interview_guide="updated guide")
+    store.update_documents(session, updated)
+
+    assert session.current_version == 1  # version did not bump
+    loaded = store.load_documents(session)
+    assert loaded.cover_letter == "updated CL"
+    assert loaded.resume == "updated resume"
+    assert loaded.interview_guide == "updated guide"
