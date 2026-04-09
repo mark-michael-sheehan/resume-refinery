@@ -58,6 +58,9 @@ ensure convergence.
 | CR-6.1 | The maximum number of review+repair passes is bounded by `RESUME_REFINERY_MAX_REPAIR_PASSES` (default 3). |
 | CR-6.2 | If all documents pass all reviewers on any pass, the loop exits early. |
 | CR-6.3 | If the loop exhausts all passes without convergence, the best version so far is kept and a warning is logged. |
+| CR-6.4 | Each outer pass runs two sequential phases: Phase A (hard-gate: truthfulness, consistency, ATS, grammar) and Phase B (soft-gate: voice, AI detection, HM, pruning). Each phase runs its reviewers concurrently, checks gates, and repairs only if its gates fail. |
+| CR-6.5 | Phase B repair receives a `preserve_instructions` note instructing the LLM not to alter text corrected by Phase A, reducing cross-phase regressions. |
+| CR-6.6 | The outer loop re-runs both phases, so any Phase B regression of a Phase A fix is caught and re-repaired on the next pass. |
 
 ## CR-7 Per-Reviewer Suppression
 

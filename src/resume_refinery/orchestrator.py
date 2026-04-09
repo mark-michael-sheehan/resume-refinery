@@ -331,6 +331,8 @@ class ResumeRefineryOrchestrator:
     ) -> tuple[ReviewBundle, list[RepairPassResult], ExemptedPhrases]:
         import logging
 
+        from .prompts import REPAIR_PHASE_B_PRESERVE_NOTE
+
         repair_results: list[RepairPassResult] = []
 
         truth = None
@@ -354,11 +356,15 @@ class ResumeRefineryOrchestrator:
         suppressed_consistency_issues: set[str] = set()
         suppressed_grammar_issues: set[str] = set()
 
+        repair_sub_pass = 0  # running counter for on_repair_pass snapshots
+
         for pass_num in range(max_passes):
             self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
 
-            # --- Run all eight reviews (parallel when MAX_WORKERS > 1) ---
-            self._progress(progress, "  Running reviews (up to 17 LLM calls)...")
+            # ============================================================
+            # Phase A: Hard-gate reviews (truth, consistency, ATS, grammar)
+            # ============================================================
+            self._progress(progress, "  Phase A: Content reviews (truth, consistency, ATS, grammar)...")
 
             def _run_truth():
                 try:
@@ -367,6 +373,120 @@ class ResumeRefineryOrchestrator:
                     logging.warning("Truthfulness review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
                     return None
+
+            def _run_consistency():
+                try:
+                    return self.verification_agent.review_consistency(docs)
+                except Exception as exc:
+                    logging.warning("Consistency review failed (%s)", exc)
+                    self._progress(progress, f"[yellow]Consistency review skipped: {exc}[/yellow]")
+                    return None
+
+            def _run_ats():
+                try:
+                    return self.verification_agent.review_ats_keyword(docs, job, career)
+                except Exception as exc:
+                    logging.warning("ATS-keyword review failed (%s)", exc)
+                    self._progress(progress, f"[yellow]ATS-keyword review skipped: {exc}[/yellow]")
+                    return None
+
+            def _run_grammar():
+                try:
+                    return self.verification_agent.review_grammar(docs)
+                except Exception as exc:
+                    logging.warning("Grammar review failed (%s)", exc)
+                    self._progress(progress, f"[yellow]Grammar review skipped: {exc}[/yellow]")
+                    return None
+
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 4)) as pool:
+                truth_future = pool.submit(_run_truth)
+                consistency_future = pool.submit(_run_consistency)
+                ats_future = pool.submit(_run_ats)
+                grammar_future = pool.submit(_run_grammar)
+                truth = truth_future.result()
+                consistency_result = consistency_future.result()
+                ats_result = ats_future.result()
+                grammar_result = grammar_future.result()
+
+            # Filter out items accepted as false positives in earlier passes.
+            truth, _, _, _, _, ats_result, consistency_result, grammar_result = self._apply_suppressions(
+                truth, None, None, None, None,
+                ats_result, consistency_result, grammar_result,
+                suppressed_claims, set(), set(), set(), set(),
+                suppressed_ats_issues, suppressed_consistency_issues, suppressed_grammar_issues,
+            )
+
+            # Summarise Phase A
+            if truth:
+                self._progress(progress, self._summarise_truth(truth))
+            if ats_result:
+                self._progress(progress, self._summarise_ats_keyword(ats_result))
+            if consistency_result:
+                self._progress(progress, self._summarise_consistency(consistency_result))
+            if grammar_result:
+                self._progress(progress, self._summarise_grammar(grammar_result))
+
+            # Check Phase A gates
+            truth_ok = truth is None or truth.all_supported
+            ats_ok = ats_result is None or ats_result.alignment_score in ("strong", "moderate")
+            consistency_ok = consistency_result is None or consistency_result.consistent
+
+            is_late_pass = pass_num >= _RELAXED_PASS_START
+            if is_late_pass:
+                grammar_ok = grammar_result is None or (
+                    len(grammar_result.cover_letter_issues)
+                    + len(grammar_result.resume_issues)
+                    + len(grammar_result.interview_guide_issues)
+                ) <= 2
+            else:
+                grammar_ok = grammar_result is None or grammar_result.clean
+
+            phase_a_ok = truth_ok and ats_ok and consistency_ok and grammar_ok
+
+            if not phase_a_ok:
+                self._progress(progress, "  Phase A repair (up to 3 LLM calls, thinking enabled)...")
+                repair_pass = self.repair_agent.repair_unified(
+                    docs, truth, None, None,
+                    career, voice, job, context,
+                    feedback=feedback,
+                    hm_review=None,
+                    pruning_review=None,
+                    ats_review=ats_result,
+                    consistency_review=consistency_result,
+                    grammar_review=grammar_result,
+                )
+                repair_results.append(repair_pass)
+                suppressed_claims.update(repair_pass.accepted_claims)
+                suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
+                suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
+                suppressed_hm_issues.update(repair_pass.accepted_hm_issues)
+                suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
+                suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
+                suppressed_consistency_issues.update(repair_pass.accepted_consistency_issues)
+                suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
+                if repair_pass.edits:
+                    self._progress(progress, self._summarise_repair(repair_pass))
+                if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_consistency_issues or repair_pass.accepted_grammar_issues:
+                    self._progress(progress, self._summarise_acceptances(repair_pass))
+
+                if on_repair_pass is not None:
+                    pass_reviews = ReviewBundle(
+                        truthfulness=truth,
+                        voice=voice_result,
+                        ai_detection=ai_result,
+                        hiring_manager=hm_result,
+                        relevance_pruning=pruning_result,
+                        ats_keyword=ats_result,
+                        consistency=consistency_result,
+                        grammar=grammar_result,
+                    )
+                    on_repair_pass(repair_sub_pass, docs, pass_reviews)
+                repair_sub_pass += 1
+
+            # ============================================================
+            # Phase B: Soft-gate reviews (voice, AI, HM, pruning)
+            # ============================================================
+            self._progress(progress, "  Phase B: Style reviews (voice, AI, HM, pruning)...")
 
             def _run_voice():
                 try:
@@ -400,60 +520,26 @@ class ResumeRefineryOrchestrator:
                     self._progress(progress, f"[yellow]Relevance-pruning review skipped: {exc}[/yellow]")
                     return None
 
-            def _run_ats():
-                try:
-                    return self.verification_agent.review_ats_keyword(docs, job, career)
-                except Exception as exc:
-                    logging.warning("ATS-keyword review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]ATS-keyword review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_consistency():
-                try:
-                    return self.verification_agent.review_consistency(docs)
-                except Exception as exc:
-                    logging.warning("Consistency review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Consistency review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_grammar():
-                try:
-                    return self.verification_agent.review_grammar(docs)
-                except Exception as exc:
-                    logging.warning("Grammar review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Grammar review skipped: {exc}[/yellow]")
-                    return None
-
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 8)) as pool:
-                truth_future = pool.submit(_run_truth)
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 4)) as pool:
                 voice_future = pool.submit(_run_voice)
                 ai_future = pool.submit(_run_ai)
                 hm_future = pool.submit(_run_hm)
                 pruning_future = pool.submit(_run_pruning)
-                ats_future = pool.submit(_run_ats)
-                consistency_future = pool.submit(_run_consistency)
-                grammar_future = pool.submit(_run_grammar)
-                truth = truth_future.result()
                 voice_result = voice_future.result()
                 ai_result = ai_future.result()
                 hm_result = hm_future.result()
                 pruning_result = pruning_future.result()
-                ats_result = ats_future.result()
-                consistency_result = consistency_future.result()
-                grammar_result = grammar_future.result()
 
             # Filter out items accepted as false positives in earlier passes.
-            truth, voice_result, ai_result, hm_result, pruning_result, ats_result, consistency_result, grammar_result = self._apply_suppressions(
-                truth, voice_result, ai_result, hm_result, pruning_result,
-                ats_result, consistency_result, grammar_result,
-                suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
+            _, voice_result, ai_result, hm_result, pruning_result, _, _, _ = self._apply_suppressions(
+                None, voice_result, ai_result, hm_result, pruning_result,
+                None, None, None,
+                set(), suppressed_ai_phrases, suppressed_voice_issues,
                 suppressed_hm_issues, suppressed_pruning_issues,
-                suppressed_ats_issues, suppressed_consistency_issues, suppressed_grammar_issues,
+                set(), set(), set(),
             )
 
-            # --- Summarise all five ---
-            if truth:
-                self._progress(progress, self._summarise_truth(truth))
+            # Summarise Phase B
             if voice_result:
                 self._progress(progress, self._summarise_voice(voice_result))
             if ai_result:
@@ -462,22 +548,10 @@ class ResumeRefineryOrchestrator:
                 self._progress(progress, self._summarise_hiring_manager(hm_result))
             if pruning_result:
                 self._progress(progress, self._summarise_relevance_pruning(pruning_result))
-            if ats_result:
-                self._progress(progress, self._summarise_ats_keyword(ats_result))
-            if consistency_result:
-                self._progress(progress, self._summarise_consistency(consistency_result))
-            if grammar_result:
-                self._progress(progress, self._summarise_grammar(grammar_result))
 
-            # --- Check if all passing ---
-            # Truthfulness is always strict (no relaxation).
-            truth_ok = truth is None or truth.all_supported
-
-            # Voice accepts "moderate" from pass 0 to avoid unnecessary rewrites
-            # that destabilise truthfulness.  On late passes, AI threshold relaxes.
+            # Check Phase B gates
             voice_ok = voice_result is None or voice_result.overall_match in ("strong", "moderate")
 
-            is_late_pass = pass_num >= _RELAXED_PASS_START
             if is_late_pass:
                 total_ai_flags = (
                     len(ai_result.cover_letter_flags)
@@ -492,64 +566,51 @@ class ResumeRefineryOrchestrator:
 
             # Hiring manager and relevance pruning are advisory — they feed
             # findings into repair but never block convergence (no hard gate).
-            # ATS keyword alignment gates on "strong" or "moderate".
-            ats_ok = ats_result is None or ats_result.alignment_score in ("strong", "moderate")
-            # Cross-document consistency gates on no contradictions.
-            consistency_ok = consistency_result is None or consistency_result.consistent
-            # Grammar gates on clean (no errors) on early passes; relaxes on late passes.
-            if is_late_pass:
-                grammar_ok = grammar_result is None or (
-                    len(grammar_result.cover_letter_issues)
-                    + len(grammar_result.resume_issues)
-                    + len(grammar_result.interview_guide_issues)
-                ) <= 2
-            else:
-                grammar_ok = grammar_result is None or grammar_result.clean
+            phase_b_ok = voice_ok and ai_ok
 
-            if truth_ok and voice_ok and ai_ok and ats_ok and consistency_ok and grammar_ok:
+            if phase_a_ok and phase_b_ok:
                 break
 
-            # --- Unified repair ---
-            self._progress(progress, "  Repairing documents (up to 3 LLM calls, thinking enabled)...")
-            repair_pass = self.repair_agent.repair_unified(
-                docs, truth, voice_result, ai_result,
-                career, voice, job, context,
-                feedback=feedback,
-                hm_review=hm_result,
-                pruning_review=pruning_result,
-                ats_review=ats_result,
-                consistency_review=consistency_result,
-                grammar_review=grammar_result,
-            )
-            repair_results.append(repair_pass)
-            # Accumulate per-reviewer acceptances into suppression sets.
-            suppressed_claims.update(repair_pass.accepted_claims)
-            suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
-            suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
-            suppressed_hm_issues.update(repair_pass.accepted_hm_issues)
-            suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
-            suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
-            suppressed_consistency_issues.update(repair_pass.accepted_consistency_issues)
-            suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
-            if repair_pass.edits:
-                self._progress(progress, self._summarise_repair(repair_pass))
-            # Emit explicit output for every item accepted as a false positive.
-            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_consistency_issues or repair_pass.accepted_grammar_issues:
-                self._progress(progress, self._summarise_acceptances(repair_pass))
-
-            # Snapshot documents and reviews after this repair pass for auditing.
-            if on_repair_pass is not None:
-                pass_reviews = ReviewBundle(
-                    truthfulness=truth,
-                    voice=voice_result,
-                    ai_detection=ai_result,
-                    hiring_manager=hm_result,
-                    relevance_pruning=pruning_result,
-                    ats_keyword=ats_result,
-                    consistency=consistency_result,
-                    grammar=grammar_result,
+            if not phase_b_ok:
+                self._progress(progress, "  Phase B repair (up to 3 LLM calls, thinking enabled)...")
+                repair_pass = self.repair_agent.repair_unified(
+                    docs, None, voice_result, ai_result,
+                    career, voice, job, context,
+                    feedback=feedback,
+                    hm_review=hm_result,
+                    pruning_review=pruning_result,
+                    ats_review=None,
+                    consistency_review=None,
+                    grammar_review=None,
+                    preserve_instructions=REPAIR_PHASE_B_PRESERVE_NOTE,
                 )
-                on_repair_pass(pass_num, docs, pass_reviews)
+                repair_results.append(repair_pass)
+                suppressed_claims.update(repair_pass.accepted_claims)
+                suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
+                suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
+                suppressed_hm_issues.update(repair_pass.accepted_hm_issues)
+                suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
+                suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
+                suppressed_consistency_issues.update(repair_pass.accepted_consistency_issues)
+                suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
+                if repair_pass.edits:
+                    self._progress(progress, self._summarise_repair(repair_pass))
+                if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_consistency_issues or repair_pass.accepted_grammar_issues:
+                    self._progress(progress, self._summarise_acceptances(repair_pass))
+
+                if on_repair_pass is not None:
+                    pass_reviews = ReviewBundle(
+                        truthfulness=truth,
+                        voice=voice_result,
+                        ai_detection=ai_result,
+                        hiring_manager=hm_result,
+                        relevance_pruning=pruning_result,
+                        ats_keyword=ats_result,
+                        consistency=consistency_result,
+                        grammar=grammar_result,
+                    )
+                    on_repair_pass(repair_sub_pass, docs, pass_reviews)
+                repair_sub_pass += 1
 
         return ReviewBundle(
             truthfulness=truth,

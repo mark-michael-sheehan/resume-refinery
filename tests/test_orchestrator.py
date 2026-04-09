@@ -138,7 +138,7 @@ class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None):
         self.unified_calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
@@ -235,7 +235,8 @@ def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, 
     assert result.evidence_pack is not None
     assert result.voice_style_guide is not None
     assert result.exported_paths
-    assert repair.unified_calls == 1
+    # Two-phase: Phase A repair + Phase B repair in first pass
+    assert repair.unified_calls == 2
     assert Path(next(iter(result.exported_paths.values()))).exists()
 
 
@@ -255,8 +256,9 @@ def test_orchestrator_create_verifies_all_three_loops(tmp_path, monkeypatch, car
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    # Unified loop: pass 1 all fail → repair → pass 2 all pass
-    assert repair.unified_calls == 1
+    # Two-phase: pass 1 Phase A truth fails → Phase A repair, Phase B AI flags → Phase B repair
+    # pass 2 Phase A passes, Phase B passes → exit
+    assert repair.unified_calls == 2
     assert verification.truth_calls == 2
     assert verification.voice_calls == 2
     assert verification.ai_calls == 2
@@ -448,7 +450,7 @@ class AcceptsAIPhraseRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
 
@@ -568,12 +570,12 @@ def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_p
         max_passes=1,
     )
 
-    # All three reviewers called once in the single pass
+    # All reviewers called once in the single pass
     assert verification.truth_calls == 1
     assert verification.voice_calls == 1
     assert verification.ai_calls == 1
-    # One unified repair
-    assert repair.unified_calls == 1
+    # Two-phase: Phase A repair + Phase B repair
+    assert repair.unified_calls == 2
     # Result reflects the failing review (no second review after repair)
     assert result.truthfulness.all_supported is False
     assert result.voice.overall_match == "weak"
@@ -605,7 +607,8 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
     assert verification.truth_calls == 4
     assert verification.voice_calls == 4
     assert verification.ai_calls == 4
-    assert repair.unified_calls == 4
+    # Two-phase: 4 passes × (Phase A repair + Phase B repair) = 8
+    assert repair.unified_calls == 8
     assert result.truthfulness.all_supported is False
     assert result.voice.overall_match == "weak"
     assert result.ai_detection.risk_level == "high"

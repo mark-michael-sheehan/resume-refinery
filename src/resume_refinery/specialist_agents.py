@@ -564,6 +564,7 @@ class RepairAgent:
         ats_review: ATSKeywordResult | None = None,
         consistency_review: ConsistencyResult | None = None,
         grammar_review: GrammarResult | None = None,
+        preserve_instructions: str | None = None,
     ) -> RepairPassResult:
         """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
@@ -586,6 +587,8 @@ class RepairAgent:
             )
             if not review_findings:
                 return None
+            if preserve_instructions:
+                review_findings = preserve_instructions + "\n\n" + review_findings
             doc_content = docs.get(key)
             if not doc_content:
                 return None

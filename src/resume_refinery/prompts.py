@@ -665,6 +665,15 @@ def repair_user_message(
     )
 
 
+REPAIR_PHASE_B_PRESERVE_NOTE = """\
+IMPORTANT: This is a Phase B (style and relevance) repair pass. A previous \
+Phase A pass has already corrected content issues (truthfulness, consistency, \
+ATS keywords, grammar). You MUST preserve those corrections. Do NOT alter \
+text that was fixed for truthfulness, consistency, ATS, or grammar reasons — \
+only modify passages flagged by the style and relevance reviewers below.\
+"""
+
+
 # ---------------------------------------------------------------------------
 # Hiring-manager review prompts
 # ---------------------------------------------------------------------------

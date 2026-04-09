@@ -21,8 +21,10 @@ voice_profile.md + career_profile.md + job_description.md
   │ EvidenceAgent      -> EvidencePack (requirements + matched evidence) │
   │ VoiceAgent         -> VoiceStyleGuide                                │
   │ DraftingAgent      -> DocumentSet                                    │
-  │ VerificationAgent  -> Truth/Voice/AI/HM/Pruning/ATS/Consistency/Grammar review bundle (in loop) │
-  │ RepairAgent        -> targeted rewrites for unsupported claims      │
+  │ VerificationAgent  -> Two-phase review + repair loop:                │
+  │   Phase A (hard-gate): Truth/Consistency/ATS/Grammar -> repair       │
+  │   Phase B (soft-gate): Voice/AI/HM/Pruning -> repair (preserves A)   │
+  │ RepairAgent        -> targeted rewrites per phase                    │
   └──────────────────────────────────────────────────────────────────────┘
             │
             ▼
@@ -30,7 +32,12 @@ voice_profile.md + career_profile.md + job_description.md
     (saved immediately after generation, before review loop)
             │
             ▼
-    Review + Repair loop (each repair pass updates docs on disk incrementally)
+    Two-phase review + repair loop (per pass):
+      Phase A — hard-gate reviews (truthfulness, consistency, ATS, grammar)
+               → Phase A repair if any fail
+      Phase B — soft-gate reviews (voice, AI detection, HM, pruning)
+               → Phase B repair if any fail (preserves Phase A fixes)
+      Outer loop repeats to catch cross-phase regressions
             │
             ▼
     SessionStore.save_reviews() + final DOCX export
