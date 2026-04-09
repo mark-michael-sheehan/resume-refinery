@@ -224,7 +224,7 @@ def _page(title: str, body: str) -> HTMLResponse:
         (data.dirs || []).forEach(function(d){{
           var el = document.createElement('div');
           el.className = 'dir-entry';
-          el.textContent = '\uD83D\uDCC1 ' + d;
+          el.textContent = '\U0001F4C1 ' + d;
           el.onclick = function(){{
             var sep = _currentPath.indexOf('/') !== -1 ? '/' : '\\\\';
             var child = _currentPath ? (_currentPath.replace(/[\\\\/]$/, '') + sep + d) : d;
