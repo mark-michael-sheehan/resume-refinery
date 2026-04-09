@@ -541,7 +541,9 @@ ATS-keyword reviewer rules:
 - Each issue identifies a keyword from the JD that is missing from the resume \
   or a keyword that is stuffed (repeated unnaturally 4+ times).
 - For missing keywords: add the keyword naturally to the appropriate section, \
-  but ONLY if the candidate genuinely has that skill. Do NOT fabricate skills.
+  but ONLY if the career profile explicitly confirms direct, hands-on experience \
+  with the exact tool or technology. Tangential, adjacent, or inferred experience \
+  does not qualify. Do NOT fabricate skills.
 - For stuffing: reduce repetition by removing redundant mentions.
 - If the keyword is already adequately represented or the candidate lacks the \
   skill, ACCEPT the finding instead of editing.
@@ -924,8 +926,9 @@ Return a JSON object with this shape:
 Rules:
 - alignment_score: "strong" = 0-1 missing high-priority keywords; "moderate" = \
   2-3 missing; "weak" = 4+ missing.
-- Only flag keywords the candidate genuinely has (per the career profile or \
-  evident from their experience).
+- Only flag keywords the candidate explicitly lists as a skill or has used \
+  hands-on in a described role in the career profile. Do NOT infer proficiency \
+  from tangential, adjacent, or loosely related experience.
 - For missing keywords, prioritise required/must-have items from the JD over \
   preferred/nice-to-have.
 - For stuffing, only flag genuinely excessive repetition (4+ occurrences or \
