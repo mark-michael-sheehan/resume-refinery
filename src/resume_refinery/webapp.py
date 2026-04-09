@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import html
+import os
 import queue
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Iterator, Optional
 
+import markdown as md
 import uvicorn
-from fastapi import FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi import FastAPI, Form, HTTPException, Query, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from .models import DraftingContext, OrchestrationResult
 from .orchestrator import ResumeRefineryOrchestrator
@@ -30,6 +33,45 @@ orchestrator = ResumeRefineryOrchestrator(store=store)
 career_store = CareerRepoStore()
 
 app.include_router(career_router)
+
+
+@app.get("/api/browse", response_class=JSONResponse)
+def browse_directories(path: str = Query("")) -> JSONResponse:
+    """Return child directories of *path* for the directory picker.
+
+    When *path* is empty the response lists filesystem roots (drive letters
+    on Windows, ``/`` on POSIX).
+    """
+    if not path:
+        # List filesystem roots
+        if os.name == "nt":
+            import string
+            roots = [
+                f"{d}:\\" for d in string.ascii_uppercase
+                if os.path.isdir(f"{d}:\\")
+            ]
+        else:
+            roots = ["/"]
+        return JSONResponse({"path": "", "dirs": roots})
+
+    try:
+        resolved = Path(path).resolve(strict=True)
+    except (OSError, ValueError):
+        return JSONResponse({"path": path, "dirs": [], "error": "Invalid path"}, status_code=400)
+
+    if not resolved.is_dir():
+        return JSONResponse({"path": path, "dirs": [], "error": "Not a directory"}, status_code=400)
+
+    dirs: list[str] = []
+    try:
+        for entry in sorted(resolved.iterdir()):
+            if entry.is_dir() and not entry.name.startswith("."):
+                dirs.append(entry.name)
+    except PermissionError:
+        pass
+
+    parent = str(resolved.parent) if resolved.parent != resolved else ""
+    return JSONResponse({"path": str(resolved), "parent": parent, "dirs": dirs})
 
 
 def _validate_output_dir(raw: str) -> Path:
@@ -100,19 +142,126 @@ def _page(title: str, body: str) -> HTMLResponse:
     button {{ margin-top: 0.9rem; background: var(--accent); color: #fff; border: none; border-radius: 10px; padding: 0.65rem 1rem; cursor: pointer; font-weight: 700; }}
     button:hover {{ opacity: 0.9; }}
     pre {{ white-space: pre-wrap; word-break: break-word; background: #f3f1eb; border: 1px solid var(--line); border-radius: 8px; padding: 0.75rem; }}
+    .rendered-md {{ line-height: 1.6; }}
+    .rendered-md h1,.rendered-md h2,.rendered-md h3 {{ margin: 0.6rem 0 0.3rem; }}
+    .rendered-md ul,.rendered-md ol {{ padding-left: 1.4rem; }}
+    .rendered-md li {{ margin: 0.15rem 0; }}
+    .rendered-md hr {{ border: none; border-top: 1px solid var(--line); margin: 0.8rem 0; }}
+    .view-toggle {{ font-size: .85em; float: right; cursor: pointer; color: var(--accent); border: none; background: none; font-weight: 600; padding: 0; }}
+    .view-toggle:hover {{ text-decoration: underline; }}
     table {{ width: 100%; border-collapse: collapse; }}
     th, td {{ border-bottom: 1px solid var(--line); text-align: left; padding: 0.5rem; }}
     .muted {{ color: var(--muted); }}
     .ok {{ color: #1d8f52; font-weight: 700; }}
     .bad {{ color: #b00020; font-weight: 700; }}
+    /* Directory picker */
+    .dir-picker-row {{ display: flex; gap: .5rem; align-items: center; margin-top: .4rem; }}
+    .dir-picker-row input[type=text] {{ flex: 1; padding: .55rem; border-radius: 8px; border: 1px solid var(--line); background: #fff; }}
+    .dir-picker-row button {{ margin-top: 0; padding: .55rem .85rem; font-size: .92em; }}
+    .dir-modal-overlay {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:1000; justify-content:center; align-items:center; }}
+    .dir-modal-overlay.open {{ display:flex; }}
+    .dir-modal {{ background:var(--card); border-radius:14px; padding:1.25rem 1.5rem; width:500px; max-width:92vw; max-height:70vh; display:flex; flex-direction:column; box-shadow:0 12px 40px rgba(0,0,0,.18); }}
+    .dir-modal h3 {{ margin:0 0 .4rem; }}
+    .dir-modal .dir-path {{ font-size:.85em; color:var(--muted); word-break:break-all; margin-bottom:.5rem; min-height:1.2em; }}
+    .dir-modal .dir-list {{ flex:1; overflow-y:auto; border:1px solid var(--line); border-radius:8px; background:#fff; max-height:45vh; }}
+    .dir-modal .dir-list .dir-entry {{ padding:.45rem .7rem; cursor:pointer; border-bottom:1px solid #f0ede6; display:flex; align-items:center; gap:.4rem; }}
+    .dir-modal .dir-list .dir-entry:hover {{ background:#f3f1eb; }}
+    .dir-modal .dir-list .dir-entry.up {{ font-weight:600; color:var(--accent); }}
+    .dir-modal .dir-btns {{ display:flex; gap:.5rem; justify-content:flex-end; margin-top:.7rem; }}
+    .dir-modal .dir-btns button {{ margin-top:0; }}
   </style>
 </head>
 <body>
-  <div class=\"wrap\">{body}</div>
+  <div class="wrap">{body}</div>
+  <!-- Directory picker modal (shared by all pickers on the page) -->
+  <div class="dir-modal-overlay" id="dirModal">
+    <div class="dir-modal">
+      <h3>Choose Output Directory</h3>
+      <div class="dir-path" id="dirModalPath"></div>
+      <div class="dir-list" id="dirModalList"></div>
+      <div class="dir-btns">
+        <button type="button" onclick="dirPickerCancel()">Cancel</button>
+        <button type="button" onclick="dirPickerSelect()">Select This Folder</button>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){{
+    let _target = null;
+    let _currentPath = '';
+
+    window.openDirPicker = function(inputId) {{
+      _target = document.getElementById(inputId);
+      _currentPath = _target.value || '';
+      loadDir(_currentPath);
+      document.getElementById('dirModal').classList.add('open');
+    }};
+
+    window.dirPickerCancel = function() {{
+      document.getElementById('dirModal').classList.remove('open');
+    }};
+
+    window.dirPickerSelect = function() {{
+      if (_target && _currentPath) _target.value = _currentPath;
+      document.getElementById('dirModal').classList.remove('open');
+    }};
+
+    function loadDir(path) {{
+      var url = '/api/browse?path=' + encodeURIComponent(path);
+      fetch(url).then(function(r){{ return r.json(); }}).then(function(data){{
+        if (data.error) {{ alert(data.error); return; }}
+        _currentPath = data.path || '';
+        document.getElementById('dirModalPath').textContent = _currentPath || '(select a drive)';
+        var list = document.getElementById('dirModalList');
+        list.innerHTML = '';
+        if (data.parent !== undefined && data.parent !== null) {{
+          var up = document.createElement('div');
+          up.className = 'dir-entry up';
+          up.textContent = '\u2191 Up';
+          up.onclick = function(){{ loadDir(data.parent); }};
+          list.appendChild(up);
+        }}
+        (data.dirs || []).forEach(function(d){{
+          var el = document.createElement('div');
+          el.className = 'dir-entry';
+          el.textContent = '\uD83D\uDCC1 ' + d;
+          el.onclick = function(){{
+            var sep = _currentPath.indexOf('/') !== -1 ? '/' : '\\\\';
+            var child = _currentPath ? (_currentPath.replace(/[\\\\/]$/, '') + sep + d) : d;
+            loadDir(child);
+          }};
+          list.appendChild(el);
+        }});
+      }}).catch(function(e){{ alert('Failed to browse: ' + e); }});
+    }}
+  }})();
+
+  function toggleView(btn) {{
+    var card = btn.closest('.card');
+    var rendered = card.querySelector('.rendered-md');
+    var raw = card.querySelector('pre');
+    if (rendered.style.display === 'none') {{
+      rendered.style.display = '';
+      raw.style.display = 'none';
+      btn.textContent = 'Show raw';
+    }} else {{
+      rendered.style.display = 'none';
+      raw.style.display = '';
+      btn.textContent = 'Show rendered';
+    }}
+  }}
+  </script>
 </body>
 </html>
 """
     )
+
+
+def _render_md(text: str | None) -> str:
+    """Convert markdown text to HTML.  Returns empty string for None/empty."""
+    if not text:
+        return ""
+    return md.markdown(text, extensions=["tables", "fenced_code", "nl2br"])
 
 
 def _truth_failed(truth) -> bool:
@@ -316,6 +465,63 @@ def _grammar_summary(grammar) -> str:
     return "".join(parts)
 
 
+def _evidence_pack_summary(evidence) -> str:
+    """Render a full evidence pack as HTML cards."""
+    if not evidence:
+        return "<p class='muted'>No evidence pack available.</p>"
+
+    parts = []
+
+    # Job requirements
+    parts.append("<div class='card'><h2>Evidence Pack</h2>")
+    parts.append(f"<p>Requirements: {len(evidence.job_requirements)} | "
+                 f"Matches: {len(evidence.matched_evidence)} | "
+                 f"Gaps: {len(evidence.gaps)}</p>")
+
+    if evidence.job_requirements:
+        parts.append("<h3>Job Requirements</h3><ul>")
+        for req in evidence.job_requirements:
+            category_badge = f" <em>[{html.escape(req.category)}]</em>" if req.category else ""
+            excerpt = f" &mdash; <small>{html.escape(req.source_excerpt)}</small>" if req.source_excerpt else ""
+            parts.append(f"<li><strong>{html.escape(req.requirement)}</strong>{category_badge}{excerpt}</li>")
+        parts.append("</ul>")
+
+    # Matched evidence
+    if evidence.matched_evidence:
+        parts.append("<h3>Matched Evidence</h3><ul>")
+        for item in evidence.matched_evidence:
+            score_cls = "ok" if item.relevance_score >= 4 else "muted" if item.relevance_score >= 3 else "bad"
+            parts.append(
+                f"<li><span class='{score_cls}'>[{item.relevance_score}/5]</span> "
+                f"<strong>{html.escape(item.requirement)}</strong>: {html.escape(item.evidence)}"
+            )
+            if item.source_excerpt:
+                parts.append(f"<br/><small>Source: {html.escape(item.source_excerpt)}</small>")
+            parts.append("</li>")
+        parts.append("</ul>")
+    else:
+        parts.append("<p class='muted'>No matched evidence extracted.</p>")
+
+    # Gaps
+    if evidence.gaps:
+        parts.append("<h3>Gaps</h3><ul>")
+        for gap in evidence.gaps:
+            parts.append(f"<li>{html.escape(gap)}</li>")
+        parts.append("</ul>")
+    else:
+        parts.append("<p class='muted'>No obvious gaps.</p>")
+
+    # Source summary
+    if evidence.source_summary:
+        parts.append("<h3>Source Summary</h3><ul>")
+        for src in evidence.source_summary:
+            parts.append(f"<li>{html.escape(src)}</li>")
+        parts.append("</ul>")
+
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def _artifact_summary(context: DraftingContext | None) -> str:
     evidence = context.evidence_pack if context else None
     style = context.voice_style_guide if context else None
@@ -324,17 +530,7 @@ def _artifact_summary(context: DraftingContext | None) -> str:
 
     parts = ["<div class='grid'>"]
     if evidence:
-        evidence_items = "".join(
-            f"<li>{html.escape(item.requirement)} -> {html.escape(item.evidence)}</li>"
-            for item in evidence.matched_evidence[:6]
-        ) or "<li>No matched evidence extracted.</li>"
-        gap_items = "".join(f"<li>{html.escape(gap)}</li>" for gap in evidence.gaps[:5]) or "<li>No obvious gaps.</li>"
-        parts.append(
-            "<div class='card'><h2>Evidence Pack</h2>"
-            f"<p>Requirements: {len(evidence.job_requirements)} | Matches: {len(evidence.matched_evidence)}</p>"
-            f"<h3>Top Matches</h3><ul>{evidence_items}</ul>"
-            f"<h3>Potential Gaps</h3><ul>{gap_items}</ul></div>"
-        )
+        parts.append(_evidence_pack_summary(evidence))
     if style:
         style_items = "".join(f"<li>{html.escape(item)}</li>" for item in style.style_rules[:6]) or "<li>No style rules extracted.</li>"
         adjective_items = "".join(f"<li>{html.escape(item)}</li>" for item in style.core_adjectives[:6]) or "<li>No adjectives extracted.</li>"
@@ -377,6 +573,8 @@ _PROGRESS_PAGE_HEAD = (
     "@keyframes spin{to{transform:rotate(360deg)}}"
     ".step-ok{color:var(--accent)}.step-ok::before{content:'\u2713 ';font-weight:bold}"
     ".step-fail{color:#b00020}.step-fail::before{content:'\u2717 ';font-weight:bold}"
+    ".step-time{font-size:.82em;color:var(--muted);margin-left:.6em;font-weight:normal}"
+    "#elapsed-clock{font-size:.92em;color:var(--muted);float:right;font-variant-numeric:tabular-nums}"
     "details{margin:.3rem 0 .5rem .8rem;border:1px solid var(--line);border-radius:8px;"
     "padding:.4rem .7rem;background:#f9f7f2}"
     "details summary{cursor:pointer;font-weight:600;color:var(--muted);font-size:.92em}"
@@ -384,8 +582,12 @@ _PROGRESS_PAGE_HEAD = (
     "background:transparent;border:none;padding:0}"
     "</style></head><body><div class='wrap'>"
     "<p style='margin-bottom:.3rem'><a href='/'>&larr; Resume Refinery</a></p>"
-    "<div class='card'><h2>Working\u2026</h2>"
+    "<div class='card'><h2>Working\u2026 <span id='elapsed-clock'>0:00</span></h2>"
     "<div id='progress-log'>"
+    "<script>(function(){var t0=Date.now(),el=document.getElementById('elapsed-clock');"
+    "setInterval(function(){var s=Math.floor((Date.now()-t0)/1000);"
+    "var m=Math.floor(s/60);s=s%60;"
+    "el.textContent=m+':'+(s<10?'0':'')+s;},500);})();</script>"
 )
 
 # Padding so browsers flush the initial shell before the first LLM call blocks.
@@ -442,14 +644,42 @@ def _stream_orchestration(
     q: queue.Queue[str | None] = queue.Queue()
 
     def _run() -> None:
+        step_start = time.monotonic()
+
+        def _timed_progress(msg: str) -> None:
+            nonlocal step_start
+            now = time.monotonic()
+            elapsed = now - step_start
+            step_start = now
+            chunk = _progress_chunk(msg)
+            badge = f"<span class='step-time'>({elapsed:.1f}s)</span>"
+            # Inject badge before the closing tag of the first element
+            if chunk.startswith("<details>"):
+                chunk = chunk.replace("</summary>", f" {badge}</summary>", 1)
+            elif chunk.startswith("<p>"):
+                chunk = chunk.replace("</p>", f" {badge}</p>", 1)
+            q.put(chunk)
+
         try:
-            result = run_fn(progress=lambda msg: q.put(_progress_chunk(msg)))
+            result = run_fn(progress=_timed_progress)
             sid = html.escape(result.session.session_id)
             url = redirect_url_fn(result)
-            # Final success message + redirect
+            # Emit evidence pack summary inline in the streaming output
+            if result.evidence_pack:
+                q.put(
+                    "</div></div>"  # close progress-log and its card
+                    + _evidence_pack_summary(result.evidence_pack)
+                    + "<div class='card'><div id='progress-log'>"  # re-open for final messages
+                )
+            # Final success message + total elapsed time
+            total = time.monotonic() - run_start
+            total_min = int(total // 60)
+            total_sec = total % 60
+            total_str = f"{total_min}:{total_sec:04.1f}" if total_min else f"{total_sec:.1f}s"
             q.put(
                 "<p class='step-ok' style='margin-top:.8rem;font-weight:600'>"
-                f"Done!  Redirecting to <a href='{url}'>{sid}</a>\u2026</p>\n"
+                f"Done in {html.escape(total_str)}!  Redirecting to <a href='{url}'>{sid}</a>\u2026</p>\n"
+                "<script>document.getElementById('elapsed-clock').style.color='var(--accent)';</script>\n"
             )
             if result.strict_truth_failed:
                 q.put(
@@ -466,6 +696,8 @@ def _stream_orchestration(
             )
         finally:
             q.put(None)  # sentinel
+
+    run_start = time.monotonic()
 
     def _generate() -> Iterator[str]:
         yield _PROGRESS_PAGE_HEAD + "\n" + _BROWSER_FLUSH_PAD
@@ -511,8 +743,11 @@ def home() -> HTMLResponse:
 
     <label>Job Description (.md or .txt)</label>
     <input type=\"file\" name=\"job_description\" required />
-    <label>Output Directory (absolute path on your machine)</label>
-    <input type="text" name="output_dir" placeholder="e.g. C:\\Users\\me\\Documents\\output" required />
+    <label>Output Directory</label>
+    <div class="dir-picker-row">
+      <input type="text" name="output_dir" id="output_dir_new" readonly required />
+      <button type="button" onclick="openDirPicker('output_dir_new')">Browse…</button>
+    </div>
     <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
     <label><input type=\"checkbox\" name=\"allow_unverified\" value=\"true\" /> Allow saving when strict truth check fails</label>
 
@@ -670,17 +905,22 @@ def show_session(session_id: str) -> HTMLResponse:
       <option value=\"interview_guide\">Interview Guide</option>
     </select>
     <label>Feedback (free-form)</label>
-    <textarea name=\"feedback\" rows=\"5\" required></textarea>    <label>Output Directory (absolute path on your machine)</label>
-    <input type="text" name="output_dir" placeholder="e.g. C:\\Users\\me\\Documents\\output" required />    <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
+    <textarea name=\"feedback\" rows=\"5\" required></textarea>
+    <label>Output Directory</label>
+    <div class="dir-picker-row">
+      <input type="text" name="output_dir" id="output_dir_refine" readonly required />
+      <button type="button" onclick="openDirPicker('output_dir_refine')">Browse…</button>
+    </div>
+    <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
     <label><input type=\"checkbox\" name=\"allow_unverified\" value=\"true\" /> Allow saving when strict truth check fails</label>
     <button type=\"submit\">Refine</button>
   </form>
 </div>
 <div class=\"grid\">
-  <div class=\"card\"><h2>Cover Letter</h2><pre>{esc(docs.cover_letter)}</pre></div>
-  <div class=\"card\"><h2>Resume</h2><pre>{esc(docs.resume)}</pre></div>
+  <div class="card"><h2>Cover Letter <button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2><div class="rendered-md">{_render_md(docs.cover_letter)}</div><pre style="display:none">{esc(docs.cover_letter)}</pre></div>
+  <div class="card"><h2>Resume <button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2><div class="rendered-md">{_render_md(docs.resume)}</div><pre style="display:none">{esc(docs.resume)}</pre></div>
 </div>
-<div class=\"card\"><h2>Interview Guide</h2><pre>{esc(docs.interview_guide)}</pre></div>
+<div class="card"><h2>Interview Guide <button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2><div class="rendered-md">{_render_md(docs.interview_guide)}</div><pre style="display:none">{esc(docs.interview_guide)}</pre></div>
 """
     return _page(session.session_id, body)
 
