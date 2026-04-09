@@ -921,7 +921,6 @@ def show_session(session_id: str) -> HTMLResponse:
       <input type="text" name="output_dir" id="output_dir_refine" readonly required />
       <button type="button" onclick="openDirPicker('output_dir_refine')">Browse…</button>
     </div>
-    <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
     <label><input type=\"checkbox\" name=\"allow_unverified\" value=\"true\" /> Allow saving when strict truth check fails</label>
     <button type=\"submit\">Refine</button>
   </form>
@@ -941,7 +940,6 @@ def refine_session(
     feedback: str = Form(...),
     doc: str = Form(""),
     output_dir: str = Form(...),
-    skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
 ):
     if doc and doc not in ("cover_letter", "resume", "interview_guide"):
@@ -950,7 +948,6 @@ def refine_session(
     output_path = _validate_output_dir(output_dir)
 
     _doc = doc or None
-    _skip = bool(skip_review)
     _allow = bool(allow_unverified)
 
     return _stream_orchestration(
@@ -959,7 +956,6 @@ def refine_session(
             feedback,
             doc=_doc,
             output_dir=output_path,
-            skip_review=_skip,
             allow_unverified=_allow,
             progress=progress,
         ),

@@ -18,6 +18,7 @@
 | FR-2.4 | **Verification** — The VerificationAgent runs eight independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning, ATS keyword alignment, cross-document consistency, grammar & mechanics) on each document. |
 | FR-2.5 | **Repair** — The RepairAgent fixes documents that fail verification using surgical find/replace edits (see [convergence.md](convergence.md)). |
 | FR-2.6 | **Iteration** — Verification and repair repeat up to `MAX_REPAIR_PASSES` times or until all documents pass. |
+| FR-2.7 | **Refinement** — The `refine` operation applies user instructions via the RepairAgent (single pass, no loop), then runs all eight reviewers once on the result. The updated document is saved as a new version with review feedback. |
 
 ## FR-3 Outputs
 

@@ -157,10 +157,8 @@ class ResumeRefineryOrchestrator:
         *,
         doc: DocumentKey | None = None,
         output_dir: Path | None = None,
-        skip_review: bool = False,
         allow_unverified: bool = False,
         progress: ProgressCallback | None = None,
-        stream_callback: StreamCallback | None = None,
     ) -> OrchestrationResult:
         session = self.store.get(session_id)
         career, voice = self.store.load_inputs(session)
@@ -168,79 +166,44 @@ class ResumeRefineryOrchestrator:
         current_docs = self.store.load_documents(session)
         context = self._build_context(career, voice, job, progress)
 
-        keys_to_regen = [doc] if doc else list(self._doc_labels().keys())
-        for key in keys_to_regen:
-            if key is None:
-                continue
-            label = self._doc_labels()[key]
-            self._progress(progress, f"Regenerating {label} (model is thinking, output appears after reasoning)...")
-            previous = current_docs.get(key)
-            if stream_callback:
-                chunks: list[str] = []
-                for chunk in self.drafting_agent.stream_document(
-                    key, career, voice, job, context,
-                    feedback=feedback, previous_version=previous,
-                ):
-                    chunks.append(chunk)
-                    stream_callback(chunk)
-                stream_callback("\n")
-                text = "".join(chunks).strip()
-                if not text:
-                    raise ValueError(
-                        f"'{label}' generated empty content — the model may have "
-                        "exhausted its context window on reasoning. Try raising "
-                        "RESUME_REFINERY_NUM_CTX in your .env."
-                    )
-                current_docs.set(key, text)
-            else:
-                regenerated = self.drafting_agent.generate_document(
-                    key, career, voice, job, context,
-                    feedback=feedback, previous_version=previous,
-                )
-                current_docs.set(key, regenerated)
+        keys_to_refine = [doc] if doc else list(self._doc_labels().keys())
 
-        # Save documents + context immediately after generation so results
-        # are available on disk before the (potentially long) review loop.
+        # Preserve originals so we can restore docs the user didn't target.
+        originals = current_docs.model_copy(deep=True) if doc else None
+
+        # Apply user's instructions via the repair agent (single pass).
+        self._progress(progress, "Applying refinement instructions...")
+        repair_pass = self.repair_agent.repair_unified(
+            current_docs, None, None, None,
+            career, voice, job, context,
+            feedback=feedback,
+        )
+        if repair_pass.edits:
+            self._progress(progress, self._summarise_repair(repair_pass))
+
+        # Restore documents that weren't targeted.
+        if originals and doc:
+            for key in self._doc_labels():
+                if key != doc:
+                    current_docs.set(key, originals.get(key))
+
+        # Save repaired documents as a new version.
         session = self.store.save_documents(
             session,
             current_docs,
             feedback=feedback,
-            docs_regenerated=[key for key in keys_to_regen if key is not None],
+            docs_regenerated=[k for k in keys_to_refine if k is not None],
         )
         self.store.save_context(session, context)
         self._export(session, current_docs, output_dir=output_dir)
 
-        if skip_review:
-            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
-            try:
-                truth = self.verification_agent.review_truthfulness(current_docs, career, job)
-            except Exception as exc:
-                logging.warning("Truthfulness review failed (%s)", exc)
-                truth = None
-            reviews: ReviewBundle = ReviewBundle(truthfulness=truth)
-            repair_passes: list[RepairPassResult] = []
-            exempted = ExemptedPhrases()
-        else:
-            def _on_repair_pass(p: int, d: DocumentSet, r: ReviewBundle) -> None:
-                self.store.save_repair_pass(session, p, d.model_copy(deep=True), r)
-                self.store.update_documents(session, d)
-                self._export(session, d, output_dir=output_dir)
+        # Run all reviewers once (no repair loop).
+        self._progress(progress, "Running reviews...")
+        reviews = self._run_all_reviews(
+            current_docs, career, voice, job, progress,
+        )
 
-            reviews, repair_passes, exempted = self._verify_and_repair(
-                current_docs,
-                career,
-                voice,
-                job,
-                context,
-                feedback=feedback,
-                progress=progress,
-                on_repair_pass=_on_repair_pass,
-            )
-        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.consistency_issues or exempted.grammar_issues:
-            self.store.save_suppressions(session, exempted)
-        # Final export with the fully-repaired documents.
         exported = self._export(session, current_docs, output_dir=output_dir)
-
         self.store.save_reviews(session, reviews)
 
         strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
@@ -248,7 +211,7 @@ class ResumeRefineryOrchestrator:
             session=session,
             documents=current_docs,
             reviews=reviews,
-            repair_passes=repair_passes,
+            repair_passes=[repair_pass],
             evidence_pack=context.evidence_pack,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
@@ -267,32 +230,7 @@ class ResumeRefineryOrchestrator:
         docs = self.store.load_documents(session, version=version)
         job = session.job_description
         context = self._build_context(career, voice, job, progress)
-        reviews = self.verification_agent.review_all(docs, career, voice, job)
-        try:
-            hm_review = self.verification_agent.review_hiring_manager(docs, job)
-            reviews = reviews.model_copy(update={"hiring_manager": hm_review})
-        except Exception as exc:
-            logging.warning("Hiring-manager review failed (%s)", exc)
-        try:
-            pruning_review = self.verification_agent.review_relevance_pruning(docs, job)
-            reviews = reviews.model_copy(update={"relevance_pruning": pruning_review})
-        except Exception as exc:
-            logging.warning("Relevance-pruning review failed (%s)", exc)
-        try:
-            ats_review = self.verification_agent.review_ats_keyword(docs, job, career)
-            reviews = reviews.model_copy(update={"ats_keyword": ats_review})
-        except Exception as exc:
-            logging.warning("ATS-keyword review failed (%s)", exc)
-        try:
-            consistency_review = self.verification_agent.review_consistency(docs)
-            reviews = reviews.model_copy(update={"consistency": consistency_review})
-        except Exception as exc:
-            logging.warning("Consistency review failed (%s)", exc)
-        try:
-            grammar_review = self.verification_agent.review_grammar(docs)
-            reviews = reviews.model_copy(update={"grammar": grammar_review})
-        except Exception as exc:
-            logging.warning("Grammar review failed (%s)", exc)
+        reviews = self._run_all_reviews(docs, career, voice, job, progress)
         self.store.save_reviews(session, reviews)
         return OrchestrationResult(
             session=session,
@@ -302,6 +240,54 @@ class ResumeRefineryOrchestrator:
             voice_style_guide=context.voice_style_guide,
             strict_truth_failed=bool(reviews.truthfulness and not reviews.truthfulness.all_supported),
         )
+
+    def _run_all_reviews(
+        self,
+        docs: DocumentSet,
+        career: CareerProfile,
+        voice: VoiceProfile,
+        job: JobDescription,
+        progress: ProgressCallback | None = None,
+    ) -> ReviewBundle:
+        """Run every reviewer once and return the combined bundle."""
+        reviews = self.verification_agent.review_all(docs, career, voice, job)
+        if reviews.truthfulness:
+            self._progress(progress, self._summarise_truth(reviews.truthfulness))
+        if reviews.voice:
+            self._progress(progress, self._summarise_voice(reviews.voice))
+        if reviews.ai_detection:
+            self._progress(progress, self._summarise_ai(reviews.ai_detection))
+        try:
+            hm_review = self.verification_agent.review_hiring_manager(docs, job)
+            reviews = reviews.model_copy(update={"hiring_manager": hm_review})
+            self._progress(progress, self._summarise_hiring_manager(hm_review))
+        except Exception as exc:
+            logging.warning("Hiring-manager review failed (%s)", exc)
+        try:
+            pruning_review = self.verification_agent.review_relevance_pruning(docs, job)
+            reviews = reviews.model_copy(update={"relevance_pruning": pruning_review})
+            self._progress(progress, self._summarise_relevance_pruning(pruning_review))
+        except Exception as exc:
+            logging.warning("Relevance-pruning review failed (%s)", exc)
+        try:
+            ats_review = self.verification_agent.review_ats_keyword(docs, job, career)
+            reviews = reviews.model_copy(update={"ats_keyword": ats_review})
+            self._progress(progress, self._summarise_ats_keyword(ats_review))
+        except Exception as exc:
+            logging.warning("ATS-keyword review failed (%s)", exc)
+        try:
+            consistency_review = self.verification_agent.review_consistency(docs)
+            reviews = reviews.model_copy(update={"consistency": consistency_review})
+            self._progress(progress, self._summarise_consistency(consistency_review))
+        except Exception as exc:
+            logging.warning("Consistency review failed (%s)", exc)
+        try:
+            grammar_review = self.verification_agent.review_grammar(docs)
+            reviews = reviews.model_copy(update={"grammar": grammar_review})
+            self._progress(progress, self._summarise_grammar(grammar_review))
+        except Exception as exc:
+            logging.warning("Grammar review failed (%s)", exc)
+        return reviews
 
     def _build_context(
         self,

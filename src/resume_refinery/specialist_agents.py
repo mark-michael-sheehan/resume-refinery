@@ -795,6 +795,7 @@ class RepairAgent:
 
         if feedback:
             parts.append(f"USER FEEDBACK:\n{feedback}")
+            has_issues = True
 
         # --- Truthfulness ---
         if truth:

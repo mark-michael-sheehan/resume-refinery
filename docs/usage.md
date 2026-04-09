@@ -130,7 +130,7 @@ claims, pass `--allow-unverified`.
 
 ---
 
-### `refine` — Regenerate with feedback
+### `refine` — Apply user instructions and review
 
 ```bash
 # Refine a specific document
@@ -145,8 +145,9 @@ resume-refinery refine acme-cloud_staff-engineer_2026-03-20 ./output \
 
 The second positional argument is the **output directory** (same rules as `new`).
 
-The agent sees the previous version and your feedback. A new version (`v2`, `v3`, etc.) is
-created automatically. Reviews run automatically after refinement.
+The repair agent applies the user's instructions as surgical edits to the existing documents.
+All eight reviewers then run once on the result (no repair loop). A new version (`v2`, `v3`,
+etc.) is created automatically and review results are saved with the version.
 
 ---
 

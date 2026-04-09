@@ -198,7 +198,7 @@ def test_orchestrator_refine_exports_to_custom_output_dir(tmp_path, monkeypatch,
     custom_out = tmp_path / "refined_output"
     second = orchestrator.refine_session_run(
         first.session.session_id, "Tighten the opener",
-        output_dir=custom_out, skip_review=True,
+        output_dir=custom_out,
     )
 
     # Returned paths point to the custom output directory
@@ -286,12 +286,75 @@ def test_orchestrator_refine_session_run_updates_selected_doc(tmp_path, monkeypa
     )
 
     first = orchestrator.create_session_run(career_profile, voice_profile, job_description, skip_review=True)
-    second = orchestrator.refine_session_run(first.session.session_id, "Tighten the opener", doc="cover_letter", skip_review=True)
+    second = orchestrator.refine_session_run(first.session.session_id, "Tighten the opener", doc="cover_letter")
 
     assert second.session.current_version == 2
     assert second.documents.cover_letter is not None
     assert second.documents.resume is not None
     assert second.documents.interview_guide is not None
+
+
+def test_orchestrator_refine_uses_repair_agent_and_runs_reviews_once(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Refine should call the repair agent (not drafting agent) and run reviews once without looping."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    verification = FakeVerificationAgent()
+    repair = FakeRepairAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=verification,
+        repair_agent=repair,
+    )
+
+    first = orchestrator.create_session_run(career_profile, voice_profile, job_description, skip_review=True)
+    initial_repair_calls = repair.unified_calls
+
+    second = orchestrator.refine_session_run(first.session.session_id, "Make it more concise")
+
+    # Repair agent called exactly once (single pass, no loop).
+    assert repair.unified_calls == initial_repair_calls + 1
+    # Documents were modified by repair agent.
+    assert second.documents.cover_letter == "cover_letter repaired"
+    assert second.documents.resume == "resume repaired"
+    assert second.documents.interview_guide == "interview_guide repaired"
+    # Reviews are present in the result (all eight reviewers).
+    assert second.reviews.truthfulness is not None
+    assert second.reviews.voice is not None
+    assert second.reviews.ai_detection is not None
+    assert second.reviews.hiring_manager is not None
+    assert second.reviews.ats_keyword is not None
+    assert second.reviews.consistency is not None
+    assert second.reviews.grammar is not None
+    # Version was bumped.
+    assert second.session.current_version == 2
+
+
+def test_orchestrator_refine_with_doc_only_modifies_targeted_doc(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """When doc= is specified, only that document is modified by repair."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=FakeVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    first = orchestrator.create_session_run(career_profile, voice_profile, job_description, skip_review=True)
+    original_docs = store.load_documents(first.session)
+
+    second = orchestrator.refine_session_run(first.session.session_id, "Fix the opener", doc="cover_letter")
+
+    # Only cover letter was changed by repair.
+    assert second.documents.cover_letter == "cover_letter repaired"
+    # Resume and interview guide are preserved from the original.
+    assert second.documents.resume == original_docs.resume
+    assert second.documents.interview_guide == original_docs.interview_guide
 
 
 # ---------------------------------------------------------------------------

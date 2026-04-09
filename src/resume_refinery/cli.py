@@ -124,14 +124,13 @@ def refine(
         Optional[str],
         typer.Option("--doc", "-d", help="cover_letter | resume | interview_guide (default: all)"),
     ] = None,
-    skip_review: bool = typer.Option(False, "--skip-review", help="Skip auto-review after generation"),
     allow_unverified: bool = typer.Option(
         False,
         "--allow-unverified",
         help="Allow outputs even if strict truth review still finds unsupported claims",
     ),
 ):
-    """Regenerate one or all documents in a session with feedback."""
+    """Refine one or all documents in a session with user instructions."""
     validated_dir = _validate_output_dir(output_dir)
     if doc:
         if doc not in ("cover_letter", "resume", "interview_guide"):
@@ -144,15 +143,13 @@ def refine(
             feedback,
             doc=key,  # type: ignore[arg-type]
             output_dir=validated_dir,
-            skip_review=skip_review,
             allow_unverified=allow_unverified,
             progress=_progress,
-            stream_callback=_stream_chunk,
         )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1)
-    _report_result(result, show_quality_reviews=not skip_review)
+    _report_result(result, show_quality_reviews=True)
     if result.strict_truth_failed:
         console.print(
             "\n[red]Strict truth check failed. Re-run with --allow-unverified if you want to keep this version anyway.[/red]"
