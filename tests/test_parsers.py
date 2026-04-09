@@ -196,3 +196,45 @@ def test_parse_job_description_content_no_fields():
     jd = parse_job_description_content("We need someone great with no structure.")
     assert jd.title is None
     assert jd.company is None
+
+
+# ---------------------------------------------------------------------------
+# Explicit company / title overrides
+# ---------------------------------------------------------------------------
+
+
+def test_parse_job_description_content_explicit_overrides():
+    jd = parse_job_description_content(
+        "We need someone great with no structure.",
+        company="Override Corp",
+        title="Lead Engineer",
+    )
+    assert jd.company == "Override Corp"
+    assert jd.title == "Lead Engineer"
+
+
+def test_parse_job_description_content_overrides_beat_extraction():
+    jd = parse_job_description_content(
+        "Title: Extracted Title\nCompany: Extracted Co\nDo great things.",
+        company="Explicit Co",
+        title="Explicit Title",
+    )
+    assert jd.company == "Explicit Co"
+    assert jd.title == "Explicit Title"
+
+
+def test_parse_job_description_content_partial_override():
+    jd = parse_job_description_content(
+        "Company: Extracted Co\nDo great things.",
+        title="Explicit Title",
+    )
+    assert jd.company == "Extracted Co"
+    assert jd.title == "Explicit Title"
+
+
+def test_load_job_description_with_overrides(tmp_path):
+    f = tmp_path / "job.md"
+    f.write_text("Some job description with no labels.", encoding="utf-8")
+    jd = load_job_description(f, company="CLI Corp", title="CLI Role")
+    assert jd.company == "CLI Corp"
+    assert jd.title == "CLI Role"

@@ -86,17 +86,30 @@ def parse_career_profile_content(content: str) -> CareerProfile:
     )
 
 
-def load_job_description(path: str | Path) -> JobDescription:
+def load_job_description(
+    path: str | Path,
+    *,
+    company: str | None = None,
+    title: str | None = None,
+) -> JobDescription:
     """Read a job description markdown/text/Word file and extract title + company."""
     content = _read_file_content(Path(path))
-    return parse_job_description_content(content)
+    return parse_job_description_content(content, company=company, title=title)
 
 
-def parse_job_description_content(content: str) -> JobDescription:
-    """Build a JobDescription from raw file content."""
+def parse_job_description_content(
+    content: str,
+    *,
+    company: str | None = None,
+    title: str | None = None,
+) -> JobDescription:
+    """Build a JobDescription from raw file content.
 
-    title = _extract_job_title(content)
-    company = _extract_company(content)
+    Explicit *company* and *title* values take precedence over
+    regex-based extraction from the content.
+    """
+    title = title or _extract_job_title(content)
+    company = company or _extract_company(content)
 
     return JobDescription(raw_content=content, title=title, company=company)
 

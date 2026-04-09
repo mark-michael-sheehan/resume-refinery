@@ -743,6 +743,10 @@ def home() -> HTMLResponse:
 
     <label>Job Description (.md or .txt)</label>
     <input type=\"file\" name=\"job_description\" required />
+    <label>Company Name (optional — overrides auto-extraction)</label>
+    <input type=\"text\" name=\"company\" placeholder=\"e.g. Acme Corp\" />
+    <label>Job Title (optional — overrides auto-extraction)</label>
+    <input type=\"text\" name=\"title\" placeholder=\"e.g. Staff Engineer\" />
     <label>Output Directory</label>
     <div class="dir-picker-row">
       <input type="text" name="output_dir" id="output_dir_new" readonly required />
@@ -764,6 +768,8 @@ async def create_session(
     career_profile: Optional[UploadFile] = None,
     voice_profile: Optional[UploadFile] = None,
     career_repo_id: Optional[str] = Form(None),
+    company: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
     output_dir: str = Form(...),
     skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
@@ -807,7 +813,11 @@ async def create_session(
         career = parse_career_profile_content(career_text)
         voice = parse_voice_profile_content(voice_text)
 
-    job = parse_job_description_content(job_text)
+    job = parse_job_description_content(
+        job_text,
+        company=company.strip() if company and company.strip() else None,
+        title=title.strip() if title and title.strip() else None,
+    )
 
     _skip = bool(skip_review)
     _allow = bool(allow_unverified)

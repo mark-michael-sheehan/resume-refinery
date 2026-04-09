@@ -71,6 +71,11 @@ The target role. Paste the full job description text. Include:
 - `Title:` and `Company:` lines at the top for session naming
 - The full description text (more context = better tailoring)
 
+If the job description does not contain explicit `Title:` / `Company:` labels,
+you can supply them via `--company` and `--title` on the CLI, or through the
+dedicated fields in the web app form. Explicit values always take precedence
+over auto-extraction.
+
 See [examples/job_description.md](../examples/job_description.md) for a template.
 
 ---
@@ -93,6 +98,14 @@ guided questions before generating documents.
 
 ```bash
 resume-refinery new career_profile.md voice_profile.md job_description.md ./output
+```
+
+Optional flags `--company` and `--title` let you specify the company name and job
+title explicitly when the job description file doesn't include structured labels:
+
+```bash
+resume-refinery new career_profile.md voice_profile.md job_description.md ./output \
+  --company "Acme Corp" --title "Staff Engineer"
 ```
 
 The fourth argument is the **output directory** where generated DOCX files will be

@@ -77,6 +77,8 @@ def new(
     voice_profile: Annotated[Path, typer.Argument(help="Voice profile markdown file")],
     job_description: Annotated[Path, typer.Argument(help="Job description markdown/text file")],
     output_dir: Annotated[Path, typer.Argument(help="Directory to write generated documents to")],
+    company: Optional[str] = typer.Option(None, "--company", help="Company name (overrides auto-extraction from job description)"),
+    title: Optional[str] = typer.Option(None, "--title", help="Job title (overrides auto-extraction from job description)"),
     skip_review: bool = typer.Option(False, "--skip-review", help="Skip auto-review after generation"),
     allow_unverified: bool = typer.Option(
         False,
@@ -88,7 +90,7 @@ def new(
     validated_dir = _validate_output_dir(output_dir)
     career = load_career_profile(career_profile)
     voice = load_voice_profile(voice_profile)
-    job = load_job_description(job_description)
+    job = load_job_description(job_description, company=company, title=title)
 
     result = _get_orchestrator().create_session_run(
         career,
