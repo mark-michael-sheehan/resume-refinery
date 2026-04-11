@@ -503,6 +503,26 @@ actually correct or intentional (reviewer false positive).
 Only accept a finding when it is clearly a reviewer false positive. When in \
 doubt, fix it. Accepted phrases will not be flagged again in subsequent passes.
 
+PRIOR EDITS AND CONFLICT RESOLUTION:
+When a "Prior Edits" section is present, it lists edits applied by earlier repair \
+passes (with the reviewer that triggered each edit). If a current review finding \
+targets text that was previously edited by a higher-priority reviewer, you must \
+decide:
+  - FIX:   The finding raises a genuinely NEW concern that the prior edit did not \
+           address (e.g. a grammar error introduced by a truthfulness correction). \
+           Apply the edit, but preserve the intent of the prior edit.
+  - MERGE: Both the prior edit's intent and the new finding are valid. Write a \
+           replacement that satisfies BOTH constraints (e.g. rephrase for voice \
+           while keeping the factual correction from truthfulness).
+  - ACCEPT: The finding is noise caused by the prior edit (e.g. voice style was \
+           intentionally overridden for truthfulness). Add to the accepted list.
+
+Priority hierarchy (highest to lowest):
+truthfulness > consistency > ATS > grammar > voice > AI detection > hiring manager > pruning
+
+When in doubt between MERGE and ACCEPT for a lower-priority finding that conflicts \
+with a higher-priority prior edit, prefer MERGE if feasible, otherwise ACCEPT.
+
 REVIEWER CRITERIA (the reviewers will re-check your edits using these rules):
 
 Truthfulness reviewer rules:
@@ -629,7 +649,7 @@ REPAIR_USER_TEMPLATE = """\
 
 ## Job Description [FACT-CHECK REFERENCE — do not copy text from this into the document]
 {job_description}
-
+{prior_edits_section}
 ## Review Findings
 {review_findings}
 
@@ -673,14 +693,25 @@ def repair_user_message(
     voice_profile: str,
     job_description: str,
     review_findings: str,
+    prior_edits: str = "",
 ) -> str:
     """Build the user message for a surgical-repair call (no-think mode)."""
+    if prior_edits:
+        prior_edits_section = (
+            "\n## Prior Edits [CONTEXT — these edits were applied by earlier passes; "
+            "see system prompt for conflict resolution rules]\n"
+            + prior_edits
+            + "\n"
+        )
+    else:
+        prior_edits_section = ""
     return REPAIR_USER_TEMPLATE.format(
         doc_content=doc_content,
         career_profile=career_profile,
         voice_profile=voice_profile,
         job_description=job_description,
         review_findings=review_findings,
+        prior_edits_section=prior_edits_section,
     )
 
 

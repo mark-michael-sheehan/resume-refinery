@@ -37,6 +37,12 @@ voice_profile.md + career_profile.md + job_description.md
                → Phase A repair if any fail
       Phase B — soft-gate reviews (voice, AI detection, HM, pruning)
                → Phase B repair if any fail (preserves Phase A fixes)
+      Edit-region tracking (annotated pass-through): each repair records
+        edits tagged with the reviewer that triggered them. On subsequent
+        passes, the repair agent receives a "Prior Edits" summary listing
+        all earlier edits with reviewer attribution and priority hierarchy.
+        The repair agent decides whether to fix, merge, or accept findings
+        that overlap prior edits — findings are never silently suppressed.
       Outer loop repeats to catch cross-phase regressions
             │
             ▼

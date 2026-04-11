@@ -73,3 +73,17 @@ ensure convergence.
 | CR-7.5 | Each reviewer's suppression set is independent — accepting a voice false positive cannot suppress a truthfulness or AI-detection finding (and vice versa). |
 | CR-7.6 | Whenever the repair agent adds items to any acceptance list, the orchestrator emits an explicit progress message naming each accepted phrase/claim/issue and the reviewer it came from, before proceeding to the next pass. |
 | CR-7.7 | At the end of each `create_session_run` call, if any items were exempted, the cumulative suppression sets are persisted to `exempted_phrases.json` in the active version directory as an `ExemptedPhrases` model (fields: `claims`, `ai_phrases`, `voice_issues`, `hm_issues`, `pruning_issues`, `ats_issues`, `consistency_issues`, `grammar_issues`). No file is written when no items were exempted. The `refine_session_run` call does not persist suppressions (single repair pass, no loop). |
+
+## CR-8 Edit Region Tracking (Annotated Pass-Through)
+
+| ID | Requirement |
+|---|---|
+| CR-8.1 | Every successful edit applied by `apply_edits` produces an `EditRegion(start, end, reviewer, pass_num)` recording the character span of the replacement text, the reviewer that triggered the edit, and the pass number. |
+| CR-8.2 | Each `RepairEdit` stores the `reviewer` that triggered it, enabling per-edit attribution in prior-edit summaries. |
+| CR-8.3 | Each reviewer has a numeric priority rank: truthfulness (80) > consistency (70) > ATS (60) > grammar (50) > voice (40) > AI (30) > HM (20) > pruning (10). |
+| CR-8.4 | On pass 1+, the orchestrator builds a per-document "prior edits" summary from accumulated `RepairPassResult.edits`, listing each prior edit's reviewer, original text, replacement text, and reason. This summary is passed to the repair agent as prompt context — findings are NOT pre-filtered. |
+| CR-8.5 | The repair prompt includes a "Prior Edits" section (between the Job Description and Review Findings) when prior edits exist, and the system prompt includes conflict resolution instructions (fix/merge/accept). |
+| CR-8.6 | When a review finding targets text that was previously edited by a higher-priority reviewer, the repair agent decides: FIX (genuinely new concern), MERGE (satisfy both constraints), or ACCEPT (noise from prior edit). The orchestrator does not silently suppress findings. |
+| CR-8.7 | Deletions (empty replacement text) do not produce edit regions because there is no replacement span to protect. They are shown as "DELETED" in prior-edit summaries. |
+| CR-8.8 | The `RepairPassResult` model includes an `edit_regions` field (dict mapping document key to list of `EditRegion`s) alongside the existing `edits` field. |
+| CR-8.9 | The `repair_unified` method determines the dominant reviewer for the current phase and tags all edits and edit regions with that reviewer's priority. Phase A tags with the highest-priority failing reviewer (truthfulness > consistency > ATS > grammar). Phase B tags with the highest-priority failing reviewer (voice > AI > HM > pruning). |

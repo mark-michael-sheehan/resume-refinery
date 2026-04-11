@@ -440,6 +440,9 @@ class ResumeRefineryOrchestrator:
                     ats_review=ats_result,
                     consistency_review=consistency_result,
                     grammar_review=grammar_result,
+                    phase="a",
+                    pass_num=pass_num,
+                    prior_edits=self._build_prior_edits(repair_results),
                 )
                 repair_results.append(repair_pass)
                 suppressed_claims.update(repair_pass.accepted_claims)
@@ -569,6 +572,9 @@ class ResumeRefineryOrchestrator:
                     consistency_review=None,
                     grammar_review=None,
                     preserve_instructions=REPAIR_PHASE_B_PRESERVE_NOTE,
+                    phase="b",
+                    pass_num=pass_num,
+                    prior_edits=self._build_prior_edits(repair_results),
                 )
                 repair_results.append(repair_pass)
                 suppressed_claims.update(repair_pass.accepted_claims)
@@ -779,6 +785,53 @@ class ResumeRefineryOrchestrator:
             })
 
         return filtered_truth, filtered_voice, filtered_ai, filtered_hm, filtered_pruning, filtered_ats, filtered_consistency, filtered_grammar
+
+    # ------------------------------------------------------------------
+    # Prior-edit context builder (annotated pass-through)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_prior_edits(
+        repair_results: list[RepairPassResult],
+    ) -> dict[str, str]:
+        """Build per-document summaries of prior edits for annotated pass-through.
+
+        Instead of silently filtering findings that overlap previously edited
+        regions, we pass this context to the repair agent so it can make
+        informed fix/merge/accept decisions.
+
+        Returns a dict mapping document key → human-readable prior-edit summary.
+        """
+        from .models import REVIEWER_PRIORITY_RANK
+
+        # Accumulate edits per document across all prior repair passes.
+        doc_edits: dict[str, list[tuple[str, str, str, str]]] = {}  # key -> [(reviewer, find, replace, reason)]
+        for rp in repair_results:
+            for doc_key, edits in rp.edits.items():
+                entries = doc_edits.setdefault(doc_key, [])
+                for edit in edits:
+                    entries.append((edit.reviewer, edit.find, edit.replace, edit.reason))
+
+        result: dict[str, str] = {}
+        for doc_key, entries in doc_edits.items():
+            if not entries:
+                continue
+            lines: list[str] = []
+            for reviewer, find_text, replace_text, reason in entries:
+                if replace_text:
+                    lines.append(
+                        f'- [{reviewer}] "{find_text[:80]}" → "{replace_text[:80]}"'
+                        + (f"  ({reason[:60]})" if reason else "")
+                    )
+                else:
+                    lines.append(
+                        f'- [{reviewer}] DELETED "{find_text[:80]}"'
+                        + (f"  ({reason[:60]})" if reason else "")
+                    )
+            if lines:
+                result[doc_key] = "\n".join(lines)
+
+        return result
 
     # ------------------------------------------------------------------
     # Review-result summaries emitted via the progress callback

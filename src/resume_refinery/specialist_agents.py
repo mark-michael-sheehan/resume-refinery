@@ -565,12 +565,21 @@ class RepairAgent:
         consistency_review: ConsistencyResult | None = None,
         grammar_review: GrammarResult | None = None,
         preserve_instructions: str | None = None,
+        phase: str = "a",
+        pass_num: int = 0,
+        prior_edits: dict[str, str] | None = None,
     ) -> RepairPassResult:
         """Surgical repair: ask LLM for JSON edits, then apply programmatically."""
+        from .models import DocumentEditHistory, EditRegion, ReviewerPriority
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
         from .utils import apply_edits
 
+        # Determine the dominant reviewer for this phase so that edit
+        # regions are tagged with the correct priority.
+        phase_reviewer: ReviewerPriority = self._phase_reviewer(phase, truth, ats_review, consistency_review, grammar_review, voice_review, ai_review)
+
         all_edits: dict[str, list[RepairEdit]] = {}
+        all_regions: dict[str, list[EditRegion]] = {}
         all_accepted_claims: list[str] = []
         all_accepted_ai_phrases: list[str] = []
         all_accepted_voice_issues: list[str] = []
@@ -599,6 +608,7 @@ class RepairAgent:
                 voice_profile=voice.raw_content,
                 job_description=job.raw_content,
                 review_findings=review_findings,
+                prior_edits=(prior_edits or {}).get(key, ""),
             )
 
             edits, acceptances = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
@@ -642,18 +652,25 @@ class RepairAgent:
                         e.get("replace", "")[:120],
                         e.get("reason", "")[:120],
                     )
-                repaired = apply_edits(docs.get(key), edits)
+                repaired, regions = apply_edits(
+                    docs.get(key), edits,
+                    reviewer=phase_reviewer,
+                    pass_num=pass_num,
+                )
                 docs.set(key, repaired)
+                all_regions[key] = regions
                 all_edits[key] = [
                     RepairEdit(
                         find=e.get("find", ""),
                         replace=e.get("replace", ""),
                         reason=e.get("reason", ""),
+                        reviewer=phase_reviewer,
                     )
                     for e in edits
                 ]
         return RepairPassResult(
             edits=all_edits,
+            edit_regions=all_regions,
             accepted_claims=all_accepted_claims,
             accepted_ai_phrases=all_accepted_ai_phrases,
             accepted_voice_issues=all_accepted_voice_issues,
@@ -663,6 +680,35 @@ class RepairAgent:
             accepted_consistency_issues=all_accepted_consistency_issues,
             accepted_grammar_issues=all_accepted_grammar_issues,
         )
+
+    @staticmethod
+    def _phase_reviewer(
+        phase: str,
+        truth: TruthfulnessResult | None,
+        ats_review: ATSKeywordResult | None,
+        consistency_review: ConsistencyResult | None,
+        grammar_review: GrammarResult | None,
+        voice_review: VoiceReviewResult | None,
+        ai_review: AIDetectionResult | None,
+    ) -> str:
+        """Return the highest-priority reviewer that has findings in this phase."""
+        from .models import ReviewerPriority
+        if phase == "a":
+            # Phase A priority order: truth > consistency > ats > grammar
+            if truth and not truth.all_supported:
+                return "truthfulness"
+            if consistency_review and not consistency_review.consistent:
+                return "consistency"
+            if ats_review and ats_review.alignment_score not in ("strong", "moderate"):
+                return "ats"
+            return "grammar"
+        else:
+            # Phase B priority order: voice > ai > hm > pruning
+            if voice_review and voice_review.overall_match not in ("strong", "moderate"):
+                return "voice"
+            if ai_review and (ai_review.cover_letter_flags or ai_review.resume_flags):
+                return "ai"
+            return "voice"
 
     # ------------------------------------------------------------------
     # LLM call for edit planning

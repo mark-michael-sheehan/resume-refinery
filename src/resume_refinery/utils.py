@@ -9,6 +9,8 @@ from typing import TypedDict
 
 from dotenv import load_dotenv
 
+from .models import EditRegion, ReviewerPriority
+
 load_dotenv()
 
 _EDIT_FAIL_THRESHOLD = int(
@@ -41,7 +43,9 @@ def apply_edits(
     edits: list[EditOp],
     *,
     fail_threshold: int | None = None,
-) -> str:
+    reviewer: ReviewerPriority = "truthfulness",
+    pass_num: int = 0,
+) -> tuple[str, list[EditRegion]]:
     """Apply surgical find/replace edits to *document*.
 
     Edits are located in the original document to determine processing
@@ -54,6 +58,10 @@ def apply_edits(
 
     If the number of edits that fail to match exceeds *fail_threshold*,
     an ``EditApplicationError`` is raised.
+
+    Returns ``(modified_document, edit_regions)`` where *edit_regions*
+    contains the character spans that were modified, tagged with the
+    reviewer that triggered them and the pass number.
     """
     threshold = fail_threshold if fail_threshold is not None else _EDIT_FAIL_THRESHOLD
 
@@ -82,6 +90,7 @@ def apply_edits(
     # the current document.  If a prior edit changed the region, the
     # find text won't match and the edit is counted as a failure.
     applied_count = 0
+    regions: list[EditRegion] = []
     for _orig_idx, edit in ordered:
         find_text = edit["find"]
         replace_text = edit.get("replace", "")
@@ -94,6 +103,14 @@ def apply_edits(
             failed.append(edit)
             continue
         document = document[:idx] + replace_text + document[idx + len(find_text):]
+        # Record the span of the replacement text in the modified document.
+        if replace_text:
+            regions.append(EditRegion(
+                start=idx,
+                end=idx + len(replace_text),
+                reviewer=reviewer,
+                pass_num=pass_num,
+            ))
         applied_count += 1
 
     # Check threshold after all edits have been attempted.
@@ -107,7 +124,7 @@ def apply_edits(
     else:
         log.info("Applied %d edit(s), 0 failures", applied_count)
 
-    return document
+    return document, regions
 
 
 def ensure_dir(path: str | Path) -> Path:

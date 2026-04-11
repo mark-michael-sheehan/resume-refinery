@@ -138,7 +138,7 @@ class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
         self.unified_calls += 1
         docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
@@ -513,7 +513,7 @@ class AcceptsAIPhraseRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
 
@@ -1018,3 +1018,59 @@ def test_docs_updated_after_each_repair_pass(tmp_path, monkeypatch, career_profi
     # Repair pass snapshot should also exist
     snap_docs, _ = store.load_repair_pass(result.session, 0)
     assert snap_docs is not None
+
+
+# ---------------------------------------------------------------------------
+# Prior-edit context builder
+# ---------------------------------------------------------------------------
+
+
+def test_build_prior_edits_empty_when_no_results():
+    """_build_prior_edits returns empty dict when no repair results exist."""
+    result = ResumeRefineryOrchestrator._build_prior_edits([])
+    assert result == {}
+
+
+def test_build_prior_edits_formats_edit_summary():
+    """_build_prior_edits builds per-document summaries from RepairPassResult edits."""
+    from resume_refinery.models import RepairEdit
+
+    rp = RepairPassResult(
+        edits={
+            "cover_letter": [
+                RepairEdit(find="old text", replace="new text", reason="truthfulness fix", reviewer="truthfulness"),
+                RepairEdit(find="remove me", replace="", reason="pruning", reviewer="pruning"),
+            ],
+            "resume": [
+                RepairEdit(find="foo", replace="bar", reason="voice fix", reviewer="voice"),
+            ],
+        },
+    )
+    result = ResumeRefineryOrchestrator._build_prior_edits([rp])
+
+    assert "cover_letter" in result
+    assert "resume" in result
+    assert "[truthfulness]" in result["cover_letter"]
+    assert "old text" in result["cover_letter"]
+    assert "new text" in result["cover_letter"]
+    assert "DELETED" in result["cover_letter"]
+    assert "[voice]" in result["resume"]
+    assert "foo" in result["resume"]
+    assert "bar" in result["resume"]
+
+
+def test_build_prior_edits_accumulates_across_passes():
+    """_build_prior_edits accumulates edits from multiple RepairPassResult objects."""
+    from resume_refinery.models import RepairEdit
+
+    rp1 = RepairPassResult(
+        edits={"resume": [RepairEdit(find="a", replace="b", reviewer="truthfulness")]},
+    )
+    rp2 = RepairPassResult(
+        edits={"resume": [RepairEdit(find="c", replace="d", reviewer="voice")]},
+    )
+    result = ResumeRefineryOrchestrator._build_prior_edits([rp1, rp2])
+
+    assert "resume" in result
+    assert "[truthfulness]" in result["resume"]
+    assert "[voice]" in result["resume"]

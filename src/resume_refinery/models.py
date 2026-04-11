@@ -481,15 +481,85 @@ class ReviewBundle(BaseModel):
     grammar: Optional[GrammarResult] = None
 
 
+ReviewerPriority = Literal[
+    "truthfulness",
+    "consistency",
+    "ats",
+    "grammar",
+    "voice",
+    "ai",
+    "hm",
+    "pruning",
+]
+
+# Higher value = higher priority.  Truthfulness edits are never overwritten
+# by lower-priority style repairs.
+REVIEWER_PRIORITY_RANK: dict[str, int] = {
+    "truthfulness": 80,
+    "consistency": 70,
+    "ats": 60,
+    "grammar": 50,
+    "voice": 40,
+    "ai": 30,
+    "hm": 20,
+    "pruning": 10,
+}
+
+
+class EditRegion(BaseModel):
+    """A character span in a document that was modified by a repair edit."""
+
+    start: int = Field(description="Start character offset (inclusive)")
+    end: int = Field(description="End character offset (exclusive)")
+    reviewer: ReviewerPriority = Field(description="Which reviewer triggered this edit")
+    pass_num: int = Field(description="0-based repair pass number")
+
+    @property
+    def priority(self) -> int:
+        return REVIEWER_PRIORITY_RANK.get(self.reviewer, 0)
+
+    def overlaps(self, start: int, end: int) -> bool:
+        """Return True if [start, end) overlaps this region."""
+        return self.start < end and start < self.end
+
+
+class DocumentEditHistory(BaseModel):
+    """Accumulates edit regions per document across repair passes."""
+
+    regions: list[EditRegion] = Field(default_factory=list)
+
+    def add_region(self, start: int, end: int, reviewer: ReviewerPriority, pass_num: int) -> None:
+        self.regions.append(EditRegion(start=start, end=end, reviewer=reviewer, pass_num=pass_num))
+
+    def is_protected(self, phrase: str, document: str, by_reviewer: ReviewerPriority) -> bool:
+        """Return True if *phrase* falls inside a region edited by an equal-or-higher-priority reviewer.
+
+        This implements the merge-conflict rule: higher-priority edits
+        protect their region from being re-flagged by lower-priority reviewers.
+        """
+        incoming_rank = REVIEWER_PRIORITY_RANK.get(by_reviewer, 0)
+        idx = document.find(phrase)
+        if idx == -1:
+            return False
+        phrase_end = idx + len(phrase)
+        for region in self.regions:
+            if region.overlaps(idx, phrase_end) and region.priority >= incoming_rank:
+                return True
+        return False
+
+
 class RepairEdit(BaseModel):
     find: str
     replace: str
     reason: str = ""
+    reviewer: str = Field(default="", description="Which reviewer triggered this edit")
 
 
 class RepairPassResult(BaseModel):
     """Edits applied during a single repair pass, keyed by document."""
     edits: dict[str, list[RepairEdit]] = Field(default_factory=dict)
+    # Edit regions produced by apply_edits, keyed by document.
+    edit_regions: dict[str, list[EditRegion]] = Field(default_factory=dict)
     # Per-reviewer false-positive acceptances — phrases the repairer determined
     # are reviewer false positives and should be suppressed in future passes.
     accepted_claims: StrList = Field(default_factory=list)
