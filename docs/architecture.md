@@ -41,6 +41,9 @@ voice_profile.md + career_profile.md + job_description.md
         all earlier edits with reviewer attribution and priority hierarchy.
         The repair agent decides whether to fix, merge, or accept findings
         that overlap prior edits — findings are never silently suppressed.
+      Repair edits support three modes: find/replace (default), deletion
+        (replace=""), and insert_after (anchor preserved, new content
+        appended after anchor) for adding new content to documents.
       Intra-pass collision resolution: when multiple edits target
         overlapping text spans, they are merged via a lightweight LLM call
         that combines all overlapping edits' intents into one replacement.

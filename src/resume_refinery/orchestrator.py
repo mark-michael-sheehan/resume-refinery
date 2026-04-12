@@ -741,20 +741,25 @@ class ResumeRefineryOrchestrator:
         from .models import REVIEWER_PRIORITY_RANK
 
         # Accumulate edits per document across all prior repair passes.
-        doc_edits: dict[str, list[tuple[str, str, str, str]]] = {}  # key -> [(reviewer, find, replace, reason)]
+        doc_edits: dict[str, list[tuple[str, str, str, str, bool]]] = {}  # key -> [(reviewer, find, replace, reason, insert_after)]
         for rp in repair_results:
             for doc_key, edits in rp.edits.items():
                 entries = doc_edits.setdefault(doc_key, [])
                 for edit in edits:
-                    entries.append((edit.reviewer, edit.find, edit.replace, edit.reason))
+                    entries.append((edit.reviewer, edit.find, edit.replace, edit.reason, edit.insert_after))
 
         result: dict[str, str] = {}
         for doc_key, entries in doc_edits.items():
             if not entries:
                 continue
             lines: list[str] = []
-            for reviewer, find_text, replace_text, reason in entries:
-                if replace_text:
+            for reviewer, find_text, replace_text, reason, is_insert in entries:
+                if is_insert:
+                    lines.append(
+                        f'- [{reviewer}] INSERTED after "{find_text[:80]}": "{replace_text[:80]}"'
+                        + (f"  ({reason[:60]})" if reason else "")
+                    )
+                elif replace_text:
                     lines.append(
                         f'- [{reviewer}] "{find_text[:80]}" → "{replace_text[:80]}"'
                         + (f"  ({reason[:60]})" if reason else "")

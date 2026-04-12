@@ -1074,3 +1074,22 @@ def test_build_prior_edits_accumulates_across_passes():
     assert "resume" in result
     assert "[truthfulness]" in result["resume"]
     assert "[voice]" in result["resume"]
+
+
+def test_build_prior_edits_insert_after_summary():
+    """_build_prior_edits labels insert_after edits as INSERTED."""
+    from resume_refinery.models import RepairEdit
+
+    rp = RepairPassResult(
+        edits={
+            "resume": [
+                RepairEdit(find="## Skills", replace="\n- Kubernetes", reason="missing ATS keyword", reviewer="ats", insert_after=True),
+            ],
+        },
+    )
+    result = ResumeRefineryOrchestrator._build_prior_edits([rp])
+
+    assert "resume" in result
+    assert "INSERTED" in result["resume"]
+    assert "## Skills" in result["resume"]
+    assert "Kubernetes" in result["resume"]

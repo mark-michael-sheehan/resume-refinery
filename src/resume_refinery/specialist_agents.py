@@ -669,6 +669,7 @@ class RepairAgent:
                         replace=e.get("replace", ""),
                         reason=e.get("reason", ""),
                         reviewer=phase_reviewer,
+                        insert_after=bool(e.get("insert_after", False)),
                     )
                     for e in edits
                 ]
@@ -820,6 +821,7 @@ class RepairAgent:
                                 "find":    {"type": "string"},
                                 "replace": {"type": "string"},
                                 "reason":  {"type": "string"},
+                                "insert_after": {"type": "boolean"},
                             },
                             "required": ["find", "replace"],
                         },

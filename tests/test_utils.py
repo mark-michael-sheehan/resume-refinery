@@ -340,3 +340,75 @@ def test_apply_edits_offset_tracking_correct_regions():
     # Original CCC at pos 8, adjusted to 8+2=10. Length 1, so end=11.
     assert regions[1].start == 10
     assert regions[1].end == 11
+
+
+# ------------------------------------------------------------------
+# insert_after tests
+# ------------------------------------------------------------------
+
+
+def test_apply_edits_insert_after_basic():
+    """insert_after should insert content after the anchor text, preserving the anchor."""
+    doc = "## Skills\n\nPython, Java"
+    edits = [{"find": "## Skills", "replace": "\n\n- Kubernetes", "insert_after": True}]
+    result, regions, _failed = apply_edits(doc, edits, fail_threshold=0)
+    assert result == "## Skills\n\n- Kubernetes\n\nPython, Java"
+
+
+def test_apply_edits_insert_after_preserves_anchor():
+    """The anchor text must remain untouched after an insert_after edit."""
+    doc = "Header\nBody\nFooter"
+    edits = [{"find": "Body", "replace": "\nInserted line", "insert_after": True}]
+    result, regions, _failed = apply_edits(doc, edits, fail_threshold=0)
+    assert "Body" in result
+    assert result == "Header\nBody\nInserted line\nFooter"
+
+
+def test_apply_edits_insert_after_produces_region():
+    """insert_after edits should produce an EditRegion for the inserted content."""
+    doc = "AAA BBB"
+    edits = [{"find": "AAA", "replace": " NEW", "insert_after": True}]
+    result, regions, _failed = apply_edits(doc, edits, fail_threshold=0, reviewer="ats", pass_num=1)
+    assert result == "AAA NEW BBB"
+    assert len(regions) == 1
+    # "AAA" ends at 3, insert starts at 3, " NEW" is 4 chars → region 3-7
+    assert regions[0].start == 3
+    assert regions[0].end == 7
+    assert regions[0].reviewer == "ats"
+
+
+def test_apply_edits_insert_after_not_found():
+    """insert_after with a non-existent anchor should count as a failure."""
+    doc = "Hello world"
+    edits = [{"find": "MISSING", "replace": " new content", "insert_after": True}]
+    result, regions, _failed = apply_edits(doc, edits, fail_threshold=1)
+    assert result == "Hello world"
+    assert len(_failed) == 1
+
+
+def test_apply_edits_insert_after_whitespace_normalized():
+    """insert_after should work with whitespace-normalized anchor matching."""
+    doc = "line one\nline two\nline three"
+    edits = [{"find": "line one line two", "replace": "\ninserted", "insert_after": True}]
+    result, regions, _failed = apply_edits(doc, edits, fail_threshold=0)
+    # Anchor "line one\nline two" should be preserved, insert after
+    assert result == "line one\nline two\ninserted\nline three"
+
+
+def test_apply_edits_insert_after_with_regular_edit():
+    """insert_after and regular find/replace edits can be mixed in one batch."""
+    doc = "AAA BBB CCC"
+    edits = [
+        {"find": "BBB", "replace": "XXX"},  # regular replace
+        {"find": "CCC", "replace": " DDD", "insert_after": True},  # insert after
+    ]
+    result, regions, _failed = apply_edits(doc, edits, fail_threshold=0)
+    assert result == "AAA XXX CCC DDD"
+
+
+def test_apply_edits_insert_after_false_is_regular():
+    """insert_after=False should behave like a regular find/replace."""
+    doc = "AAA BBB CCC"
+    edits = [{"find": "BBB", "replace": "XXX", "insert_after": False}]
+    result, regions, _failed = apply_edits(doc, edits, fail_threshold=0)
+    assert result == "AAA XXX CCC"

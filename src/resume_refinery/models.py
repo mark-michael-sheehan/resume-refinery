@@ -553,6 +553,7 @@ class RepairEdit(BaseModel):
     replace: str
     reason: str = ""
     reviewer: str = Field(default="", description="Which reviewer triggered this edit")
+    insert_after: bool = Field(default=False, description="When True, 'find' is an anchor; 'replace' is inserted after the anchor without removing it")
 
 
 class RepairPassResult(BaseModel):

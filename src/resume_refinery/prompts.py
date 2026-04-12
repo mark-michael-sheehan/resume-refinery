@@ -635,6 +635,11 @@ EDIT RULES:
 8. CRITICAL — Do NOT copy content from the Career Profile or Job Description \
    into replacements. Those sections are fact-check references only. \
    For truthfulness failures, REMOVE or SOFTEN the phrase only.
+9. To INSERT new content (e.g. a missing ATS keyword or a new bullet point), \
+   set "insert_after" to true. "find" is the anchor text that must exist \
+   verbatim in the document. "replace" is the new content to insert \
+   immediately after the anchor. The anchor text is preserved — it is NOT removed. \
+   Use this instead of duplicating the anchor text inside "replace".
 """
 
 REPAIR_USER_TEMPLATE = """\
@@ -662,6 +667,12 @@ phrase to the matching accepted array). Return a single JSON object:
       "find": "<exact verbatim substring from the document>",
       "replace": "<corrected replacement; use only text already in the document>",
       "reason": "<which review finding this fixes>"
+    }},
+    {{
+      "find": "<anchor text that exists in the document>",
+      "replace": "<new content to insert after the anchor>",
+      "insert_after": true,
+      "reason": "<which review finding this fixes>"
     }}
   ],
   "accepted_claims":        ["<verbatim truthfulness-flagged phrase that IS supported>"],
@@ -681,6 +692,8 @@ Rules:
 - Do NOT pull content from the Career Profile or Job Description sections above \
   into your replacements — they are for fact-checking only.
 - One edit OR one acceptance per flagged issue — do not both fix and accept the same phrase.
+- To insert new content after an anchor, set "insert_after" to true. The anchor \
+  text in "find" is preserved; "replace" is inserted immediately after it.
 - If no edits are needed, set "edits" to [].
 - If no acceptances apply, set the accepted arrays to [].
 - Return JSON only — no markdown fences, no explanation.

@@ -87,6 +87,9 @@ ensure convergence.
 | CR-8.7 | Deletions (empty replacement text) do not produce edit regions because there is no replacement span to protect. They are shown as "DELETED" in prior-edit summaries. |
 | CR-8.8 | The `RepairPassResult` model includes an `edit_regions` field (dict mapping document key to list of `EditRegion`s) alongside the existing `edits` field. |
 | CR-8.9 | The `repair_unified` method determines the dominant reviewer by checking all reviewers in priority order (truthfulness > consistency > ATS > grammar > voice > AI) and tags all edits and edit regions with that reviewer's priority. |
+| CR-8.10 | `RepairEdit` supports an `insert_after` boolean field (default `False`). When `True`, the `find` text acts as an anchor that is preserved in the document, and `replace` content is inserted immediately after the anchor. This enables first-class support for adding new content (e.g. missing ATS keywords, new bullet points) without duplicating anchor text inside the replacement. |
+| CR-8.11 | In `apply_edits`, an `insert_after` edit locates the anchor text and sets the edit span to a zero-width point immediately after the anchor end. Phases 2–4 (clustering, merging, offset tracking) operate unchanged. |
+| CR-8.12 | Insert-after edits are shown as `INSERTED after "<anchor>": "<content>"` in prior-edit summaries. |
 
 ## CR-9 Intra-Pass Edit Collision Resolution
 

@@ -25,6 +25,7 @@ class EditOp(TypedDict, total=False):
     find: str
     replace: str
     reason: str
+    insert_after: bool
 
 
 class EditApplicationError(Exception):
@@ -221,6 +222,7 @@ def apply_edits(
 
     for edit in edits:
         find_text = edit.get("find", "")
+        is_insert = bool(edit.get("insert_after", False))
         if not find_text:
             log.warning("Skipping edit with empty 'find': %s", edit)
             failed.append(edit)
@@ -229,7 +231,12 @@ def apply_edits(
         # Try exact match first.
         idx = document.find(find_text)
         if idx != -1:
-            located.append(_LocatedEdit(idx, idx + len(find_text), edit))
+            if is_insert:
+                # insert_after: anchor is preserved; span is zero-width right after it.
+                anchor_end = idx + len(find_text)
+                located.append(_LocatedEdit(anchor_end, anchor_end, edit))
+            else:
+                located.append(_LocatedEdit(idx, idx + len(find_text), edit))
             continue
 
         # Fallback: whitespace-normalized match.
@@ -245,7 +252,10 @@ def apply_edits(
                 # so downstream consumers see the real text.
                 edit = dict(edit)  # shallow copy to avoid mutating caller's dict
                 edit["find"] = document[idx:end]
-                located.append(_LocatedEdit(idx, end, edit))
+                if is_insert:
+                    located.append(_LocatedEdit(end, end, edit))
+                else:
+                    located.append(_LocatedEdit(idx, end, edit))
                 continue
 
         log.warning("Edit find text not found in document: %.80s", find_text)
@@ -339,18 +349,21 @@ def apply_edits(
     for le in resolved:
         find_text = le.edit.get("find", le.edit.get("find", ""))
         replace_text = le.edit.get("replace", "")
+        is_insert = bool(le.edit.get("insert_after", False))
         adjusted_start = le.start + offset
         adjusted_end = le.end + offset
 
         # Sanity check: the text at the adjusted position should match.
-        actual = document[adjusted_start:adjusted_end]
-        if actual != find_text:
-            log.warning(
-                "Offset-based apply mismatch at %d: expected %r, got %r",
-                adjusted_start, find_text[:60], actual[:60],
-            )
-            failed.append(le.edit)
-            continue
+        # For insert_after edits, start == end (zero-width); nothing to verify.
+        if not is_insert:
+            actual = document[adjusted_start:adjusted_end]
+            if actual != find_text:
+                log.warning(
+                    "Offset-based apply mismatch at %d: expected %r, got %r",
+                    adjusted_start, find_text[:60], actual[:60],
+                )
+                failed.append(le.edit)
+                continue
 
         document = document[:adjusted_start] + replace_text + document[adjusted_end:]
         delta = len(replace_text) - (le.end - le.start)
