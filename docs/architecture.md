@@ -21,10 +21,9 @@ voice_profile.md + career_profile.md + job_description.md
   │ EvidenceAgent      -> EvidencePack (requirements + matched evidence) │
   │ VoiceAgent         -> VoiceStyleGuide                                │
   │ DraftingAgent      -> DocumentSet                                    │
-  │ VerificationAgent  -> Two-phase review + repair loop:                │
-  │   Phase A (hard-gate): Truth/Consistency/ATS/Grammar -> repair       │
-  │   Phase B (soft-gate): Voice/AI/HM/Pruning -> repair (preserves A)   │
-  │ RepairAgent        -> targeted rewrites per phase                    │
+  │ VerificationAgent  -> Unified review + repair loop:                  │
+  │   All 8 reviewers concurrent -> single repair if any gate fails      │
+  │ RepairAgent        -> targeted rewrites with prior-edit context       │
   └──────────────────────────────────────────────────────────────────────┘
             │
             ▼
@@ -32,18 +31,17 @@ voice_profile.md + career_profile.md + job_description.md
     (saved immediately after generation, before review loop)
             │
             ▼
-    Two-phase review + repair loop (per pass):
-      Phase A — hard-gate reviews (truthfulness, consistency, ATS, grammar)
-               → Phase A repair if any fail
-      Phase B — soft-gate reviews (voice, AI detection, HM, pruning)
-               → Phase B repair if any fail (preserves Phase A fixes)
+    Unified review + repair loop (per pass):
+      All 8 reviewers run concurrently (truth, consistency, ATS, grammar,
+        voice, AI detection, HM, pruning)
+      Suppressions applied, gates checked, single repair if any fail
       Edit-region tracking (annotated pass-through): each repair records
         edits tagged with the reviewer that triggered them. On subsequent
         passes, the repair agent receives a "Prior Edits" summary listing
         all earlier edits with reviewer attribution and priority hierarchy.
         The repair agent decides whether to fix, merge, or accept findings
         that overlap prior edits — findings are never silently suppressed.
-      Outer loop repeats to catch cross-phase regressions
+      Loop repeats until all gates pass or max passes exhausted
             │
             ▼
     SessionStore.save_reviews() + final DOCX export

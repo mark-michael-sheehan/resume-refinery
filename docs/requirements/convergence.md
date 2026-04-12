@@ -58,9 +58,9 @@ ensure convergence.
 | CR-6.1 | The maximum number of review+repair passes is bounded by `RESUME_REFINERY_MAX_REPAIR_PASSES` (default 3). |
 | CR-6.2 | If all documents pass all reviewers on any pass, the loop exits early. |
 | CR-6.3 | If the loop exhausts all passes without convergence, the best version so far is kept and a warning is logged. |
-| CR-6.4 | Each outer pass runs two sequential phases: Phase A (hard-gate: truthfulness, consistency, ATS, grammar) and Phase B (soft-gate: voice, AI detection, HM, pruning). Each phase runs its reviewers concurrently, checks gates, and repairs only if its gates fail. |
-| CR-6.5 | Phase B repair receives a `preserve_instructions` note instructing the LLM not to alter text corrected by Phase A, reducing cross-phase regressions. |
-| CR-6.6 | The outer loop re-runs both phases, so any Phase B regression of a Phase A fix is caught and re-repaired on the next pass. |
+| CR-6.4 | Each pass runs all 8 reviewers concurrently (truthfulness, consistency, ATS, grammar, voice, AI detection, HM, pruning), checks all gates, and makes a single unified repair call if any gate fails. |
+| CR-6.5 | The repair prompt includes prior-edit context with conflict resolution instructions (fix/merge/accept), replacing the former Phase B preserve note. Cross-reviewer regressions are handled by the prior-edits annotated pass-through system (CR-8). |
+| CR-6.6 | The loop re-runs all reviewers after each repair, so any regression introduced by a repair is caught on the next pass. |
 
 ## CR-7 Per-Reviewer Suppression
 
@@ -86,4 +86,4 @@ ensure convergence.
 | CR-8.6 | When a review finding targets text that was previously edited by a higher-priority reviewer, the repair agent decides: FIX (genuinely new concern), MERGE (satisfy both constraints), or ACCEPT (noise from prior edit). The orchestrator does not silently suppress findings. |
 | CR-8.7 | Deletions (empty replacement text) do not produce edit regions because there is no replacement span to protect. They are shown as "DELETED" in prior-edit summaries. |
 | CR-8.8 | The `RepairPassResult` model includes an `edit_regions` field (dict mapping document key to list of `EditRegion`s) alongside the existing `edits` field. |
-| CR-8.9 | The `repair_unified` method determines the dominant reviewer for the current phase and tags all edits and edit regions with that reviewer's priority. Phase A tags with the highest-priority failing reviewer (truthfulness > consistency > ATS > grammar). Phase B tags with the highest-priority failing reviewer (voice > AI > HM > pruning). |
+| CR-8.9 | The `repair_unified` method determines the dominant reviewer by checking all reviewers in priority order (truthfulness > consistency > ATS > grammar > voice > AI) and tags all edits and edit regions with that reviewer's priority. |

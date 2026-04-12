@@ -691,24 +691,26 @@ class RepairAgent:
         voice_review: VoiceReviewResult | None,
         ai_review: AIDetectionResult | None,
     ) -> str:
-        """Return the highest-priority reviewer that has findings in this phase."""
-        from .models import ReviewerPriority
-        if phase == "a":
-            # Phase A priority order: truth > consistency > ats > grammar
-            if truth and not truth.all_supported:
-                return "truthfulness"
-            if consistency_review and not consistency_review.consistent:
-                return "consistency"
-            if ats_review and ats_review.alignment_score not in ("strong", "moderate"):
-                return "ats"
+        """Return the highest-priority reviewer that has findings.
+
+        Checks all reviewers in priority order regardless of phase:
+        truth > consistency > ats > grammar > voice > ai.
+        The ``phase`` parameter is retained for call-site compatibility
+        but no longer affects the result.
+        """
+        if truth and not truth.all_supported:
+            return "truthfulness"
+        if consistency_review and not consistency_review.consistent:
+            return "consistency"
+        if ats_review and ats_review.alignment_score not in ("strong", "moderate"):
+            return "ats"
+        if grammar_review and not grammar_review.clean:
             return "grammar"
-        else:
-            # Phase B priority order: voice > ai > hm > pruning
-            if voice_review and voice_review.overall_match not in ("strong", "moderate"):
-                return "voice"
-            if ai_review and (ai_review.cover_letter_flags or ai_review.resume_flags):
-                return "ai"
+        if voice_review and voice_review.overall_match not in ("strong", "moderate"):
             return "voice"
+        if ai_review and (ai_review.cover_letter_flags or ai_review.resume_flags):
+            return "ai"
+        return "grammar"
 
     # ------------------------------------------------------------------
     # LLM call for edit planning
