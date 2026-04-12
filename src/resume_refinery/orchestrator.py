@@ -523,6 +523,8 @@ class ResumeRefineryOrchestrator:
                 self._progress(progress, self._summarise_repair(repair_pass))
             if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_consistency_issues or repair_pass.accepted_grammar_issues:
                 self._progress(progress, self._summarise_acceptances(repair_pass))
+            if repair_pass.failed_edits:
+                self._progress(progress, self._summarise_failed_edits(repair_pass))
 
             if on_repair_pass is not None:
                 pass_reviews = ReviewBundle(
@@ -931,6 +933,21 @@ class ResumeRefineryOrchestrator:
             parts.append("  [cyan]Grammar issues (accepted as correct/intentional):[/cyan]")
             for issue in repair_pass.accepted_grammar_issues:
                 parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
+        return "\n".join(parts)
+
+    def _summarise_failed_edits(self, repair_pass: RepairPassResult) -> str:
+        """Build a Rich-tagged summary of edits that failed Phase 1 locate."""
+        doc_labels = self._doc_labels()
+        parts = ["[bold yellow]Failed edits (could not locate find-text in document):[/bold yellow]"]
+        for key, failures in repair_pass.failed_edits.items():
+            label = doc_labels.get(key, key)
+            parts.append(f"  {label}: {len(failures)} failed edit(s)")
+            for fail in failures:
+                find_snippet = fail.get("find", "")[:80]
+                reason = fail.get("reason", "")
+                parts.append(f'    [yellow]✗ "{find_snippet}"[/yellow]')
+                if reason:
+                    parts.append(f"      ({reason})")
         return "\n".join(parts)
 
     def _doc_labels(self) -> dict[DocumentKey, str]:

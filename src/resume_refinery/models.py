@@ -570,6 +570,9 @@ class RepairPassResult(BaseModel):
     accepted_ats_issues: StrList = Field(default_factory=list)
     accepted_consistency_issues: StrList = Field(default_factory=list)
     accepted_grammar_issues: StrList = Field(default_factory=list)
+    # Edits that failed Phase 1 locate (could not find the ``find`` text in
+    # the document).  Keyed by document, each value is a list of EditOp dicts.
+    failed_edits: dict[str, list[dict]] = Field(default_factory=dict)
 
 
 class ExemptedPhrases(BaseModel):

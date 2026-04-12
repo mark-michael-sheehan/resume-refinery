@@ -10,8 +10,8 @@ ensure convergence.
 |---|---|
 | CR-1.1 | The repair step MUST NOT regenerate an entire document. Repairs are expressed as a list of `{find, replace, reason}` JSON edits produced by the LLM. |
 | CR-1.2 | Edits are applied programmatically via string find/replace (`utils.apply_edits`), not by asking the LLM to produce a new complete document. |
-| CR-1.3 | Edits are applied in reverse document order to prevent offset drift. |
-| CR-1.4 | If the number of edits that fail to match the document text exceeds `RESUME_REFINERY_EDIT_FAIL_THRESHOLD` (default 3), an `EditApplicationError` is raised. |
+| CR-1.3 | Edits are located in the original document, clustered by overlapping spans, and applied left-to-right with offset tracking (no re-find step). Overlapping edits are merged via a lightweight LLM call when possible; otherwise the leftmost edit in the cluster is kept. |
+| CR-1.4 | If the number of edits that fail to locate in the document text exceeds `RESUME_REFINERY_EDIT_FAIL_THRESHOLD` (default 3), an `EditApplicationError` is raised. Overlapping-edit collisions are NOT counted as failures. Whitespace-normalized matching is attempted before declaring a locate failure. |
 
 ## CR-2 Reviewer Determinism
 
@@ -87,3 +87,18 @@ ensure convergence.
 | CR-8.7 | Deletions (empty replacement text) do not produce edit regions because there is no replacement span to protect. They are shown as "DELETED" in prior-edit summaries. |
 | CR-8.8 | The `RepairPassResult` model includes an `edit_regions` field (dict mapping document key to list of `EditRegion`s) alongside the existing `edits` field. |
 | CR-8.9 | The `repair_unified` method determines the dominant reviewer by checking all reviewers in priority order (truthfulness > consistency > ATS > grammar > voice > AI) and tags all edits and edit regions with that reviewer's priority. |
+
+## CR-9 Intra-Pass Edit Collision Resolution
+
+| ID | Requirement |
+|---|---|
+| CR-9.1 | `apply_edits` locates each edit in the original document using exact match first, then a whitespace-normalized fallback (collapsing all whitespace runs to single spaces). |
+| CR-9.2 | Located edits are sorted left-to-right and grouped into clusters of overlapping spans. Non-overlapping edits become singleton clusters. |
+| CR-9.3 | For clusters with 2+ overlapping edits, a `merge_fn` callback is invoked with the union span text and the list of overlapping edits. The callback produces a single merged edit that satisfies all overlapping edits' intents. |
+| CR-9.4 | `RepairAgent._merge_overlapping_edits` implements `merge_fn` via a lightweight LLM call using `MERGE_EDITS_SYSTEM_PROMPT`. The LLM receives the overlapping passage and all proposed edits, and returns a single merged `{find, replace, reason}`. The `find` is forced to the exact context text regardless of LLM output. |
+| CR-9.5 | If `merge_fn` is not provided or returns `None`, only the first (leftmost) edit in the cluster is kept and the rest are skipped. |
+| CR-9.6 | Collision-skipped edits are NOT counted toward the failure threshold — they are expected intra-batch overlaps, not match failures. |
+| CR-9.7 | After collision resolution, edits are applied left-to-right using offset tracking (accumulated length delta from prior edits). No re-find is performed. |
+| CR-9.8 | Duplicate `find` texts (two edits targeting the same string at the same position) are reassigned to successive occurrences of that string in the document. |
+| CR-9.9 | `apply_edits` returns a 3-tuple `(document, edit_regions, failed_edits)`. The third element is a list of `EditOp` dicts for edits that failed Phase 1 locate (could not find the `find` text via exact or whitespace-normalized matching). |
+| CR-9.10 | `RepairPassResult` includes a `failed_edits` field (dict mapping document key to list of failed edit dicts). The orchestrator emits a progress message listing each failed edit's `find` snippet and reason when any locate failures occur. |

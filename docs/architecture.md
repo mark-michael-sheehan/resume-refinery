@@ -41,6 +41,10 @@ voice_profile.md + career_profile.md + job_description.md
         all earlier edits with reviewer attribution and priority hierarchy.
         The repair agent decides whether to fix, merge, or accept findings
         that overlap prior edits — findings are never silently suppressed.
+      Intra-pass collision resolution: when multiple edits target
+        overlapping text spans, they are merged via a lightweight LLM call
+        that combines all overlapping edits' intents into one replacement.
+        Whitespace-normalized matching handles LLM quoting imprecision.
       Loop repeats until all gates pass or max passes exhausted
             │
             ▼

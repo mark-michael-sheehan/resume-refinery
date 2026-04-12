@@ -580,6 +580,7 @@ class RepairAgent:
 
         all_edits: dict[str, list[RepairEdit]] = {}
         all_regions: dict[str, list[EditRegion]] = {}
+        all_failed_edits: dict[str, list[dict]] = {}
         all_accepted_claims: list[str] = []
         all_accepted_ai_phrases: list[str] = []
         all_accepted_voice_issues: list[str] = []
@@ -652,13 +653,16 @@ class RepairAgent:
                         e.get("replace", "")[:120],
                         e.get("reason", "")[:120],
                     )
-                repaired, regions = apply_edits(
+                repaired, regions, edit_failures = apply_edits(
                     docs.get(key), edits,
                     reviewer=phase_reviewer,
                     pass_num=pass_num,
+                    merge_fn=self._merge_overlapping_edits,
                 )
                 docs.set(key, repaired)
                 all_regions[key] = regions
+                if edit_failures:
+                    all_failed_edits[key] = edit_failures
                 all_edits[key] = [
                     RepairEdit(
                         find=e.get("find", ""),
@@ -671,6 +675,7 @@ class RepairAgent:
         return RepairPassResult(
             edits=all_edits,
             edit_regions=all_regions,
+            failed_edits=all_failed_edits,
             accepted_claims=all_accepted_claims,
             accepted_ai_phrases=all_accepted_ai_phrases,
             accepted_voice_issues=all_accepted_voice_issues,
@@ -711,6 +716,76 @@ class RepairAgent:
         if ai_review and (ai_review.cover_letter_flags or ai_review.resume_flags):
             return "ai"
         return "grammar"
+
+    # ------------------------------------------------------------------
+    # LLM call for merging overlapping edits
+    # ------------------------------------------------------------------
+
+    def _merge_overlapping_edits(
+        self, context_text: str, overlapping_edits: list[dict]
+    ) -> dict | None:
+        """Merge overlapping edits via a lightweight LLM call.
+
+        Called by ``apply_edits`` when two or more edits' ``find`` spans
+        overlap in the original document.  Returns a single merged
+        ``{find, replace, reason}`` dict, or ``None`` on failure.
+        """
+        from .prompts import MERGE_EDITS_SYSTEM_PROMPT, MERGE_EDITS_USER_TEMPLATE
+        from .reviewers import _normalize_llm_json
+
+        edits_desc = "\n".join(
+            f'{i+1}. find: {e.get("find", "")!r}\n'
+            f'   replace: {e.get("replace", "")!r}\n'
+            f'   reason: {e.get("reason", "N/A")!r}'
+            for i, e in enumerate(overlapping_edits)
+        )
+        user_msg = MERGE_EDITS_USER_TEMPLATE.format(
+            context_text=context_text,
+            edits_description=edits_desc,
+        )
+
+        try:
+            response = self.client.chat(
+                model=_MODEL,
+                messages=[
+                    {"role": "system", "content": MERGE_EDITS_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                format={
+                    "type": "object",
+                    "properties": {
+                        "find": {"type": "string"},
+                        "replace": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["find", "replace"],
+                },
+                options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
+            )
+        except Exception as exc:
+            logging.warning("Merge LLM call failed: %s", exc)
+            return None
+
+        raw = (response.message.content or "").strip()
+        if not raw:
+            return None
+        raw = _normalize_llm_json(raw)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logging.warning("Merge LLM returned non-JSON: %.200s", raw)
+            return None
+
+        if not isinstance(data, dict) or "replace" not in data:
+            return None
+
+        # Force the find to be the context_text — the LLM may echo it
+        # imperfectly.
+        return {
+            "find": context_text,
+            "replace": data.get("replace", ""),
+            "reason": data.get("reason", "merged overlapping edits"),
+        }
 
     # ------------------------------------------------------------------
     # LLM call for edit planning

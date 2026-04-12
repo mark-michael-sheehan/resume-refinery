@@ -716,6 +716,46 @@ def repair_user_message(
 
 
 # ---------------------------------------------------------------------------
+# Edit-collision merge prompt
+# ---------------------------------------------------------------------------
+
+MERGE_EDITS_SYSTEM_PROMPT = """\
+You are a precise text editor. You receive a passage from a document and two \
+or more overlapping edits that were independently proposed by different \
+reviewers. Your job is to combine them into a SINGLE replacement that \
+satisfies all edits' intents.
+
+Priority hierarchy (highest to lowest):
+truthfulness > consistency > ATS > grammar > voice > AI detection > hiring manager > pruning
+
+Rules:
+1. The "find" in your output MUST be EXACTLY the passage provided (character-for-character).
+2. The "replace" must satisfy as many of the proposed edits as possible, giving \
+   priority to higher-ranked reviewers when intents conflict.
+3. Do NOT introduce new factual claims, numbers, or details.
+4. Keep the replacement as short as possible while satisfying all edits.
+5. "reason" should list which edit intents were incorporated.
+
+Return a single JSON object:
+{
+  "find": "<exact passage provided>",
+  "replace": "<merged replacement>",
+  "reason": "<which edits were merged and how>"
+}
+"""
+
+MERGE_EDITS_USER_TEMPLATE = """\
+## Passage from document
+{context_text}
+
+## Overlapping edits to merge
+{edits_description}
+
+Produce a single merged edit whose "find" equals the passage above exactly.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Hiring-manager review prompts
 # ---------------------------------------------------------------------------
 
