@@ -94,6 +94,11 @@ The home page includes links to **Browse Sessions** and **Career Builder**.
 Use the Career Builder (`/career`) to create a structured career repository through
 guided questions before generating documents.
 
+The session creation form includes checkboxes to select which documents to generate
+(Resume, Cover Letter, Interview Guide). All three are checked by default. Uncheck
+any document you don't need — the selection carries through the review/repair loop
+and limits the refine dropdown to only the selected documents.
+
 ### `new` — Start a new session
 
 ```bash
@@ -108,6 +113,21 @@ resume-refinery new career_profile.md voice_profile.md job_description.md ./outp
   --company "Acme Corp" --title "Staff Engineer"
 ```
 
+Use `--docs` / `-D` to generate only specific documents (repeatable):
+
+```bash
+# Generate only a resume and cover letter (skip interview guide)
+resume-refinery new career_profile.md voice_profile.md job_description.md ./output \
+  -D resume -D cover_letter
+
+# Generate only an interview guide
+resume-refinery new career_profile.md voice_profile.md job_description.md ./output \
+  -D interview_guide
+```
+
+Valid values are `resume`, `cover_letter`, and `interview_guide`. When omitted, all
+three documents are generated.
+
 The fourth argument is the **output directory** where generated DOCX files will be
 written. If the directory does not exist it will be created. If the path is invalid
 (e.g. a parent directory does not exist or the path points to a file), the command
@@ -115,7 +135,7 @@ will exit with an error message.
 
 This will:
 1. Create a new session with a unique ID (e.g. `acme-cloud_staff-engineer_2026-03-20`)
-2. Generate all three documents (streaming to terminal as they're written)
+2. Generate the selected documents (streaming to terminal as they're written)
 3. Export DOCX files to the specified output directory
 4. Run strict truthfulness verification and targeted repair passes
 5. Run voice-match and AI-detection reviews automatically
@@ -303,7 +323,13 @@ voice = load_voice_profile("voice_profile.md")
 job = load_job_description("job_description.md")
 
 orchestrator = ResumeRefineryOrchestrator(store=SessionStore())
+
+# Generate all three documents (default)
 result = orchestrator.create_session_run(career, voice, job)
+
+# Or generate only specific documents
+result = orchestrator.create_session_run(career, voice, job,
+                                         selected_docs=["resume", "cover_letter"])
 
 print(result.session.session_id)
 print(result.reviews.truthfulness.all_supported)

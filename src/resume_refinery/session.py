@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 from .models import (
+    ALL_DOC_KEYS,
     AIDetectionResult,
     ATSKeywordResult,
     CareerProfile,
@@ -113,6 +114,7 @@ class SessionStore:
         job: JobDescription,
         career: CareerProfile,
         voice: VoiceProfile,
+        selected_docs: list[DocumentKey] | None = None,
     ) -> Session:
         """Initialise a new session directory and return the Session object."""
         session_id = _make_session_id(job)
@@ -138,6 +140,7 @@ class SessionStore:
             created_at=now,
             current_version=0,  # bumped to 1 on first save_documents call
             versions=[],
+            selected_docs=selected_docs or list(ALL_DOC_KEYS),
         )
         self._write_metadata(session)
         return session
@@ -398,7 +401,7 @@ class SessionStore:
             raise ValueError(f"Session '{session_id}' metadata is corrupted: {exc}") from exc
 
 
-_ALL_DOC_KEYS: tuple[DocumentKey, ...] = ("cover_letter", "resume", "interview_guide")
+_ALL_DOC_KEYS = ALL_DOC_KEYS
 
 
 def _read_opt(path: Path) -> str | None:

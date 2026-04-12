@@ -1281,3 +1281,157 @@ def test_build_prior_edits_insert_after_summary():
     assert "INSERTED" in result["resume"]
     assert "## Skills" in result["resume"]
     assert "Kubernetes" in result["resume"]
+
+
+# ---------------------------------------------------------------------------
+# selected_docs: generate only chosen documents
+# ---------------------------------------------------------------------------
+
+
+def test_selected_docs_generates_only_chosen(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """When selected_docs is specified, only those documents are generated."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    result = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        skip_review=True,
+        selected_docs=["resume", "cover_letter"],
+    )
+
+    assert result.documents.resume is not None
+    assert result.documents.cover_letter is not None
+    assert result.documents.interview_guide is None
+    assert result.session.selected_docs == ["resume", "cover_letter"]
+
+
+def test_selected_docs_single_doc(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Selecting a single document generates only that one."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    result = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        skip_review=True,
+        selected_docs=["resume"],
+    )
+
+    assert result.documents.resume is not None
+    assert result.documents.cover_letter is None
+    assert result.documents.interview_guide is None
+
+
+def test_selected_docs_persisted_in_session(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """selected_docs is persisted in session metadata and can be reloaded."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    result = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        skip_review=True,
+        selected_docs=["resume"],
+    )
+
+    loaded_session = store.get(result.session.session_id)
+    assert loaded_session.selected_docs == ["resume"]
+
+
+def test_selected_docs_default_all(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Without selected_docs, all three documents are generated (backward compat)."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    result = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        skip_review=True,
+    )
+
+    assert result.documents.resume is not None
+    assert result.documents.cover_letter is not None
+    assert result.documents.interview_guide is not None
+    assert set(result.session.selected_docs) == {"resume", "cover_letter", "interview_guide"}
+
+
+def test_selected_docs_refine_scoped_to_session_selection(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Refine should only operate on the session's selected_docs."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    created = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        skip_review=True,
+        selected_docs=["resume", "cover_letter"],
+    )
+
+    refined = orchestrator.refine_session_run(
+        created.session.session_id, "Make it shorter",
+    )
+
+    # interview_guide was never generated, so it stays None after refine
+    assert refined.documents.interview_guide is None
+    assert refined.documents.resume is not None
+    assert refined.documents.cover_letter is not None
+
+
+def test_selected_docs_stream_callback_only_selected(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Stream callback should only receive chunks for selected documents."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    chunks: list[str] = []
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        selected_docs=["resume"],
+        stream_callback=chunks.append,
+    )
+
+    # Only resume chunks + newlines should be present
+    assert any("resume" in c for c in chunks)
+    assert not any("cover_letter" in c for c in chunks)
+    assert not any("interview_guide" in c for c in chunks)

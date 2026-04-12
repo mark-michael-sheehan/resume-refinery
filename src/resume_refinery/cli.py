@@ -79,6 +79,10 @@ def new(
     output_dir: Annotated[Path, typer.Argument(help="Directory to write generated documents to")],
     company: Optional[str] = typer.Option(None, "--company", help="Company name (overrides auto-extraction from job description)"),
     title: Optional[str] = typer.Option(None, "--title", help="Job title (overrides auto-extraction from job description)"),
+    docs: Annotated[
+        Optional[list[str]],
+        typer.Option("--docs", "-D", help="Documents to generate: cover_letter, resume, interview_guide (repeatable; default: all)"),
+    ] = None,
     skip_review: bool = typer.Option(False, "--skip-review", help="Skip auto-review after generation"),
     allow_unverified: bool = typer.Option(
         False,
@@ -86,11 +90,20 @@ def new(
         help="Allow outputs even if strict truth review still finds unsupported claims",
     ),
 ):
-    """Start a new session: generate all documents then run truth + quality reviews."""
+    """Start a new session: generate selected documents then run truth + quality reviews."""
     validated_dir = _validate_output_dir(output_dir)
     career = load_career_profile(career_profile)
     voice = load_voice_profile(voice_profile)
     job = load_job_description(job_description, company=company, title=title)
+
+    selected_docs = None
+    if docs:
+        valid_keys = {"cover_letter", "resume", "interview_guide"}
+        for d in docs:
+            if d not in valid_keys:
+                console.print(f"[red]Unknown document: {d}. Choose from: {', '.join(sorted(valid_keys))}[/red]")
+                raise typer.Exit(1)
+        selected_docs = docs  # type: ignore[assignment]
 
     result = _get_orchestrator().create_session_run(
         career,
@@ -99,6 +112,7 @@ def new(
         output_dir=validated_dir,
         skip_review=skip_review,
         allow_unverified=allow_unverified,
+        selected_docs=selected_docs,
         progress=_progress,
         stream_callback=_stream_chunk,
     )

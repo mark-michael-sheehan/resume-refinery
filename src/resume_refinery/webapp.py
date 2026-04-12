@@ -268,6 +268,53 @@ def _truth_failed(truth) -> bool:
     return bool(truth and not truth.all_supported)
 
 
+_DOC_LABELS: dict[str, str] = {
+    "cover_letter": "Cover Letter",
+    "resume": "Resume",
+    "interview_guide": "Interview Guide",
+}
+
+
+def _doc_label(key: str) -> str:
+    """Human-readable label for a document key."""
+    return _DOC_LABELS.get(key, key)
+
+
+def _doc_cards(docs, selected_docs: list[str], esc) -> str:
+    """Build HTML cards only for selected documents."""
+    from .models import DocumentKey
+
+    cards: list[str] = []
+    # Use a 2-column grid for the first pair, then a single card for third
+    grid_keys = [k for k in ("cover_letter", "resume") if k in selected_docs]
+    extra_keys = [k for k in ("interview_guide",) if k in selected_docs]
+
+    if grid_keys:
+        inner = ""
+        for k in grid_keys:
+            label = _doc_label(k)
+            content = docs.get(k)
+            inner += (
+                f'<div class="card"><h2>{html.escape(label)} '
+                f'<button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2>'
+                f'<div class="rendered-md">{_render_md(content)}</div>'
+                f'<pre style="display:none">{esc(content)}</pre></div>'
+            )
+        cards.append(f'<div class="grid">{inner}</div>')
+
+    for k in extra_keys:
+        label = _doc_label(k)
+        content = docs.get(k)
+        cards.append(
+            f'<div class="card"><h2>{html.escape(label)} '
+            f'<button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2>'
+            f'<div class="rendered-md">{_render_md(content)}</div>'
+            f'<pre style="display:none">{esc(content)}</pre></div>'
+        )
+
+    return "\n".join(cards)
+
+
 def _truth_summary(truth) -> str:
     if not truth:
         return "<p class='muted'>No truth review available.</p>"
@@ -752,6 +799,10 @@ def home() -> HTMLResponse:
       <input type="text" name="output_dir" id="output_dir_new" readonly required />
       <button type="button" onclick="openDirPicker('output_dir_new')">Browse…</button>
     </div>
+    <label style="margin-top:.9rem;margin-bottom:.3rem">Documents to Generate</label>
+    <label><input type=\"checkbox\" name=\"selected_docs\" value=\"resume\" checked /> Resume</label>
+    <label><input type=\"checkbox\" name=\"selected_docs\" value=\"cover_letter\" checked /> Cover Letter</label>
+    <label><input type=\"checkbox\" name=\"selected_docs\" value=\"interview_guide\" checked /> Interview Guide</label>
     <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
     <label><input type=\"checkbox\" name=\"allow_unverified\" value=\"true\" /> Allow saving when strict truth check fails</label>
 
@@ -771,11 +822,16 @@ async def create_session(
     company: Optional[str] = Form(None),
     title: Optional[str] = Form(None),
     output_dir: str = Form(...),
+    selected_docs: list[str] = Form([]),
     skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
 ) -> StreamingResponse:
     # Validate output directory
     output_path = _validate_output_dir(output_dir)
+
+    # Validate selected documents
+    valid_keys = {"cover_letter", "resume", "interview_guide"}
+    _selected = [d for d in selected_docs if d in valid_keys] or None
 
     try:
         job_text = (await job_description.read()).decode("utf-8")
@@ -828,6 +884,7 @@ async def create_session(
             output_dir=output_path,
             skip_review=_skip,
             allow_unverified=_allow,
+            selected_docs=_selected,
             progress=progress,
         ),
         redirect_url_fn=lambda r: f"/sessions/{r.session.session_id}",
@@ -910,9 +967,7 @@ def show_session(session_id: str) -> HTMLResponse:
     <label>Document</label>
     <select name=\"doc\">
       <option value=\"\">All documents</option>
-      <option value=\"cover_letter\">Cover Letter</option>
-      <option value=\"resume\">Resume</option>
-      <option value=\"interview_guide\">Interview Guide</option>
+      {"".join(f'<option value="{k}">{_doc_label(k)}</option>' for k in session.selected_docs)}
     </select>
     <label>Feedback (free-form)</label>
     <textarea name=\"feedback\" rows=\"5\" required></textarea>
@@ -925,11 +980,7 @@ def show_session(session_id: str) -> HTMLResponse:
     <button type=\"submit\">Refine</button>
   </form>
 </div>
-<div class=\"grid\">
-  <div class="card"><h2>Cover Letter <button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2><div class="rendered-md">{_render_md(docs.cover_letter)}</div><pre style="display:none">{esc(docs.cover_letter)}</pre></div>
-  <div class="card"><h2>Resume <button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2><div class="rendered-md">{_render_md(docs.resume)}</div><pre style="display:none">{esc(docs.resume)}</pre></div>
-</div>
-<div class="card"><h2>Interview Guide <button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2><div class="rendered-md">{_render_md(docs.interview_guide)}</div><pre style="display:none">{esc(docs.interview_guide)}</pre></div>
+{_doc_cards(docs, session.selected_docs, esc)}
 """
     return _page(session.session_id, body)
 

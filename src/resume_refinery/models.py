@@ -636,9 +636,16 @@ class VersionInfo(BaseModel):
     has_reviews: bool = False
 
 
+ALL_DOC_KEYS: list[DocumentKey] = ["cover_letter", "resume", "interview_guide"]
+
+
 class Session(BaseModel):
     session_id: str
     job_description: JobDescription
     created_at: str
     current_version: int = 1
     versions: list[VersionInfo] = Field(default_factory=list)
+    selected_docs: list[DocumentKey] = Field(
+        default_factory=lambda: list(ALL_DOC_KEYS),
+        description="Which documents the user chose to generate for this session",
+    )

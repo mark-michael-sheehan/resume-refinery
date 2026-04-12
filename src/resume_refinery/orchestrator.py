@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from .exporters import export_document_set
 from .models import (
+    ALL_DOC_KEYS,
     AIDetectionResult,
     ATSKeywordResult,
     CareerProfile,
@@ -79,15 +80,17 @@ class ResumeRefineryOrchestrator:
         output_dir: Path | None = None,
         skip_review: bool = False,
         allow_unverified: bool = False,
+        selected_docs: list[DocumentKey] | None = None,
         progress: ProgressCallback | None = None,
         stream_callback: StreamCallback | None = None,
     ) -> OrchestrationResult:
-        session = self.store.create(job, career, voice)
+        active_docs = selected_docs or list(ALL_DOC_KEYS)
+        session = self.store.create(job, career, voice, selected_docs=active_docs)
         self._progress(progress, f"Session created: {session.session_id}")
         context = self._build_context(career, voice, job, progress)
 
         docs = DocumentSet()
-        for key, label in self._doc_labels().items():
+        for key, label in self._doc_labels(active_docs).items():
             self._progress(progress, f"Generating {label} (model is thinking, output appears after reasoning)...")
             chunks: list[str] = []
             for chunk in self.drafting_agent.stream_document(key, career, voice, job, context):
@@ -107,7 +110,7 @@ class ResumeRefineryOrchestrator:
 
         # Save documents + context immediately after generation so results
         # are available on disk before the (potentially long) review loop.
-        session = self.store.save_documents(session, docs)
+        session = self.store.save_documents(session, docs, docs_regenerated=active_docs)
         self.store.save_context(session, context)
         self._export(session, docs, output_dir=output_dir)
 
@@ -169,10 +172,11 @@ class ResumeRefineryOrchestrator:
         # Load exemptions accumulated from prior runs in this session.
         exempted = self.store.load_suppressions(session) or ExemptedPhrases()
 
-        keys_to_refine = [doc] if doc else list(self._doc_labels().keys())
+        keys_to_refine = [doc] if doc else list(self._doc_labels(session.selected_docs).keys())
 
-        # Preserve originals so we can restore docs the user didn't target.
-        originals = current_docs.model_copy(deep=True) if doc else None
+        # Preserve originals so we can restore docs the user didn't target
+        # and docs outside the session's selected_docs.
+        originals = current_docs.model_copy(deep=True)
 
         # Apply user's instructions via the repair agent (single pass).
         self._progress(progress, "Applying refinement instructions...")
@@ -213,11 +217,10 @@ class ResumeRefineryOrchestrator:
             grammar_issues=sorted(suppressed_grammar_issues),
         )
 
-        # Restore documents that weren't targeted.
-        if originals and doc:
-            for key in self._doc_labels():
-                if key != doc:
-                    current_docs.set(key, originals.get(key))
+        # Restore documents that weren't targeted or aren't in selected_docs.
+        for key in self._doc_labels():
+            if key not in keys_to_refine or key not in session.selected_docs:
+                current_docs.set(key, originals.get(key))
 
         # Save repaired documents as a new version.
         session = self.store.save_documents(
@@ -1080,9 +1083,12 @@ class ResumeRefineryOrchestrator:
                     parts.append(f"      ({reason})")
         return "\n".join(parts)
 
-    def _doc_labels(self) -> dict[DocumentKey, str]:
-        return {
+    def _doc_labels(self, selected: list[DocumentKey] | None = None) -> dict[DocumentKey, str]:
+        all_labels: dict[DocumentKey, str] = {
             "cover_letter": "Cover Letter",
             "resume": "Resume",
             "interview_guide": "Interview Guide",
         }
+        if selected is None:
+            return all_labels
+        return {k: v for k, v in all_labels.items() if k in selected}

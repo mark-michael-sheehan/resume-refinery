@@ -14,7 +14,7 @@
 |---|---|
 | FR-2.1 | **Evidence extraction** — The EvidenceAgent analyses the career profile against the job description and produces an `EvidencePack` (matched evidence + gaps). |
 | FR-2.2 | **Voice extraction** — The VoiceAgent analyses the voice profile and produces a `VoiceStyleGuide` used to shape document tone. |
-| FR-2.3 | **Drafting** — The DraftingAgent generates three documents: cover letter, resume, and interview guide. Each document is a separate LLM call using thinking mode. |
+| FR-2.3 | **Drafting** — The DraftingAgent generates documents from the selected set (cover letter, resume, interview guide). By default all three are generated; the user may select a subset via CLI (`--docs`) or web app checkboxes. Each document is a separate LLM call using thinking mode. The selection is persisted in the session and scopes all subsequent review, repair, and refine operations to only the selected documents. |
 | FR-2.4 | **Verification** — The VerificationAgent runs eight independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning, ATS keyword alignment, cross-document consistency, grammar & mechanics) on each document. |
 | FR-2.5 | **Repair** — The RepairAgent fixes documents that fail verification using surgical find/replace edits (see [convergence.md](convergence.md)). |
 | FR-2.6 | **Iteration** — Verification and repair repeat up to `MAX_REPAIR_PASSES` times or until all documents pass. |
@@ -24,7 +24,7 @@
 
 | ID | Requirement |
 |---|---|
-| FR-3.1 | Each run produces three documents: **cover letter**, **resume**, and **interview guide** in both Markdown and DOCX format. |
+| FR-3.1 | Each run produces up to three documents: **cover letter**, **resume**, and **interview guide** in both Markdown and DOCX format. The actual set depends on the user's document selection at session creation time. |
 | FR-3.2 | Documents are versioned (v1, v2, …) within a session directory. Each version includes Markdown source, DOCX export, and review JSON. |
 | FR-3.3 | DOCX generation uses python-docx (no external Pandoc dependency). |
 | FR-3.4 | The user must specify an **output directory** for generated DOCX files. In the CLI it is a required positional argument; in the web app it is a required text field. If the path is invalid (not a directory, parent does not exist) the system raises an error before generation begins. DOCX files are always also saved in the session version directory to preserve version history. |
