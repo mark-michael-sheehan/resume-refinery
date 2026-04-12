@@ -284,30 +284,30 @@ def test_drafting_agent_voice_context_includes_guide(career_profile, voice_profi
 
 
 class FakeReviewer:
-    def review_truthfulness(self, docs, career, job):
+    def review_truthfulness(self, docs, career, job, *, exemptions=None):
         doc = DocumentTruthResult(pass_strict=True)
         return TruthfulnessResult(
             all_supported=True,
             cover_letter=doc, resume=doc, interview_guide=doc,
         )
 
-    def review_voice(self, docs, voice):
+    def review_voice(self, docs, voice, *, exemptions=None):
         return VoiceReviewResult(
             overall_match="strong",
             cover_letter_assessment="Good",
             resume_assessment="Good",
         )
 
-    def review_ai_detection(self, docs):
+    def review_ai_detection(self, docs, *, exemptions=None):
         return AIDetectionResult(risk_level="low")
 
-    def review_ats_keyword(self, docs, job, career):
+    def review_ats_keyword(self, docs, job, career, *, exemptions=None):
         return ATSKeywordResult(alignment_score="strong")
 
-    def review_consistency(self, docs):
+    def review_consistency(self, docs, *, exemptions=None):
         return ConsistencyResult(consistent=True)
 
-    def review_grammar(self, docs):
+    def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
 
 

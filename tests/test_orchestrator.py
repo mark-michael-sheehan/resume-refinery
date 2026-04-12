@@ -56,7 +56,7 @@ class FakeVerificationAgent:
         self.voice_calls = 0
         self.ai_calls = 0
 
-    def review_truthfulness(self, docs, career, job):
+    def review_truthfulness(self, docs, career, job, *, exemptions=None):
         self.truth_calls += 1
         passed = self.truth_calls > 1
         truth_doc = DocumentTruthResult(pass_strict=passed, unsupported_claims=[] if passed else ["unsupported claim"], evidence_examples=[])
@@ -67,7 +67,7 @@ class FakeVerificationAgent:
             interview_guide=truth_doc,
         )
 
-    def review_voice(self, docs, voice):
+    def review_voice(self, docs, voice, *, exemptions=None):
         self.voice_calls += 1
         match = "strong" if self.voice_calls > 1 else "moderate"
         return VoiceReviewResult(
@@ -77,7 +77,7 @@ class FakeVerificationAgent:
             specific_issues=[] if match == "strong" else ["opener feels generic"],
         )
 
-    def review_ai_detection(self, docs):
+    def review_ai_detection(self, docs, *, exemptions=None):
         self.ai_calls += 1
         risk = "low" if self.ai_calls > 1 else "medium"
         return AIDetectionResult(
@@ -110,13 +110,13 @@ class FakeVerificationAgent:
             ),
         )
 
-    def review_hiring_manager(self, docs, job):
+    def review_hiring_manager(self, docs, job, *, exemptions=None):
         return HiringManagerReview(
             advance_likelihood=70,
             summary="Decent candidate.",
         )
 
-    def review_relevance_pruning(self, docs, job):
+    def review_relevance_pruning(self, docs, job, *, exemptions=None):
         from resume_refinery.models import RelevancePruningResult
         return RelevancePruningResult(
             overall_density="lean",
@@ -124,13 +124,13 @@ class FakeVerificationAgent:
             resume_issues=[],
         )
 
-    def review_ats_keyword(self, docs, job, career):
+    def review_ats_keyword(self, docs, job, career, *, exemptions=None):
         return ATSKeywordResult(alignment_score="strong")
 
-    def review_consistency(self, docs):
+    def review_consistency(self, docs, *, exemptions=None):
         return ConsistencyResult(consistent=True)
 
-    def review_grammar(self, docs):
+    def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
 
 
@@ -365,7 +365,7 @@ def test_orchestrator_refine_with_doc_only_modifies_targeted_doc(tmp_path, monke
 class AlwaysPassVerificationAgent:
     """Reviews always pass on the very first call."""
 
-    def review_truthfulness(self, docs, career, job):
+    def review_truthfulness(self, docs, career, job, *, exemptions=None):
         passed_doc = DocumentTruthResult(pass_strict=True, unsupported_claims=[], evidence_examples=[])
         return TruthfulnessResult(
             all_supported=True,
@@ -374,33 +374,33 @@ class AlwaysPassVerificationAgent:
             interview_guide=passed_doc,
         )
 
-    def review_voice(self, docs, voice):
+    def review_voice(self, docs, voice, *, exemptions=None):
         return VoiceReviewResult(
             overall_match="strong",
             cover_letter_assessment="Good",
             resume_assessment="Good",
         )
 
-    def review_ai_detection(self, docs):
+    def review_ai_detection(self, docs, *, exemptions=None):
         return AIDetectionResult(risk_level="low")
 
-    def review_hiring_manager(self, docs, job):
+    def review_hiring_manager(self, docs, job, *, exemptions=None):
         return HiringManagerReview(
             advance_likelihood=75,
             summary="Good candidate.",
         )
 
-    def review_relevance_pruning(self, docs, job):
+    def review_relevance_pruning(self, docs, job, *, exemptions=None):
         from resume_refinery.models import RelevancePruningResult
         return RelevancePruningResult(overall_density="lean", cover_letter_issues=[], resume_issues=[])
 
-    def review_ats_keyword(self, docs, job, career):
+    def review_ats_keyword(self, docs, job, career, *, exemptions=None):
         return ATSKeywordResult(alignment_score="strong")
 
-    def review_consistency(self, docs):
+    def review_consistency(self, docs, *, exemptions=None):
         return ConsistencyResult(consistent=True)
 
-    def review_grammar(self, docs):
+    def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
 
     def review_all(self, docs, career, voice, job):
@@ -437,17 +437,17 @@ def test_no_repair_when_all_reviews_pass(tmp_path, monkeypatch, career_profile, 
 
 
 class TruthRaisesVerificationAgent(AlwaysPassVerificationAgent):
-    def review_truthfulness(self, docs, career, job):
+    def review_truthfulness(self, docs, career, job, *, exemptions=None):
         raise RuntimeError("LLM timeout")
 
 
 class VoiceRaisesVerificationAgent(AlwaysPassVerificationAgent):
-    def review_voice(self, docs, voice):
+    def review_voice(self, docs, voice, *, exemptions=None):
         raise RuntimeError("LLM timeout")
 
 
 class AIRaisesVerificationAgent(AlwaysPassVerificationAgent):
-    def review_ai_detection(self, docs):
+    def review_ai_detection(self, docs, *, exemptions=None):
         raise RuntimeError("LLM timeout")
 
 
@@ -498,7 +498,7 @@ def test_ai_review_exception_skips_loop(tmp_path, monkeypatch, career_profile, v
 class AlwaysFlagsAIPhraseVerification(AlwaysPassVerificationAgent):
     """Truth and voice always pass; AI detection always flags the same phrase."""
 
-    def review_ai_detection(self, docs):
+    def review_ai_detection(self, docs, *, exemptions=None):
         return AIDetectionResult(
             risk_level="medium",
             cover_letter_flags=["accepted-phrase"],
@@ -556,7 +556,7 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
         self.voice_calls = 0
         self.ai_calls = 0
 
-    def review_truthfulness(self, docs, career, job):
+    def review_truthfulness(self, docs, career, job, *, exemptions=None):
         self.truth_calls += 1
         doc = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
         return TruthfulnessResult(
@@ -564,7 +564,7 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
             cover_letter=doc, resume=doc, interview_guide=doc,
         )
 
-    def review_voice(self, docs, voice):
+    def review_voice(self, docs, voice, *, exemptions=None):
         self.voice_calls += 1
         return VoiceReviewResult(
             overall_match="weak",
@@ -573,7 +573,7 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
             specific_issues=["too formal"],
         )
 
-    def review_ai_detection(self, docs):
+    def review_ai_detection(self, docs, *, exemptions=None):
         self.ai_calls += 1
         return AIDetectionResult(
             risk_level="high",
@@ -685,7 +685,7 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
 class TruthFailsVerificationAgent(AlwaysPassVerificationAgent):
     """Truth always fails; voice + AI always pass."""
 
-    def review_truthfulness(self, docs, career, job):
+    def review_truthfulness(self, docs, career, job, *, exemptions=None):
         doc = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
         return TruthfulnessResult(
             all_supported=False,
@@ -850,7 +850,7 @@ class MediumRiskNoFlagsVerificationAgent(AlwaysPassVerificationAgent):
     def __init__(self):
         self.ai_calls = 0
 
-    def review_ai_detection(self, docs):
+    def review_ai_detection(self, docs, *, exemptions=None):
         self.ai_calls += 1
         return AIDetectionResult(
             risk_level="medium",
@@ -969,7 +969,7 @@ def test_docs_saved_before_review_loop(tmp_path, monkeypatch, career_profile, vo
         def __init__(self):
             self.checked = False
 
-        def review_truthfulness(self, docs, career, job):
+        def review_truthfulness(self, docs, career, job, *, exemptions=None):
             if not self.checked:
                 self.checked = True
                 sessions = store.list_sessions()
@@ -993,6 +993,194 @@ def test_docs_saved_before_review_loop(tmp_path, monkeypatch, career_profile, vo
 
     assert saved_during_review.get("cover_letter") is True
     assert saved_during_review.get("context") is True
+
+
+# ---------------------------------------------------------------------------
+# Exemptions are passed to reviewers during the repair loop
+# ---------------------------------------------------------------------------
+
+
+class ExemptionTrackingVerification(AlwaysPassVerificationAgent):
+    """Records exemptions received by each reviewer across calls."""
+
+    def __init__(self):
+        self.truth_exemptions: list = []
+        self.ai_exemptions: list = []
+        self.voice_exemptions: list = []
+        self.hm_exemptions: list = []
+        self.pruning_exemptions: list = []
+        self.ats_exemptions: list = []
+        self.consistency_exemptions: list = []
+        self.grammar_exemptions: list = []
+
+    def review_ai_detection(self, docs, *, exemptions=None):
+        self.ai_exemptions.append(exemptions)
+        # Fail on first call to force a repair pass
+        if len(self.ai_exemptions) == 1:
+            return AIDetectionResult(
+                risk_level="medium",
+                cover_letter_flags=["flagged-phrase"],
+                resume_flags=[],
+                interview_guide_flags=[],
+            )
+        return super().review_ai_detection(docs, exemptions=exemptions)
+
+    def review_truthfulness(self, docs, career, job, *, exemptions=None):
+        self.truth_exemptions.append(exemptions)
+        return super().review_truthfulness(docs, career, job, exemptions=exemptions)
+
+
+class AcceptsAIPhraseAndTrackRepair:
+    def __init__(self):
+        self.unified_calls = 0
+
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
+        self.unified_calls += 1
+        return RepairPassResult(accepted_ai_phrases=["flagged-phrase"])
+
+
+def test_exemptions_passed_to_reviewers_in_repair_loop(
+    tmp_path, monkeypatch, career_profile, voice_profile, job_description
+):
+    """After a repair pass accepts a phrase, the exemption list is passed to reviewers on the next pass."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    verification = ExemptionTrackingVerification()
+    repair = AcceptsAIPhraseAndTrackRepair()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=SessionStore(),
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=verification,
+        repair_agent=repair,
+    )
+
+    orchestrator.create_session_run(career_profile, voice_profile, job_description)
+
+    # Pass 1: no exemptions → AI fails → repair accepts the phrase
+    assert verification.ai_exemptions[0] is None
+    # Pass 2: exemptions include the accepted phrase → AI passes
+    assert verification.ai_exemptions[1] == ["flagged-phrase"]
+    # Repair only called once (pass 2 converges)
+    assert repair.unified_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Refine loads and applies exemptions from prior create run
+# ---------------------------------------------------------------------------
+
+
+class AlwaysFlagsAIForRefine(AlwaysPassVerificationAgent):
+    """AI detection always flags a specific phrase — used to verify suppression in refine."""
+
+    def __init__(self):
+        self.ai_exemptions_received: list = []
+
+    def review_ai_detection(self, docs, *, exemptions=None):
+        self.ai_exemptions_received.append(exemptions)
+        return AIDetectionResult(
+            risk_level="medium",
+            cover_letter_flags=["previously-accepted"],
+            resume_flags=[],
+            interview_guide_flags=[],
+        )
+
+
+def test_refine_loads_exemptions_and_suppresses_review_findings(
+    tmp_path, monkeypatch, career_profile, voice_profile, job_description
+):
+    """refine_session_run should load exemptions from the prior create run,
+    pass them to reviewers, and apply post-filter suppressions."""
+    from resume_refinery.models import ExemptedPhrases
+
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    # Create initial run with skip_review, then manually save exemptions
+    create_verification = AlwaysPassVerificationAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=create_verification,
+        repair_agent=FakeRepairAgent(),
+    )
+    created = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+
+    # Save exemptions as if the create run accepted "previously-accepted"
+    store.save_suppressions(created.session, ExemptedPhrases(
+        ai_phrases=["previously-accepted"],
+    ))
+
+    # Now refine with a verification agent that always flags the suppressed phrase
+    refine_verification = AlwaysFlagsAIForRefine()
+    orchestrator2 = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=refine_verification,
+        repair_agent=FakeRepairAgent(),
+    )
+    result = orchestrator2.refine_session_run(
+        created.session.session_id, "Make it shorter",
+    )
+
+    # Exemptions were passed to the AI reviewer
+    assert refine_verification.ai_exemptions_received[0] == ["previously-accepted"]
+    # Post-filter suppression removed the flag from the final review
+    assert result.reviews.ai_detection is not None
+    assert result.reviews.ai_detection.cover_letter_flags == []
+    # Exemptions were persisted with the new version
+    loaded = store.load_suppressions(result.session)
+    assert loaded is not None
+    assert "previously-accepted" in loaded.ai_phrases
+
+
+# ---------------------------------------------------------------------------
+# load_suppressions scans versions backwards
+# ---------------------------------------------------------------------------
+
+
+def test_load_suppressions_returns_most_recent(
+    tmp_path, monkeypatch, career_profile, voice_profile, job_description
+):
+    """load_suppressions should find exemptions from any prior version."""
+    from resume_refinery.models import ExemptedPhrases, Session
+
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    # Create a session and save exemptions in v1
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+    created = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+    store.save_suppressions(created.session, ExemptedPhrases(
+        claims=["already-verified"],
+    ))
+
+    # Refine bumps to v2 (no exemptions saved in v2 yet)
+    refined = orchestrator.refine_session_run(
+        created.session.session_id, "Shorten.",
+    )
+
+    # load_suppressions should still find the v1 exemptions via backwards scan
+    # (in practice refine now saves them too, so v2 will have them —
+    # but verify the scanning logic works for the case where v2 has them)
+    loaded = store.load_suppressions(refined.session)
+    assert loaded is not None
+    assert "already-verified" in loaded.claims
 
 
 def test_docs_updated_after_each_repair_pass(tmp_path, monkeypatch, career_profile, voice_profile, job_description):

@@ -93,6 +93,18 @@ def _normalize_llm_json(raw: str) -> str:
 _GEN_MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 
 
+def _exemption_section(items: list[str] | None, label: str) -> str:
+    """Build a user-message section listing previously accepted items."""
+    if not items:
+        return ""
+    bullet_list = "\n".join(f'- "{item}"' for item in items)
+    return (
+        f"\n\n## Previously Accepted (DO NOT flag these)\n"
+        f"The following {label} were reviewed in prior passes and accepted as "
+        f"legitimate — they are not issues. Do not flag them:\n{bullet_list}\n"
+    )
+
+
 class DocumentReviewer:
     """Runs voice-match and AI-detection reviews on a DocumentSet."""
 
@@ -113,7 +125,7 @@ class DocumentReviewer:
             ai_detection=self.review_ai_detection(docs),
         )
 
-    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile, job: JobDescription) -> TruthfulnessResult:
+    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile, job: JobDescription, *, exemptions: list[str] | None = None) -> TruthfulnessResult:
         """Verify document claims are explicitly supported by the career profile.
 
         Each document is reviewed in its own call so the context window is never
@@ -126,6 +138,7 @@ class DocumentReviewer:
         ]
 
         results: dict[str, DocumentTruthResult] = {}
+        exempt_block = _exemption_section(exemptions, "claims")
 
         for doc_type, content in doc_map:
             if not content:
@@ -136,7 +149,7 @@ class DocumentReviewer:
                 job_description=job.raw_content,
                 doc_type=doc_type,
                 doc_content=content,
-            )
+            ) + exempt_block
             raw = self._call(TRUTHFULNESS_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             results[doc_type] = DocumentTruthResult(
@@ -156,7 +169,7 @@ class DocumentReviewer:
             interview_guide=ig,
         )
 
-    def review_voice(self, docs: DocumentSet, voice: VoiceProfile) -> VoiceReviewResult:
+    def review_voice(self, docs: DocumentSet, voice: VoiceProfile, *, exemptions: list[str] | None = None) -> VoiceReviewResult:
         """Check how well each document matches the user's voice profile.
 
         Only the cover letter and resume are reviewed — the interview guide
@@ -174,6 +187,7 @@ class DocumentReviewer:
         per_doc_issues: dict[str, list[str]] = {}
         match_scores: list[str] = []
         per_doc_match: dict[str, str] = {}
+        exempt_block = _exemption_section(exemptions, "voice issues")
 
         for doc_type, content in doc_map:
             if not content:
@@ -185,7 +199,7 @@ class DocumentReviewer:
                 voice_profile=voice.raw_content,
                 doc_type=doc_type,
                 doc_content=content,
-            )
+            ) + exempt_block
             raw = self._call(VOICE_REVIEW_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             assessments[doc_type] = data.get("assessment") or ""
@@ -212,7 +226,7 @@ class DocumentReviewer:
             resume_issues=per_doc_issues.get("Resume", []),
         )
 
-    def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:
+    def review_ai_detection(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> AIDetectionResult:
         """Identify AI-sounding or generic content in the documents.
 
         Each document is reviewed in its own call to stay within context limits.
@@ -229,6 +243,7 @@ class DocumentReviewer:
             "Interview Guide": [],
         }
         risk_scores: list[str] = []
+        exempt_block = _exemption_section(exemptions, "phrases")
 
         for doc_type, content in doc_map:
             if not content:
@@ -239,7 +254,7 @@ class DocumentReviewer:
             user_msg = AI_DETECTION_DOC_USER_TEMPLATE.format(
                 doc_type=doc_type,
                 doc_content=content,
-            )
+            ) + exempt_block
             raw = self._call(AI_DETECTION_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
             # Deduplicate flags — LLMs sometimes repeat the same phrase many times.
@@ -267,14 +282,14 @@ class DocumentReviewer:
         )
 
     def review_hiring_manager(
-        self, docs: DocumentSet, job: JobDescription,
+        self, docs: DocumentSet, job: JobDescription, *, exemptions: list[str] | None = None,
     ) -> HiringManagerReview:
         """Simulate a hiring-manager review of the resume + cover letter."""
         user_msg = HIRING_MANAGER_REVIEW_USER_TEMPLATE.format(
             job_description=job.raw_content,
             resume=docs.resume or "(not provided)",
             cover_letter=docs.cover_letter or "(not provided)",
-        )
+        ) + _exemption_section(exemptions, "phrases")
         raw = self._call(HIRING_MANAGER_REVIEW_SYSTEM_PROMPT, user_msg)
         data = json.loads(raw)
 
@@ -338,7 +353,7 @@ class DocumentReviewer:
         )
 
     def review_relevance_pruning(
-        self, docs: DocumentSet, job: JobDescription,
+        self, docs: DocumentSet, job: JobDescription, *, exemptions: list[str] | None = None,
     ) -> RelevancePruningResult:
         """Identify content that can be removed without weakening the application."""
         doc_map = [
@@ -349,6 +364,7 @@ class DocumentReviewer:
         cover_letter_issues: list[RelevancePruningIssue] = []
         resume_issues: list[RelevancePruningIssue] = []
         density_scores: list[str] = []
+        exempt_block = _exemption_section(exemptions, "phrases")
 
         for doc_type, doc_key, content in doc_map:
             if not content:
@@ -357,7 +373,7 @@ class DocumentReviewer:
                 job_description=job.raw_content,
                 doc_type=doc_type,
                 doc_content=content,
-            )
+            ) + exempt_block
             raw = self._call(RELEVANCE_PRUNING_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
 
@@ -400,7 +416,7 @@ class DocumentReviewer:
         )
 
     def review_ats_keyword(
-        self, docs: DocumentSet, job: JobDescription, career: CareerProfile,
+        self, docs: DocumentSet, job: JobDescription, career: CareerProfile, *, exemptions: list[str] | None = None,
     ) -> ATSKeywordResult:
         """Check resume for ATS keyword alignment against the job description."""
         if not docs.resume:
@@ -410,7 +426,7 @@ class DocumentReviewer:
             job_description=job.raw_content,
             career_profile=career.raw_content,
             resume=docs.resume,
-        )
+        ) + _exemption_section(exemptions, "keywords")
         raw = self._call(ATS_KEYWORD_SYSTEM_PROMPT, user_msg)
         data = json.loads(raw)
 
@@ -454,7 +470,7 @@ class DocumentReviewer:
             stuffing_keywords=stuffing,
         )
 
-    def review_consistency(self, docs: DocumentSet) -> ConsistencyResult:
+    def review_consistency(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> ConsistencyResult:
         """Compare facts across documents and flag contradictions."""
         # Need at least two documents to compare
         doc_count = sum(1 for d in [docs.cover_letter, docs.resume, docs.interview_guide] if d)
@@ -465,7 +481,7 @@ class DocumentReviewer:
             resume=docs.resume or "(not provided)",
             cover_letter=docs.cover_letter or "(not provided)",
             interview_guide=docs.interview_guide or "(not provided)",
-        )
+        ) + _exemption_section(exemptions, "quotes")
         raw = self._call(CONSISTENCY_SYSTEM_PROMPT, user_msg)
         data = json.loads(raw)
 
@@ -498,7 +514,7 @@ class DocumentReviewer:
 
         return ConsistencyResult(consistent=consistent, issues=issues)
 
-    def review_grammar(self, docs: DocumentSet) -> GrammarResult:
+    def review_grammar(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> GrammarResult:
         """Check each document for grammar, tense, and mechanics errors."""
         doc_map = [
             ("Cover Letter", "cover_letter", docs.cover_letter),
@@ -516,6 +532,7 @@ class DocumentReviewer:
             "resume": resume_issues,
             "interview_guide": interview_guide_issues,
         }
+        exempt_block = _exemption_section(exemptions, "phrases")
 
         for doc_type, doc_key, content in doc_map:
             if not content:
@@ -523,7 +540,7 @@ class DocumentReviewer:
             user_msg = GRAMMAR_DOC_USER_TEMPLATE.format(
                 doc_type=doc_type,
                 doc_content=content,
-            )
+            ) + exempt_block
             raw = self._call(GRAMMAR_SYSTEM_PROMPT, user_msg)
             data = json.loads(raw)
 

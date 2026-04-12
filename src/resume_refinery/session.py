@@ -278,6 +278,21 @@ class SessionStore:
             phrases.model_dump_json(indent=2), encoding="utf-8"
         )
 
+    def load_suppressions(self, session: Session) -> ExemptedPhrases | None:
+        """Load the most recent exempted phrases for this session.
+
+        Scans from the current version backwards and returns the first
+        ``ExemptedPhrases`` found, or ``None`` if none exist.
+        """
+        for v in range(session.current_version, 0, -1):
+            result = _load_model_opt(
+                self.root / session.session_id / f"v{v}" / "exempted_phrases.json",
+                ExemptedPhrases,
+            )
+            if result is not None:
+                return result
+        return None
+
     # --- Repair pass snapshots ---------------------------------------------
 
     def save_repair_pass(

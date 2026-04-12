@@ -166,6 +166,9 @@ class ResumeRefineryOrchestrator:
         current_docs = self.store.load_documents(session)
         context = self._build_context(career, voice, job, progress)
 
+        # Load exemptions accumulated from prior runs in this session.
+        exempted = self.store.load_suppressions(session) or ExemptedPhrases()
+
         keys_to_refine = [doc] if doc else list(self._doc_labels().keys())
 
         # Preserve originals so we can restore docs the user didn't target.
@@ -180,6 +183,35 @@ class ResumeRefineryOrchestrator:
         )
         if repair_pass.edits:
             self._progress(progress, self._summarise_repair(repair_pass))
+
+        # Accumulate any new acceptances from the repair pass.
+        suppressed_claims = set(exempted.claims)
+        suppressed_ai_phrases = set(exempted.ai_phrases)
+        suppressed_voice_issues = set(exempted.voice_issues)
+        suppressed_hm_issues = set(exempted.hm_issues)
+        suppressed_pruning_issues = set(exempted.pruning_issues)
+        suppressed_ats_issues = set(exempted.ats_issues)
+        suppressed_consistency_issues = set(exempted.consistency_issues)
+        suppressed_grammar_issues = set(exempted.grammar_issues)
+        suppressed_claims.update(repair_pass.accepted_claims)
+        suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
+        suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
+        suppressed_hm_issues.update(repair_pass.accepted_hm_issues)
+        suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
+        suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
+        suppressed_consistency_issues.update(repair_pass.accepted_consistency_issues)
+        suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
+
+        updated_exempted = ExemptedPhrases(
+            claims=sorted(suppressed_claims),
+            ai_phrases=sorted(suppressed_ai_phrases),
+            voice_issues=sorted(suppressed_voice_issues),
+            hm_issues=sorted(suppressed_hm_issues),
+            pruning_issues=sorted(suppressed_pruning_issues),
+            ats_issues=sorted(suppressed_ats_issues),
+            consistency_issues=sorted(suppressed_consistency_issues),
+            grammar_issues=sorted(suppressed_grammar_issues),
+        )
 
         # Restore documents that weren't targeted.
         if originals and doc:
@@ -197,11 +229,40 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         self._export(session, current_docs, output_dir=output_dir)
 
-        # Run all reviewers once (no repair loop).
+        # Run all reviewers once (no repair loop), passing exemptions.
         self._progress(progress, "Running reviews...")
         reviews = self._run_all_reviews(
             current_docs, career, voice, job, progress,
+            exempted=updated_exempted,
         )
+
+        # Apply post-filter suppressions to review results.
+        (reviews_truth, reviews_voice, reviews_ai, reviews_hm,
+         reviews_pruning, reviews_ats, reviews_consistency, reviews_grammar) = self._apply_suppressions(
+            reviews.truthfulness, reviews.voice, reviews.ai_detection,
+            reviews.hiring_manager, reviews.relevance_pruning,
+            reviews.ats_keyword, reviews.consistency, reviews.grammar,
+            suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
+            suppressed_hm_issues, suppressed_pruning_issues,
+            suppressed_ats_issues, suppressed_consistency_issues, suppressed_grammar_issues,
+        )
+        reviews = ReviewBundle(
+            truthfulness=reviews_truth,
+            voice=reviews_voice,
+            ai_detection=reviews_ai,
+            hiring_manager=reviews_hm,
+            relevance_pruning=reviews_pruning,
+            ats_keyword=reviews_ats,
+            consistency=reviews_consistency,
+            grammar=reviews_grammar,
+        )
+
+        # Persist the combined exemptions with the new version.
+        if any([updated_exempted.claims, updated_exempted.ai_phrases,
+                updated_exempted.voice_issues, updated_exempted.hm_issues,
+                updated_exempted.pruning_issues, updated_exempted.ats_issues,
+                updated_exempted.consistency_issues, updated_exempted.grammar_issues]):
+            self.store.save_suppressions(session, updated_exempted)
 
         exported = self._export(session, current_docs, output_dir=output_dir)
         self.store.save_reviews(session, reviews)
@@ -248,9 +309,34 @@ class ResumeRefineryOrchestrator:
         voice: VoiceProfile,
         job: JobDescription,
         progress: ProgressCallback | None = None,
+        exempted: ExemptedPhrases | None = None,
     ) -> ReviewBundle:
         """Run every reviewer once and return the combined bundle."""
-        reviews = self.verification_agent.review_all(docs, career, voice, job)
+        truth = None
+        voice_review = None
+        ai_review = None
+        try:
+            truth = self.verification_agent.review_truthfulness(
+                docs, career, job,
+                exemptions=exempted.claims if exempted and exempted.claims else None,
+            )
+        except Exception as exc:
+            logging.warning("Truthfulness review failed (%s)", exc)
+        try:
+            voice_review = self.verification_agent.review_voice(
+                docs, voice,
+                exemptions=exempted.voice_issues if exempted and exempted.voice_issues else None,
+            )
+        except Exception as exc:
+            logging.warning("Voice review failed (%s)", exc)
+        try:
+            ai_review = self.verification_agent.review_ai_detection(
+                docs,
+                exemptions=exempted.ai_phrases if exempted and exempted.ai_phrases else None,
+            )
+        except Exception as exc:
+            logging.warning("AI-detection review failed (%s)", exc)
+        reviews = ReviewBundle(truthfulness=truth, voice=voice_review, ai_detection=ai_review)
         if reviews.truthfulness:
             self._progress(progress, self._summarise_truth(reviews.truthfulness))
         if reviews.voice:
@@ -258,31 +344,46 @@ class ResumeRefineryOrchestrator:
         if reviews.ai_detection:
             self._progress(progress, self._summarise_ai(reviews.ai_detection))
         try:
-            hm_review = self.verification_agent.review_hiring_manager(docs, job)
+            hm_review = self.verification_agent.review_hiring_manager(
+                docs, job,
+                exemptions=exempted.hm_issues if exempted and exempted.hm_issues else None,
+            )
             reviews = reviews.model_copy(update={"hiring_manager": hm_review})
             self._progress(progress, self._summarise_hiring_manager(hm_review))
         except Exception as exc:
             logging.warning("Hiring-manager review failed (%s)", exc)
         try:
-            pruning_review = self.verification_agent.review_relevance_pruning(docs, job)
+            pruning_review = self.verification_agent.review_relevance_pruning(
+                docs, job,
+                exemptions=exempted.pruning_issues if exempted and exempted.pruning_issues else None,
+            )
             reviews = reviews.model_copy(update={"relevance_pruning": pruning_review})
             self._progress(progress, self._summarise_relevance_pruning(pruning_review))
         except Exception as exc:
             logging.warning("Relevance-pruning review failed (%s)", exc)
         try:
-            ats_review = self.verification_agent.review_ats_keyword(docs, job, career)
+            ats_review = self.verification_agent.review_ats_keyword(
+                docs, job, career,
+                exemptions=exempted.ats_issues if exempted and exempted.ats_issues else None,
+            )
             reviews = reviews.model_copy(update={"ats_keyword": ats_review})
             self._progress(progress, self._summarise_ats_keyword(ats_review))
         except Exception as exc:
             logging.warning("ATS-keyword review failed (%s)", exc)
         try:
-            consistency_review = self.verification_agent.review_consistency(docs)
+            consistency_review = self.verification_agent.review_consistency(
+                docs,
+                exemptions=exempted.consistency_issues if exempted and exempted.consistency_issues else None,
+            )
             reviews = reviews.model_copy(update={"consistency": consistency_review})
             self._progress(progress, self._summarise_consistency(consistency_review))
         except Exception as exc:
             logging.warning("Consistency review failed (%s)", exc)
         try:
-            grammar_review = self.verification_agent.review_grammar(docs)
+            grammar_review = self.verification_agent.review_grammar(
+                docs,
+                exemptions=exempted.grammar_issues if exempted and exempted.grammar_issues else None,
+            )
             reviews = reviews.model_copy(update={"grammar": grammar_review})
             self._progress(progress, self._summarise_grammar(grammar_review))
         except Exception as exc:
@@ -352,7 +453,10 @@ class ResumeRefineryOrchestrator:
 
             def _run_truth():
                 try:
-                    return self.verification_agent.review_truthfulness(docs, career, job)
+                    return self.verification_agent.review_truthfulness(
+                        docs, career, job,
+                        exemptions=sorted(suppressed_claims) if suppressed_claims else None,
+                    )
                 except Exception as exc:
                     logging.warning("Truthfulness review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
@@ -360,7 +464,10 @@ class ResumeRefineryOrchestrator:
 
             def _run_consistency():
                 try:
-                    return self.verification_agent.review_consistency(docs)
+                    return self.verification_agent.review_consistency(
+                        docs,
+                        exemptions=sorted(suppressed_consistency_issues) if suppressed_consistency_issues else None,
+                    )
                 except Exception as exc:
                     logging.warning("Consistency review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Consistency review skipped: {exc}[/yellow]")
@@ -368,7 +475,10 @@ class ResumeRefineryOrchestrator:
 
             def _run_ats():
                 try:
-                    return self.verification_agent.review_ats_keyword(docs, job, career)
+                    return self.verification_agent.review_ats_keyword(
+                        docs, job, career,
+                        exemptions=sorted(suppressed_ats_issues) if suppressed_ats_issues else None,
+                    )
                 except Exception as exc:
                     logging.warning("ATS-keyword review failed (%s)", exc)
                     self._progress(progress, f"[yellow]ATS-keyword review skipped: {exc}[/yellow]")
@@ -376,7 +486,10 @@ class ResumeRefineryOrchestrator:
 
             def _run_grammar():
                 try:
-                    return self.verification_agent.review_grammar(docs)
+                    return self.verification_agent.review_grammar(
+                        docs,
+                        exemptions=sorted(suppressed_grammar_issues) if suppressed_grammar_issues else None,
+                    )
                 except Exception as exc:
                     logging.warning("Grammar review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Grammar review skipped: {exc}[/yellow]")
@@ -384,7 +497,10 @@ class ResumeRefineryOrchestrator:
 
             def _run_voice():
                 try:
-                    return self.verification_agent.review_voice(docs, voice)
+                    return self.verification_agent.review_voice(
+                        docs, voice,
+                        exemptions=sorted(suppressed_voice_issues) if suppressed_voice_issues else None,
+                    )
                 except Exception as exc:
                     logging.warning("Voice review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
@@ -392,7 +508,10 @@ class ResumeRefineryOrchestrator:
 
             def _run_ai():
                 try:
-                    return self.verification_agent.review_ai_detection(docs)
+                    return self.verification_agent.review_ai_detection(
+                        docs,
+                        exemptions=sorted(suppressed_ai_phrases) if suppressed_ai_phrases else None,
+                    )
                 except Exception as exc:
                     logging.warning("AI-detection review failed (%s)", exc)
                     self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
@@ -400,7 +519,10 @@ class ResumeRefineryOrchestrator:
 
             def _run_hm():
                 try:
-                    return self.verification_agent.review_hiring_manager(docs, job)
+                    return self.verification_agent.review_hiring_manager(
+                        docs, job,
+                        exemptions=sorted(suppressed_hm_issues) if suppressed_hm_issues else None,
+                    )
                 except Exception as exc:
                     logging.warning("Hiring-manager review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Hiring-manager review skipped: {exc}[/yellow]")
@@ -408,7 +530,10 @@ class ResumeRefineryOrchestrator:
 
             def _run_pruning():
                 try:
-                    return self.verification_agent.review_relevance_pruning(docs, job)
+                    return self.verification_agent.review_relevance_pruning(
+                        docs, job,
+                        exemptions=sorted(suppressed_pruning_issues) if suppressed_pruning_issues else None,
+                    )
                 except Exception as exc:
                     logging.warning("Relevance-pruning review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Relevance-pruning review skipped: {exc}[/yellow]")

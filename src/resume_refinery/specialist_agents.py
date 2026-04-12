@@ -512,29 +512,29 @@ class VerificationAgent:
             ai_detection=self.reviewer.review_ai_detection(docs),
         )
 
-    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile, job: JobDescription) -> TruthfulnessResult:
-        return self.reviewer.review_truthfulness(docs, career, job)
+    def review_truthfulness(self, docs: DocumentSet, career: CareerProfile, job: JobDescription, *, exemptions: list[str] | None = None) -> TruthfulnessResult:
+        return self.reviewer.review_truthfulness(docs, career, job, exemptions=exemptions)
 
-    def review_voice(self, docs: DocumentSet, voice: VoiceProfile) -> VoiceReviewResult:
-        return self.reviewer.review_voice(docs, voice)
+    def review_voice(self, docs: DocumentSet, voice: VoiceProfile, *, exemptions: list[str] | None = None) -> VoiceReviewResult:
+        return self.reviewer.review_voice(docs, voice, exemptions=exemptions)
 
-    def review_ai_detection(self, docs: DocumentSet) -> AIDetectionResult:
-        return self.reviewer.review_ai_detection(docs)
+    def review_ai_detection(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> AIDetectionResult:
+        return self.reviewer.review_ai_detection(docs, exemptions=exemptions)
 
-    def review_hiring_manager(self, docs: DocumentSet, job: JobDescription) -> HiringManagerReview:
-        return self.reviewer.review_hiring_manager(docs, job)
+    def review_hiring_manager(self, docs: DocumentSet, job: JobDescription, *, exemptions: list[str] | None = None) -> HiringManagerReview:
+        return self.reviewer.review_hiring_manager(docs, job, exemptions=exemptions)
 
-    def review_relevance_pruning(self, docs: DocumentSet, job: JobDescription) -> RelevancePruningResult:
-        return self.reviewer.review_relevance_pruning(docs, job)
+    def review_relevance_pruning(self, docs: DocumentSet, job: JobDescription, *, exemptions: list[str] | None = None) -> RelevancePruningResult:
+        return self.reviewer.review_relevance_pruning(docs, job, exemptions=exemptions)
 
-    def review_ats_keyword(self, docs: DocumentSet, job: JobDescription, career: CareerProfile) -> ATSKeywordResult:
-        return self.reviewer.review_ats_keyword(docs, job, career)
+    def review_ats_keyword(self, docs: DocumentSet, job: JobDescription, career: CareerProfile, *, exemptions: list[str] | None = None) -> ATSKeywordResult:
+        return self.reviewer.review_ats_keyword(docs, job, career, exemptions=exemptions)
 
-    def review_consistency(self, docs: DocumentSet) -> ConsistencyResult:
-        return self.reviewer.review_consistency(docs)
+    def review_consistency(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> ConsistencyResult:
+        return self.reviewer.review_consistency(docs, exemptions=exemptions)
 
-    def review_grammar(self, docs: DocumentSet) -> GrammarResult:
-        return self.reviewer.review_grammar(docs)
+    def review_grammar(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> GrammarResult:
+        return self.reviewer.review_grammar(docs, exemptions=exemptions)
 
 
 class RepairAgent:
