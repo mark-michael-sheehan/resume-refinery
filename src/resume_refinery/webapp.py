@@ -11,12 +11,14 @@ import time
 from pathlib import Path
 from typing import Iterator, Optional
 
+import json as _json
+
 import markdown as md
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
-from .models import DraftingContext, OrchestrationResult
+from .models import DocumentSet, DraftingContext, EvidencePack, OrchestrationResult, ReviewBundle
 from .orchestrator import ResumeRefineryOrchestrator
 from .parsers import (
     parse_career_profile_content,
@@ -878,16 +880,30 @@ async def create_session(
     _skip = bool(skip_review)
     _allow = bool(allow_unverified)
 
-    return _stream_orchestration(
-        run_fn=lambda progress: orchestrator.create_session_run(
+    def _run(progress):
+        session, context = orchestrator.extract_context(
             career, voice, job,
-            output_dir=output_path,
-            skip_review=_skip,
-            allow_unverified=_allow,
             selected_docs=_selected,
             progress=progress,
-        ),
-        redirect_url_fn=lambda r: f"/sessions/{r.session.session_id}",
+        )
+        # Persist generation options for the generate route.
+        opts_path = store.session_dir(session.session_id) / "staging_options.json"
+        opts_path.write_text(_json.dumps({
+            "output_dir": str(output_path),
+            "skip_review": _skip,
+            "allow_unverified": _allow,
+        }), encoding="utf-8")
+        return OrchestrationResult(
+            session=session,
+            documents=DocumentSet(),
+            reviews=ReviewBundle(),
+            evidence_pack=context.evidence_pack,
+            voice_style_guide=context.voice_style_guide,
+        )
+
+    return _stream_orchestration(
+        run_fn=_run,
+        redirect_url_fn=lambda r: f"/sessions/{r.session.session_id}/curate",
         error_redirect="/",
     )
 
@@ -910,6 +926,143 @@ def list_sessions() -> HTMLResponse:
         f"<tbody>{''.join(rows) if rows else '<tr><td colspan=5>No sessions found.</td></tr>'}</tbody></table></div>"
     )
     return _page("Sessions", body)
+
+
+@app.get("/sessions/{session_id}/curate", response_class=HTMLResponse)
+def curate_evidence(session_id: str) -> HTMLResponse:
+    """Render the evidence curation page where users can deselect evidence items."""
+    session = store.get(session_id)
+    context = store.load_staging_context(session)
+    if context is None:
+        # No staged context — session already generated; redirect to detail.
+        return RedirectResponse(f"/sessions/{session_id}", status_code=303)
+
+    evidence = context.evidence_pack
+
+    # --- Build evidence checklist ---
+    req_items = ""
+    if evidence.job_requirements:
+        for req in evidence.job_requirements:
+            category_badge = f" <em>[{html.escape(req.category)}]</em>" if req.category else ""
+            req_items += f"<li><strong>{html.escape(req.requirement)}</strong>{category_badge}</li>"
+
+    evidence_rows = ""
+    if evidence.matched_evidence:
+        for idx, item in enumerate(evidence.matched_evidence):
+            score_cls = "ok" if item.relevance_score >= 4 else "muted" if item.relevance_score >= 3 else "bad"
+            source_html = (
+                f"<br/><small class='muted'>Source: {html.escape(item.source_excerpt)}</small>"
+                if item.source_excerpt else ""
+            )
+            evidence_rows += (
+                f"<tr>"
+                f"<td style='text-align:center'>"
+                f"<input type='checkbox' name='evidence_idx' value='{idx}' checked />"
+                f"</td>"
+                f"<td><span class='{score_cls}'>[{item.relevance_score}/5]</span></td>"
+                f"<td><strong>{html.escape(item.requirement)}</strong></td>"
+                f"<td>{html.escape(item.evidence)}{source_html}</td>"
+                f"</tr>"
+            )
+    else:
+        evidence_rows = "<tr><td colspan='4' class='muted'>No matched evidence extracted.</td></tr>"
+
+    gap_items = ""
+    if evidence.gaps:
+        for gap in evidence.gaps:
+            gap_items += f"<li>{html.escape(gap)}</li>"
+
+    body = f"""
+<div class="card">
+  <h1>Curate Evidence</h1>
+  <p class="muted">{html.escape(session.job_description.title or '—')} @ {html.escape(session.job_description.company or '—')}</p>
+  <p>Review the extracted evidence below. Uncheck any items you want to <strong>exclude</strong> from document generation.</p>
+</div>
+<form method="post" action="/sessions/{html.escape(session_id)}/generate">
+<div class="card">
+  <h2>Job Requirements</h2>
+  <ul>{req_items or "<li class='muted'>No requirements extracted.</li>"}</ul>
+</div>
+<div class="card">
+  <h2>Matched Evidence ({len(evidence.matched_evidence)} items)</h2>
+  <p style="margin-bottom:.5rem">
+    <button type="button" onclick="document.querySelectorAll('input[name=evidence_idx]').forEach(cb=>cb.checked=true)" style="font-size:.85em;padding:.3rem .6rem;margin-top:0">Select All</button>
+    <button type="button" onclick="document.querySelectorAll('input[name=evidence_idx]').forEach(cb=>cb.checked=false)" style="font-size:.85em;padding:.3rem .6rem;margin-top:0;background:#888">Deselect All</button>
+  </p>
+  <table>
+    <thead><tr><th style="width:3rem">Use</th><th style="width:3.5rem">Score</th><th>Requirement</th><th>Evidence</th></tr></thead>
+    <tbody>{evidence_rows}</tbody>
+  </table>
+</div>
+{"<div class='card'><h2>Gaps (no evidence found)</h2><ul>" + gap_items + "</ul></div>" if gap_items else ""}
+<div class="card" style="display:flex;gap:.8rem;justify-content:flex-end">
+  <a href="/" style="padding:.65rem 1rem;color:var(--muted);text-decoration:none;font-weight:600">Cancel</a>
+  <button type="submit" name="use_all" value="true" style="background:#888">Generate with All Evidence</button>
+  <button type="submit">Generate with Selected Evidence</button>
+</div>
+</form>
+"""
+    return _page("Curate Evidence", body)
+
+
+@app.post("/sessions/{session_id}/generate")
+def generate_session(
+    session_id: str,
+    evidence_idx: list[str] = Form([]),
+    use_all: Optional[str] = Form(None),
+):
+    """Filter evidence to selected items and run document generation."""
+    session = store.get(session_id)
+    context = store.load_staging_context(session)
+    if context is None:
+        raise HTTPException(status_code=400, detail="No staged context — session may already be generated.")
+
+    # Load generation options saved during extraction.
+    opts_path = store.session_dir(session_id) / "staging_options.json"
+    if not opts_path.exists():
+        raise HTTPException(status_code=400, detail="Missing generation options. Please start a new session.")
+    opts = _json.loads(opts_path.read_text(encoding="utf-8"))
+    output_path = _validate_output_dir(opts["output_dir"])
+    _skip = opts.get("skip_review", False)
+    _allow = opts.get("allow_unverified", False)
+
+    # Clean up the options file.
+    opts_path.unlink(missing_ok=True)
+
+    # Filter evidence unless "Generate with All Evidence" was clicked.
+    if not use_all:
+        try:
+            selected_indices = {int(i) for i in evidence_idx}
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid evidence selection.")
+        filtered = [
+            item for idx, item in enumerate(context.evidence_pack.matched_evidence)
+            if idx in selected_indices
+        ]
+        context = DraftingContext(
+            evidence_pack=EvidencePack(
+                job_requirements=context.evidence_pack.job_requirements,
+                matched_evidence=filtered,
+                gaps=context.evidence_pack.gaps,
+                source_summary=context.evidence_pack.source_summary,
+            ),
+            voice_style_guide=context.voice_style_guide,
+        )
+        # Update the staging context so generate_session_run picks up the filtered version.
+        store.save_staging_context(session, context)
+
+    return _stream_orchestration(
+        run_fn=lambda progress: orchestrator.generate_session_run(
+            session_id,
+            context=context,
+            output_dir=output_path,
+            skip_review=_skip,
+            allow_unverified=_allow,
+            progress=progress,
+        ),
+        redirect_url_fn=lambda r: f"/sessions/{r.session.session_id}",
+        error_redirect=f"/sessions/{html.escape(session_id)}/curate",
+    )
 
 
 @app.get("/sessions/{session_id}", response_class=HTMLResponse)

@@ -20,6 +20,11 @@ voice_profile.md + career_profile.md + job_description.md
   ┌──────────────────────────────────────────────────────────────────────┐
   │ EvidenceAgent      -> EvidencePack (requirements + matched evidence) │
   │ VoiceAgent         -> VoiceStyleGuide                                │
+  │                                                                      │
+  │ [Web app only] Evidence Curation page                                │
+  │   User reviews matched evidence and deselects unwanted items.        │
+  │   Curated EvidencePack is saved back before generation.              │
+  │                                                                      │
   │ DraftingAgent      -> DocumentSet                                    │
   │ VerificationAgent  -> Unified review + repair loop:                  │
   │   All 8 reviewers concurrent -> single repair if any gate fails      │

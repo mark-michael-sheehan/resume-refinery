@@ -360,3 +360,53 @@ def test_update_documents_overwrites_without_version_bump(tmp_path, career_profi
     assert loaded.cover_letter == "updated CL"
     assert loaded.resume == "updated resume"
     assert loaded.interview_guide == "updated guide"
+
+
+# ---------------------------------------------------------------------------
+# Staging context (pre-generation evidence curation)
+# ---------------------------------------------------------------------------
+
+
+def test_save_and_load_staging_context(tmp_path, career_profile, voice_profile, job_description, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+
+    context = DraftingContext(
+        evidence_pack=EvidencePack(gaps=["Go experience"], source_summary=["summary"]),
+        voice_style_guide=VoiceStyleGuide(core_adjectives=["concise"]),
+    )
+    store.save_staging_context(session, context)
+
+    loaded = store.load_staging_context(session)
+    assert loaded is not None
+    assert loaded.evidence_pack.gaps == ["Go experience"]
+    assert loaded.voice_style_guide.core_adjectives == ["concise"]
+
+
+def test_load_staging_context_when_none_exist(tmp_path, career_profile, voice_profile, job_description, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+
+    loaded = store.load_staging_context(session)
+    assert loaded is None
+
+
+def test_clear_staging_context(tmp_path, career_profile, voice_profile, job_description, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    session = store.create(job_description, career_profile, voice_profile)
+
+    context = DraftingContext(
+        evidence_pack=EvidencePack(gaps=["Rust"]),
+        voice_style_guide=VoiceStyleGuide(core_adjectives=["bold"]),
+    )
+    store.save_staging_context(session, context)
+    assert store.load_staging_context(session) is not None
+
+    store.clear_staging_context(session)
+    assert store.load_staging_context(session) is None

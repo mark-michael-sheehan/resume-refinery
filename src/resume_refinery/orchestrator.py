@@ -153,6 +153,118 @@ class ResumeRefineryOrchestrator:
             strict_truth_failed=strict_failed and not allow_unverified,
         )
 
+    def extract_context(
+        self,
+        career: CareerProfile,
+        voice: VoiceProfile,
+        job: JobDescription,
+        *,
+        selected_docs: list[DocumentKey] | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> tuple[Session, DraftingContext]:
+        """Create a session, extract evidence + voice context, and stage it.
+
+        Returns the session and context so the caller can present evidence
+        for curation before calling :meth:`generate_session_run`.
+        """
+        active_docs = selected_docs or list(ALL_DOC_KEYS)
+        session = self.store.create(job, career, voice, selected_docs=active_docs)
+        self._progress(progress, f"Session created: {session.session_id}")
+        context = self._build_context(career, voice, job, progress)
+        self.store.save_staging_context(session, context)
+        return session, context
+
+    def generate_session_run(
+        self,
+        session_id: str,
+        *,
+        context: DraftingContext | None = None,
+        output_dir: Path | None = None,
+        skip_review: bool = False,
+        allow_unverified: bool = False,
+        progress: ProgressCallback | None = None,
+        stream_callback: StreamCallback | None = None,
+    ) -> OrchestrationResult:
+        """Generate documents using a pre-built (and possibly curated) context.
+
+        If *context* is ``None``, loads the staged context from disk.
+        """
+        session = self.store.get(session_id)
+        career, voice = self.store.load_inputs(session)
+        job = session.job_description
+        active_docs = session.selected_docs or list(ALL_DOC_KEYS)
+
+        if context is None:
+            context = self.store.load_staging_context(session)
+            if context is None:
+                raise ValueError(
+                    f"No staged context found for session {session_id}. "
+                    "Run extract_context() first."
+                )
+
+        # Clean up staging files now that we have the context in memory.
+        self.store.clear_staging_context(session)
+
+        docs = DocumentSet()
+        for key, label in self._doc_labels(active_docs).items():
+            self._progress(progress, f"Generating {label} (model is thinking, output appears after reasoning)...")
+            chunks: list[str] = []
+            for chunk in self.drafting_agent.stream_document(key, career, voice, job, context):
+                chunks.append(chunk)
+                if stream_callback:
+                    stream_callback(chunk)
+            if stream_callback:
+                stream_callback("\n")
+            text = "".join(chunks).strip()
+            if not text:
+                raise ValueError(
+                    f"'{label}' generated empty content — the model may have "
+                    "exhausted its context window on reasoning. Try raising "
+                    "RESUME_REFINERY_NUM_CTX in your .env."
+                )
+            docs.set(key, text)
+
+        session = self.store.save_documents(session, docs, docs_regenerated=active_docs)
+        self.store.save_context(session, context)
+        self._export(session, docs, output_dir=output_dir)
+
+        if skip_review:
+            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
+            try:
+                truth = self.verification_agent.review_truthfulness(docs, career, job)
+            except Exception as exc:
+                logging.warning("Truthfulness review failed (%s)", exc)
+                truth = None
+            reviews: ReviewBundle = ReviewBundle(truthfulness=truth)
+            repair_passes: list[RepairPassResult] = []
+            exempted = ExemptedPhrases()
+        else:
+            def _on_repair_pass(p: int, d: DocumentSet, r: ReviewBundle) -> None:
+                self.store.save_repair_pass(session, p, d.model_copy(deep=True), r)
+                self.store.update_documents(session, d)
+                self._export(session, d, output_dir=output_dir)
+
+            reviews, repair_passes, exempted = self._verify_and_repair(
+                docs, career, voice, job, context, progress=progress,
+                on_repair_pass=_on_repair_pass,
+            )
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.consistency_issues or exempted.grammar_issues:
+            self.store.save_suppressions(session, exempted)
+        exported = self._export(session, docs, output_dir=output_dir)
+        self.store.save_reviews(session, reviews)
+
+        strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
+        return OrchestrationResult(
+            session=session,
+            documents=docs,
+            reviews=reviews,
+            repair_passes=repair_passes,
+            evidence_pack=context.evidence_pack,
+            voice_style_guide=context.voice_style_guide,
+            exported_paths={key: str(path) for key, path in exported.items()},
+            strict_truth_failed=strict_failed and not allow_unverified,
+        )
+
     def refine_session_run(
         self,
         session_id: str,

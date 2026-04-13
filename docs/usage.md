@@ -99,6 +99,22 @@ The session creation form includes checkboxes to select which documents to gener
 any document you don't need — the selection carries through the review/repair loop
 and limits the refine dropdown to only the selected documents.
 
+#### Evidence Curation
+
+After submitting the new-session form, the system extracts an evidence pack
+(job requirements matched against your career profile) and redirects you to
+an **Evidence Curation** page (`/sessions/<id>/curate`). This page displays
+all matched evidence items as a checklist (all checked by default). You can:
+
+- **Uncheck** any evidence item to exclude it from document generation
+- Use **Select All** / **Deselect All** buttons for bulk control
+- Click **Generate with Selected Evidence** to proceed with only the checked items
+- Click **Generate with All Evidence** to skip curation entirely
+
+Gaps (job requirements with no evidence found) are displayed read-only for context.
+The CLI does not include this curation step — it runs extraction and generation
+in a single pass.
+
 ### `new` — Start a new session
 
 ```bash

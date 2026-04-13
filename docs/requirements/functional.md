@@ -19,6 +19,7 @@
 | FR-2.5 | **Repair** — The RepairAgent fixes documents that fail verification using surgical find/replace edits (see [convergence.md](convergence.md)). |
 | FR-2.6 | **Iteration** — Verification and repair repeat up to `MAX_REPAIR_PASSES` times or until all documents pass. |
 | FR-2.7 | **Refinement** — The `refine` operation applies user instructions via the RepairAgent (single pass, no loop), then runs all eight reviewers once on the result. The updated document is saved as a new version with review feedback. |
+| FR-2.8 | **Evidence Curation (web app)** — After evidence extraction and before document generation, the web app presents matched evidence items as a checklist. The user may deselect items to exclude them from the evidence pool. The curated `EvidencePack` is used for all downstream generation and review. A "Generate with All Evidence" option skips curation. The CLI does not include this step. |
 
 ## FR-3 Outputs
 

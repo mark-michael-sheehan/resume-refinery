@@ -248,6 +248,35 @@ class SessionStore:
             grammar=_load_model_opt(version_dir / "grammar_review.json", GrammarResult),
         )
 
+    # --- Staging context (pre-generation evidence curation) ---------------
+
+    def save_staging_context(self, session: Session, context: DraftingContext) -> None:
+        """Persist context at session root for evidence curation before generation."""
+        session_dir = self.root / session.session_id
+        (session_dir / "staging_evidence_pack.json").write_text(
+            context.evidence_pack.model_dump_json(indent=2), encoding="utf-8"
+        )
+        (session_dir / "staging_voice_guide.json").write_text(
+            context.voice_style_guide.model_dump_json(indent=2), encoding="utf-8"
+        )
+
+    def load_staging_context(self, session: Session) -> DraftingContext | None:
+        """Load the staged context saved before generation."""
+        session_dir = self.root / session.session_id
+        ep = _load_model_opt(session_dir / "staging_evidence_pack.json", EvidencePack)
+        vg = _load_model_opt(session_dir / "staging_voice_guide.json", VoiceStyleGuide)
+        if ep is None or vg is None:
+            return None
+        return DraftingContext(evidence_pack=ep, voice_style_guide=vg)
+
+    def clear_staging_context(self, session: Session) -> None:
+        """Remove staging context files after generation."""
+        session_dir = self.root / session.session_id
+        for name in ("staging_evidence_pack.json", "staging_voice_guide.json"):
+            path = session_dir / name
+            if path.exists():
+                path.unlink()
+
     # --- Context (EvidencePack + VoiceStyleGuide) --------------------------
 
     def save_context(self, session: Session, context: DraftingContext) -> None:

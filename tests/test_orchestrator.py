@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from resume_refinery.models import (
     AIDetectionResult,
     ATSKeywordResult,
@@ -1435,3 +1437,124 @@ def test_selected_docs_stream_callback_only_selected(tmp_path, monkeypatch, care
     assert any("resume" in c for c in chunks)
     assert not any("cover_letter" in c for c in chunks)
     assert not any("interview_guide" in c for c in chunks)
+
+
+# ---------------------------------------------------------------------------
+# extract_context + generate_session_run (two-phase flow)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_context_creates_session_and_stages_context(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """extract_context should create a session and save staging context to disk."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    session, context = orchestrator.extract_context(
+        career_profile, voice_profile, job_description,
+        selected_docs=["resume", "cover_letter"],
+    )
+
+    assert session.current_version == 0
+    assert context.evidence_pack is not None
+    assert context.voice_style_guide is not None
+    # Staging context should be on disk
+    loaded = store.load_staging_context(session)
+    assert loaded is not None
+    assert loaded.evidence_pack.job_requirements == context.evidence_pack.job_requirements
+
+
+def test_generate_session_run_uses_staged_context(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """generate_session_run should load staged context and produce documents."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    session, context = orchestrator.extract_context(
+        career_profile, voice_profile, job_description,
+    )
+
+    result = orchestrator.generate_session_run(
+        session.session_id, skip_review=True,
+    )
+
+    assert result.session.current_version == 1
+    assert result.documents.resume is not None
+    assert result.documents.cover_letter is not None
+    assert result.documents.interview_guide is not None
+    # Staging context should be cleaned up
+    assert store.load_staging_context(result.session) is None
+
+
+def test_generate_session_run_with_filtered_evidence(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """generate_session_run should accept a curated context with filtered evidence."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    session, context = orchestrator.extract_context(
+        career_profile, voice_profile, job_description,
+    )
+
+    # Pass a modified context directly (simulating curation)
+    from resume_refinery.models import DraftingContext, EvidencePack
+    curated_context = DraftingContext(
+        evidence_pack=EvidencePack(
+            job_requirements=context.evidence_pack.job_requirements,
+            matched_evidence=[],  # all evidence removed
+            gaps=context.evidence_pack.gaps,
+            source_summary=context.evidence_pack.source_summary,
+        ),
+        voice_style_guide=context.voice_style_guide,
+    )
+
+    result = orchestrator.generate_session_run(
+        session.session_id,
+        context=curated_context,
+        skip_review=True,
+    )
+
+    assert result.session.current_version == 1
+    assert result.evidence_pack.matched_evidence == []
+    assert result.documents.resume is not None
+
+
+def test_generate_session_run_fails_without_staged_context(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """generate_session_run should raise ValueError if no staged context exists and none is provided."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        evidence_agent=FakeEvidenceAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+    )
+
+    # Create a session manually without staging context
+    session = store.create(job_description, career_profile, voice_profile)
+
+    with pytest.raises(ValueError, match="No staged context"):
+        orchestrator.generate_session_run(session.session_id)
