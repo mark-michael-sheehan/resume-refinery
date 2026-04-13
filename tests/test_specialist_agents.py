@@ -141,33 +141,62 @@ def test_evidence_agent_limits_requirements():
 
 
 def test_evidence_grounding_accepts_verbatim_quote(career_profile):
-    """Evidence that is a verbatim quote from the career profile should be accepted."""
+    """Evidence that is a verbatim quote with matching source_excerpt should be accepted."""
     agent = EvidenceAgent(client=MagicMock())
-    # This text appears verbatim in the career profile fixture
-    assert agent._is_grounded(
-        "Led backend migration, cut deploy time 60%",
-        career_profile.raw_content,
+    source = "Led backend migration, cut deploy time 60%"
+    grounded, reason = agent._is_grounded(
+        evidence=source,
+        source_excerpt=source,
+        career_content=career_profile.raw_content,
     )
+    assert grounded, reason
+
+
+def test_evidence_grounding_accepts_paraphrase_of_real_source(career_profile):
+    """A succinct paraphrase anchored to a real source excerpt should be accepted."""
+    agent = EvidenceAgent(client=MagicMock())
+    grounded, reason = agent._is_grounded(
+        evidence="Achieved 60% faster deploys through backend migration",
+        source_excerpt="Led backend migration, cut deploy time 60%",
+        career_content=career_profile.raw_content,
+    )
+    assert grounded, reason
 
 
 def test_evidence_grounding_rejects_fabricated_evidence(career_profile):
     """Evidence containing fabricated facts not in the profile should be rejected."""
     agent = EvidenceAgent(client=MagicMock())
-    # This text contains facts completely absent from the career profile
-    assert not agent._is_grounded(
-        "Architected a real-time streaming pipeline processing 50 billion events per day using Apache Kafka and Flink",
-        career_profile.raw_content,
+    grounded, _ = agent._is_grounded(
+        evidence="Architected a real-time streaming pipeline processing 50 billion events",
+        source_excerpt="Built a Kafka pipeline processing 50B events daily",
+        career_content=career_profile.raw_content,
     )
+    assert not grounded
 
 
-def test_evidence_grounding_rejects_embellished_evidence(career_profile):
-    """Evidence that embellishes real facts with fabricated details should be rejected."""
+def test_evidence_grounding_rejects_fabricated_source_excerpt(career_profile):
+    """A source_excerpt not present in the career profile should be rejected."""
     agent = EvidenceAgent(client=MagicMock())
-    # The career says "cut deploy time 60%" — this adds fabricated details
-    assert not agent._is_grounded(
-        "Led a cross-functional team of 15 engineers in a massive backend migration across three data centers, reducing deploy time by 60% and saving $2M annually",
-        career_profile.raw_content,
+    grounded, reason = agent._is_grounded(
+        evidence="Managed a team of 15 engineers",
+        source_excerpt="Managed a cross-functional team of 15 engineers across 3 offices",
+        career_content=career_profile.raw_content,
     )
+    assert not grounded
+    assert "source_excerpt not found" in reason
+
+
+def test_evidence_grounding_rejects_divergent_paraphrase(career_profile):
+    """Evidence that diverges significantly from its source_excerpt should be rejected."""
+    agent = EvidenceAgent(client=MagicMock())
+    # Source excerpt is real, but the evidence adds completely unrelated claims
+    grounded, reason = agent._is_grounded(
+        evidence="Architected a microservices platform serving 100M requests using Kubernetes and Istio",
+        source_excerpt="Led backend migration, cut deploy time 60%",
+        career_content=career_profile.raw_content,
+    )
+    assert not grounded
+    assert "diverges from source_excerpt" in reason
 
 
 def test_evidence_grounding_drops_hallucinated_llm_evidence(career_profile, job_description):
@@ -175,10 +204,18 @@ def test_evidence_grounding_drops_hallucinated_llm_evidence(career_profile, job_
     req_json = json.dumps([
         {"requirement": "Python expertise", "category": "skill"},
     ])
-    # LLM returns one grounded and one fabricated evidence item
+    # LLM returns one grounded item (with valid source_excerpt) and one fabricated
     ev_json = json.dumps([
-        {"evidence": "Led backend migration, cut deploy time 60%", "relevance_score": 5},
-        {"evidence": "Built a Python framework serving 100M requests per day with zero downtime", "relevance_score": 4},
+        {
+            "evidence": "Achieved 60% faster deploys via backend migration",
+            "source_excerpt": "Led backend migration, cut deploy time 60%",
+            "relevance_score": 5,
+        },
+        {
+            "evidence": "Built a Python framework serving 100M requests per day",
+            "source_excerpt": "Designed a high-throughput Python web framework",
+            "relevance_score": 4,
+        },
     ])
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
@@ -190,14 +227,16 @@ def test_evidence_grounding_drops_hallucinated_llm_evidence(career_profile, job_
 
     # Only the grounded evidence should survive
     assert len(pack.matched_evidence) == 1
-    assert "backend migration" in pack.matched_evidence[0].evidence
+    assert "deploy" in pack.matched_evidence[0].evidence.lower()
 
 
 def test_evidence_grounding_empty_tokens():
     """Evidence with no meaningful tokens should not be grounded."""
     agent = EvidenceAgent(client=MagicMock())
-    assert not agent._is_grounded("", "Some career content here.")
-    assert not agent._is_grounded("a", "Some career content here.")
+    grounded, _ = agent._is_grounded("", "", "Some career content here.")
+    assert not grounded
+    grounded, _ = agent._is_grounded("a", "", "Some career content here.")
+    assert not grounded
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +502,16 @@ def test_evidence_agent_llm_evidence_matching(career_profile, job_description):
     """LLM evidence matching should return EvidenceItems with relevance scores."""
     req_response = json.dumps([{"requirement": "Python", "category": "skill"}])
     evidence_response = json.dumps([
-        {"evidence": "Led backend migration, cut deploy time 60%", "relevance_score": 5},
-        {"evidence": "Reduced infra costs by $180K/year", "relevance_score": 3},
+        {
+            "evidence": "Led backend migration, cut deploy time 60%",
+            "source_excerpt": "Led backend migration, cut deploy time 60%",
+            "relevance_score": 5,
+        },
+        {
+            "evidence": "Reduced infra costs by $180K/year",
+            "source_excerpt": "Reduced infra costs by $180K/year",
+            "relevance_score": 3,
+        },
     ])
     mock_client = MagicMock()
     mock_client.chat.side_effect = [

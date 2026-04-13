@@ -202,10 +202,14 @@ class EvidenceAgent:
         for entry in data[:5]:
             if isinstance(entry, dict) and "evidence" in entry:
                 evidence_text = entry["evidence"]
-                if not self._is_grounded(evidence_text, career_content):
+                source_excerpt = entry.get("source_excerpt", "")
+                grounded, reason = self._is_grounded(
+                    evidence_text, source_excerpt, career_content,
+                )
+                if not grounded:
                     logging.warning(
-                        "Dropping ungrounded evidence for requirement %r: %r",
-                        requirement, evidence_text[:120],
+                        "Dropping ungrounded evidence for requirement %r: %r (%s)",
+                        requirement, evidence_text[:120], reason,
                     )
                     continue
                 score = entry.get("relevance_score", 3)
@@ -215,40 +219,93 @@ class EvidenceAgent:
                     EvidenceItem(
                         requirement=requirement,
                         evidence=evidence_text,
-                        source_excerpt=entry.get("source_excerpt", evidence_text),
+                        source_excerpt=source_excerpt or evidence_text,
                         relevance_score=score,
                     )
                 )
         return items
 
-    def _is_grounded(self, evidence: str, career_content: str, threshold: float = 0.6) -> bool:
-        """Check that *evidence* is grounded in the career profile text.
+    def _is_grounded(
+        self,
+        evidence: str,
+        source_excerpt: str,
+        career_content: str,
+        anchor_threshold: float = 0.6,
+        relevance_threshold: float = 0.3,
+    ) -> tuple[bool, str]:
+        """Check that evidence is grounded in the career profile.
 
-        Computes token overlap between the evidence string and every line in
-        the career profile.  If the best-matching line shares at least
-        *threshold* (default 60 %) of the evidence's non-stopword tokens, the
-        evidence is considered grounded.  This catches LLM hallucinations
-        that introduce facts absent from the source material.
+        Two-part verification:
+        1. **Anchor check** — The ``source_excerpt`` must be traceable to the
+           career profile.  At least *anchor_threshold* (default 60%) of its
+           non-stopword tokens must appear in a single line or consecutive
+           line-pair of the career profile.
+        2. **Relevance check** — The ``evidence`` (which may be a paraphrase)
+           must share at least *relevance_threshold* (default 30%) of its
+           non-stopword tokens with the anchor text, ensuring the summary
+           doesn't introduce facts entirely absent from the source.
+
+        Returns ``(True, "")`` on success or ``(False, reason)`` on failure.
         """
         ev_tokens = self._keywords(evidence)
         if not ev_tokens:
-            return False
+            return False, "evidence has no meaningful tokens"
+
+        # If no source_excerpt provided, fall back to checking evidence
+        # directly against career content (legacy / keyword fallback path).
+        if not source_excerpt:
+            return self._is_evidence_in_career(
+                ev_tokens, career_content, anchor_threshold,
+            )
+
+        # --- Part 1: Anchor check ---
+        anchor_tokens = self._keywords(source_excerpt)
+        if not anchor_tokens:
+            return False, "source_excerpt has no meaningful tokens"
+
+        anchor_ok, anchor_reason = self._is_evidence_in_career(
+            anchor_tokens, career_content, anchor_threshold,
+        )
+        if not anchor_ok:
+            return False, f"source_excerpt not found in career profile ({anchor_reason})"
+
+        # --- Part 2: Relevance check ---
+        # The evidence summary should mostly reference content from the
+        # source_excerpt, not introduce unrelated facts.
+        overlap = len(ev_tokens & anchor_tokens) / len(ev_tokens)
+        if overlap < relevance_threshold:
+            return False, (
+                f"evidence diverges from source_excerpt "
+                f"(token overlap {overlap:.0%} < {relevance_threshold:.0%})"
+            )
+
+        return True, ""
+
+    def _is_evidence_in_career(
+        self,
+        tokens: set[str],
+        career_content: str,
+        threshold: float,
+    ) -> tuple[bool, str]:
+        """Check whether *tokens* are present in the career profile text."""
         career_lines = self._career_lines(career_content)
         best_overlap = 0.0
-        # Check individual lines first
+        # Check individual lines
         for line in career_lines:
             line_tokens = self._keywords(line)
-            overlap = len(ev_tokens & line_tokens) / len(ev_tokens)
+            overlap = len(tokens & line_tokens) / len(tokens)
             if overlap > best_overlap:
                 best_overlap = overlap
-        # Also check sliding window of consecutive line pairs for multi-line evidence
+        # Also check sliding window of consecutive line pairs
         for i in range(len(career_lines) - 1):
             combined = career_lines[i] + " " + career_lines[i + 1]
             combined_tokens = self._keywords(combined)
-            overlap = len(ev_tokens & combined_tokens) / len(ev_tokens)
+            overlap = len(tokens & combined_tokens) / len(tokens)
             if overlap > best_overlap:
                 best_overlap = overlap
-        return best_overlap >= threshold
+        if best_overlap >= threshold:
+            return True, ""
+        return False, f"best token overlap {best_overlap:.0%} < {threshold:.0%}"
 
     def _match_evidence_keyword(self, requirement: str, career_lines: list[str]) -> list[EvidenceItem]:
         """Keyword overlap fallback for evidence matching."""

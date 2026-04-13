@@ -447,19 +447,21 @@ Find the top 5 most relevant pieces of evidence from the career profile that dem
 the candidate meets the requirement above. Return a JSON array of objects:
 [
   {{
-    "evidence": "EXACT quote copied verbatim from the career profile",
-    "source_excerpt": "the full line or bullet point from the career profile that contains this evidence",
+    "evidence": "a succinct summary of the relevant information, paraphrased to highlight how it addresses the requirement",
+    "source_excerpt": "the EXACT line or bullet point copied verbatim from the career profile that this evidence is based on",
     "relevance_score": 1-5 (5 = perfect match, 1 = tangentially related)
   }}
 ]
 
 Rules:
-- The "evidence" field MUST contain text copied verbatim from the career profile. \
-  Do NOT paraphrase, rephrase, embellish, or infer. Copy the exact words.
-- The "source_excerpt" field must be the full original line from the career profile.
-- Only include evidence actually present in the career profile.
-- Do NOT fabricate, invent, or embellish evidence.
-- Do NOT combine facts from different parts of the profile into a single evidence item.
+- The "source_excerpt" field MUST be copied verbatim from the career profile — \
+  this is the anchor that proves the evidence is real.
+- The "evidence" field should succinctly summarise or paraphrase the source excerpt \
+  to highlight how it addresses the requirement. Keep it factual — do not add \
+  details, numbers, technologies, or outcomes not present in the source excerpt.
+- Each evidence item must be traceable to a single source excerpt. Do NOT combine \
+  facts from different parts of the profile into one item.
+- Do NOT fabricate, invent, or embellish evidence beyond what the source excerpt states.
 - If no relevant evidence exists, return an empty array [].
 - Prefer specific, quantified achievements over general statements.
 
