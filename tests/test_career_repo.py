@@ -26,7 +26,7 @@ def test_career_repository_defaults():
     assert repo.roles == []
     assert repo.skills == []
     assert repo.stories == []
-    assert repo.voice_raw == ""
+    assert repo.voice.has_content() is False
 
 
 def test_role_entry_slug():
@@ -95,9 +95,14 @@ def test_career_repository_to_career_profile_empty():
     assert profile.name is None
 
 
-def test_career_repository_voice_raw():
-    repo = CareerRepository(repo_id="test", voice_raw="# Voice\nDirect and precise")
-    assert "Direct and precise" in repo.voice_raw
+def test_career_repository_voice():
+    from resume_refinery.models import VoiceData
+    repo = CareerRepository(
+        repo_id="test",
+        voice=VoiceData(core_adjectives=["Direct", "precise"]),
+    )
+    assert "Direct" in repo.voice.core_adjectives
+    assert repo.voice.has_content()
 
 
 # ---------------------------------------------------------------------------

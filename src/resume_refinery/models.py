@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal, Optional
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, Field, model_validator
 
 
 def _coerce_str_list(value: object) -> list[str]:
@@ -137,6 +138,96 @@ class CareerMeta(BaseModel):
     known_gaps: list[str] = Field(default_factory=list)
 
 
+class VoiceData(BaseModel):
+    """Structured voice profile data collected from the career wizard."""
+
+    core_adjectives: list[str] = Field(default_factory=list, description="5-7 words describing communication style")
+    style_notes: list[str] = Field(default_factory=list, description="Writing style rules, one per entry")
+    preferred_phrases: list[str] = Field(default_factory=list, description="Characteristic phrases the user naturally uses")
+    avoid_phrases: list[str] = Field(default_factory=list, description="Cliches or language the user rejects")
+    writing_samples: list[str] = Field(default_factory=list, description="Paragraphs in the user's natural voice")
+
+    def has_content(self) -> bool:
+        """Return True if any voice field is populated."""
+        return bool(
+            self.core_adjectives or self.style_notes or self.preferred_phrases
+            or self.avoid_phrases or self.writing_samples
+        )
+
+    def to_markdown(self, name: str = "") -> str:
+        """Render the structured voice data as markdown for LLM consumption."""
+        title = f"# Voice Profile — {name}\n" if name else "# Voice Profile\n"
+        parts: list[str] = [title]
+        if self.core_adjectives:
+            parts.append("## Core Adjectives")
+            parts.extend(f"- {a}" for a in self.core_adjectives)
+            parts.append("")
+        if self.style_notes:
+            parts.append("## Style Notes")
+            parts.extend(f"- {n}" for n in self.style_notes)
+            parts.append("")
+        if self.preferred_phrases:
+            parts.append("## Phrases I Actually Use")
+            parts.extend(f'- "{p}"' for p in self.preferred_phrases)
+            parts.append("")
+        if self.avoid_phrases:
+            parts.append("## Phrases to Avoid")
+            parts.extend(f'- "{p}"' for p in self.avoid_phrases)
+            parts.append("")
+        for i, sample in enumerate(self.writing_samples, 1):
+            parts.append(f"## Writing Sample {i}")
+            parts.append(sample)
+            parts.append("")
+        return "\n".join(parts)
+
+    @staticmethod
+    def from_markdown(raw: str) -> "VoiceData":
+        """Parse a legacy markdown voice profile into structured VoiceData."""
+        if not raw or not raw.strip():
+            return VoiceData()
+
+        def _extract_section(text: str, heading: str) -> str:
+            pattern = rf"^## {re.escape(heading)}\s*\n(.*?)(?=\n## |\Z)"
+            m = re.search(pattern, text, re.DOTALL | re.MULTILINE)
+            return m.group(1).strip() if m else ""
+
+        def _extract_list(text: str, heading: str) -> list[str]:
+            block = _extract_section(text, heading)
+            if not block:
+                return []
+            items: list[str] = []
+            for line in block.splitlines():
+                line = line.strip()
+                line = re.sub(r'^- "?(.*?)"?$', r"\1", line)
+                if line:
+                    items.append(line)
+            return items
+
+        adjectives = _extract_list(raw, "Core Adjectives")
+        style_notes = _extract_list(raw, "Style Notes")
+        preferred = _extract_list(raw, "Phrases I Actually Use")
+        avoid = _extract_list(raw, "Phrases to Avoid")
+
+        samples: list[str] = []
+        for i in range(1, 4):
+            sample = _extract_section(raw, f"Writing Sample {i}")
+            if sample:
+                samples.append(sample)
+        # Also try bare "Writing Samples" heading
+        if not samples:
+            bare = _extract_section(raw, "Writing Samples")
+            if bare:
+                samples = [p.strip() for p in bare.split("\n\n") if p.strip()]
+
+        return VoiceData(
+            core_adjectives=adjectives,
+            style_notes=style_notes,
+            preferred_phrases=preferred,
+            avoid_phrases=avoid,
+            writing_samples=samples,
+        )
+
+
 class CareerRepository(BaseModel):
     """Complete structured career repository for guided elicitation."""
 
@@ -155,7 +246,23 @@ class CareerRepository(BaseModel):
     certifications: str = Field(default="", description="Certifications, free-form markdown")
     domain_knowledge: str = Field(default="", description="Industry/domain expertise")
     meta: CareerMeta = Field(default_factory=CareerMeta)
-    voice_raw: str = Field(default="", description="Voice profile content, structured markdown")
+    voice: VoiceData = Field(default_factory=VoiceData, description="Structured voice profile data")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_voice_raw(cls, data: dict) -> dict:  # type: ignore[override]
+        """Migrate legacy ``voice_raw`` string to structured ``voice`` field."""
+        if not isinstance(data, dict):
+            return data
+        voice_raw = data.pop("voice_raw", None)
+        if voice_raw and "voice" not in data:
+            data["voice"] = VoiceData.from_markdown(voice_raw)
+        return data
+
+    @property
+    def voice_raw(self) -> str:
+        """Render the structured voice data as markdown (backward compat)."""
+        return self.voice.to_markdown(name=self.identity.name)
 
     def to_career_profile(self) -> "CareerProfile":
         """Flatten the repository into a single CareerProfile for the pipeline."""

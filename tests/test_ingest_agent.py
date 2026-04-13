@@ -589,9 +589,10 @@ def test_consolidate_pass1_fails_pass2_succeeds():
 
 
 def test_consolidate_preserves_repo_metadata():
-    """consolidate_repo should carry over repo_id, created_at, voice_raw, etc."""
+    """consolidate_repo should carry over repo_id, created_at, voice, etc."""
     repo = _make_repo()
-    repo.voice_raw = "my voice profile"
+    from resume_refinery.models import VoiceData
+    repo.voice = VoiceData(core_adjectives=["Direct", "concise"])
     repo.current_phase = "role_deepdive"
     repo.roles = [
         RoleEntry(company="A", title="Eng", start_date="2020", end_date="2021"),
@@ -603,7 +604,7 @@ def test_consolidate_preserves_repo_metadata():
     ])
     result = consolidate_repo(repo, client=fake_client)
     assert result.repo_id == "test-repo"
-    assert result.voice_raw == "my voice profile"
+    assert result.voice.core_adjectives == ["Direct", "concise"]
     assert result.current_phase == "role_deepdive"
 
 

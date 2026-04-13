@@ -1470,7 +1470,7 @@ def career_voice(repo_id: str) -> HTMLResponse:
 
 
 def _render_voice(repo: CareerRepository) -> HTMLResponse:
-    voice_content = repo.voice_raw
+    v = repo.voice
 
     body = f"""
 <div class="card">
@@ -1490,26 +1490,26 @@ def _render_voice(repo: CareerRepository) -> HTMLResponse:
   <form method="post" action="/career/{_esc(repo.repo_id)}/voice">
     <label>Core Adjectives</label>
     <p class="hint">5-7 words that describe your communication style. Comma-separated.</p>
-    <input type="text" name="adjectives" value="{_esc(_voice_field(voice_content, 'Core Adjectives'))}" placeholder="e.g. Direct, analytical, grounded, warm" />
+    <input type="text" name="adjectives" value="{_esc(', '.join(v.core_adjectives))}" placeholder="e.g. Direct, analytical, grounded, warm" />
 
     <label>Style Notes</label>
     <p class="hint">How do you write? One rule per line.</p>
-    <textarea name="style_notes" rows="5" placeholder="e.g. I use short declarative sentences for emphasis&#10;I state the outcome first, then explain how">{_esc(_voice_field(voice_content, 'Style Notes'))}</textarea>
+    <textarea name="style_notes" rows="5" placeholder="e.g. I use short declarative sentences for emphasis&#10;I state the outcome first, then explain how">{_esc(chr(10).join(v.style_notes))}</textarea>
 
     <label>Phrases You Actually Use</label>
     <p class="hint">One per line. Characteristic phrases from your real writing.</p>
-    <textarea name="preferred_phrases" rows="4" placeholder="e.g. The key insight was...&#10;What that meant in practice...">{_esc(_voice_field(voice_content, 'Phrases I Actually Use'))}</textarea>
+    <textarea name="preferred_phrases" rows="4" placeholder="e.g. The key insight was...&#10;What that meant in practice...">{_esc(chr(10).join(v.preferred_phrases))}</textarea>
 
     <label>Phrases to Avoid</label>
     <p class="hint">One per line. Cliches or language you'd never use.</p>
-    <textarea name="avoid_phrases" rows="4" placeholder="e.g. Passionate about&#10;Results-driven&#10;Proven track record">{_esc(_voice_field(voice_content, 'Phrases to Avoid'))}</textarea>
+    <textarea name="avoid_phrases" rows="4" placeholder="e.g. Passionate about&#10;Results-driven&#10;Proven track record">{_esc(chr(10).join(v.avoid_phrases))}</textarea>
 
     <label>Writing Sample 1</label>
     <p class="hint">A paragraph in your natural voice — could be from an email, blog post, or Slack message.</p>
-    <textarea name="sample_1" rows="5">{_esc(_voice_field(voice_content, 'Writing Sample 1'))}</textarea>
+    <textarea name="sample_1" rows="5">{_esc(v.writing_samples[0] if len(v.writing_samples) > 0 else "")}</textarea>
 
     <label>Writing Sample 2 (optional)</label>
-    <textarea name="sample_2" rows="5">{_esc(_voice_field(voice_content, 'Writing Sample 2'))}</textarea>
+    <textarea name="sample_2" rows="5">{_esc(v.writing_samples[1] if len(v.writing_samples) > 1 else "")}</textarea>
 
     <div class="actions">
       <a href="/career/{_esc(repo.repo_id)}/meta" class="btn btn-secondary">Back</a>
@@ -1531,50 +1531,23 @@ def save_voice(
     sample_1: str = Form(""),
     sample_2: str = Form(""),
 ) -> RedirectResponse:
-    repo = _load_repo(repo_id)
-    # Build the voice profile as structured markdown and store it as a
-    # CareerRepository-level field so it can be extracted later.
-    parts: list[str] = [f"# Voice Profile — {repo.identity.name}\n"]
-    if adjectives.strip():
-        parts.append("## Core Adjectives")
-        for a in adjectives.split(","):
-            a = a.strip()
-            if a:
-                parts.append(f"- {a}")
-        parts.append("")
-    if style_notes.strip():
-        parts.append("## Style Notes")
-        for line in style_notes.strip().splitlines():
-            line = line.strip()
-            if line:
-                parts.append(f"- {line}")
-        parts.append("")
-    if preferred_phrases.strip():
-        parts.append("## Phrases I Actually Use")
-        for line in preferred_phrases.strip().splitlines():
-            line = line.strip()
-            if line:
-                parts.append(f'- "{line}"')
-        parts.append("")
-    if avoid_phrases.strip():
-        parts.append("## Phrases to Avoid")
-        for line in avoid_phrases.strip().splitlines():
-            line = line.strip()
-            if line:
-                parts.append(f'- "{line}"')
-        parts.append("")
-    if sample_1.strip():
-        parts.append("## Writing Sample 1")
-        parts.append(sample_1.strip())
-        parts.append("")
-    if sample_2.strip():
-        parts.append("## Writing Sample 2")
-        parts.append(sample_2.strip())
-        parts.append("")
+    from .models import VoiceData
 
-    # Store raw voice text on the repo — we'll persist this in career.json
-    # via a dedicated field.
-    repo.voice_raw = "\n".join(parts)
+    repo = _load_repo(repo_id)
+
+    adj_list = [a.strip() for a in adjectives.split(",") if a.strip()]
+    notes_list = [l.strip() for l in style_notes.strip().splitlines() if l.strip()]
+    pref_list = [l.strip() for l in preferred_phrases.strip().splitlines() if l.strip()]
+    avoid_list = [l.strip() for l in avoid_phrases.strip().splitlines() if l.strip()]
+    samples = [s.strip() for s in [sample_1, sample_2] if s.strip()]
+
+    repo.voice = VoiceData(
+        core_adjectives=adj_list,
+        style_notes=notes_list,
+        preferred_phrases=pref_list,
+        avoid_phrases=avoid_list,
+        writing_samples=samples,
+    )
     repo.current_phase = "complete"
     career_store.save(repo)
     return RedirectResponse(url=f"/career/{repo.repo_id}", status_code=303)
@@ -1599,7 +1572,7 @@ def _render_review(repo: CareerRepository) -> HTMLResponse:
     n_skills = len(repo.skills)
     n_stories = len(repo.stories)
     has_meta = bool(repo.meta.career_arc or repo.meta.differentiators)
-    has_voice = bool(repo.voice_raw.strip())
+    has_voice = repo.voice.has_content()
 
     completeness: list[str] = []
     if not ident.name:
@@ -1743,28 +1716,6 @@ def probe_role_deepdive(repo_id: str, role_idx: int) -> HTMLResponse:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def _voice_field(voice_raw: str, heading: str) -> str:
-    """Extract the content under a markdown ## heading from voice_raw.
-
-    Returns the text between the given heading and the next heading (or EOF),
-    with leading list markers (``- ``, ``"`` wrapping) stripped.
-    """
-    import re
-    pattern = rf"^## {re.escape(heading)}\s*\n(.*?)(?=\n## |\Z)"
-    m = re.search(pattern, voice_raw, re.DOTALL | re.MULTILINE)
-    if not m:
-        return ""
-    block = m.group(1).strip()
-    # Strip leading "- " and surrounding quotes from each line
-    lines: list[str] = []
-    for line in block.splitlines():
-        line = line.strip()
-        line = re.sub(r'^- "?(.*?)"?$', r"\1", line)
-        if line:
-            lines.append(line)
-    return "\n".join(lines)
 
 
 _SAFE_REPO_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}$")

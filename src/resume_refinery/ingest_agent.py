@@ -539,7 +539,7 @@ def consolidate_roles(repo: CareerRepository, client: ollama.Client | None = Non
         current_phase=repo.current_phase,
         deepdive_role_index=repo.deepdive_role_index,
         needs_consolidation=repo.needs_consolidation,
-        voice_raw=repo.voice_raw,
+        voice=repo.voice.model_copy(),
         # Copy pass-2 fields unchanged
         skills=list(repo.skills),
         education=repo.education,
@@ -589,7 +589,7 @@ def consolidate_skills_meta(repo: CareerRepository, client: ollama.Client | None
         current_phase=repo.current_phase,
         deepdive_role_index=repo.deepdive_role_index,
         needs_consolidation=repo.needs_consolidation,
-        voice_raw=repo.voice_raw,
+        voice=repo.voice.model_copy(),
         # Copy pass-1 fields unchanged
         identity=repo.identity.model_copy(),
         roles=list(repo.roles),
@@ -663,7 +663,7 @@ def consolidate_repo(repo: CareerRepository, client: ollama.Client | None = None
         updated_at=repo.updated_at,
         current_phase=repo.current_phase,
         deepdive_role_index=repo.deepdive_role_index,
-        voice_raw=repo.voice_raw,
+        voice=repo.voice.model_copy(),
     )
 
     # Pass 1 — identity + roles

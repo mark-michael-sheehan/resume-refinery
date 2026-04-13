@@ -245,7 +245,7 @@ def test_career_not_found(client):
 
 
 def test_voice_prepopulation(client, repo_id):
-    """Voice form should pre-populate fields from a previously saved voice_raw."""
+    """Voice form should pre-populate fields from a previously saved voice."""
     client.post(f"/career/{repo_id}/advance/voice")
     # Save voice data
     client.post(f"/career/{repo_id}/voice", data={

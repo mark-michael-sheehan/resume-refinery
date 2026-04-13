@@ -847,7 +847,7 @@ async def create_session(
         except FileNotFoundError:
             raise HTTPException(status_code=400, detail=f"Career repo not found: {career_repo_id}")
         career = repo.to_career_profile()
-        voice = parse_voice_profile_content(repo.voice_raw) if repo.voice_raw.strip() else None
+        voice = parse_voice_profile_content(repo.voice_raw) if repo.voice.has_content() else None
         # Fall back to uploaded voice file if repo has no voice
         if voice is None and voice_profile is not None:
             try:

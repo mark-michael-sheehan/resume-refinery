@@ -16,6 +16,7 @@ from resume_refinery.models import (
     Session,
     TruthfulnessResult,
     VersionInfo,
+    VoiceData,
     VoiceProfile,
     VoiceReviewResult,
     VoiceStyleGuide,
@@ -182,6 +183,58 @@ def test_voice_style_guide_defaults():
     assert guide.preferred_phrases == []
     assert guide.phrases_to_avoid == []
     assert guide.writing_samples == []
+
+
+def test_voice_data_defaults():
+    v = VoiceData()
+    assert v.core_adjectives == []
+    assert v.has_content() is False
+
+
+def test_voice_data_has_content():
+    v = VoiceData(core_adjectives=["Direct", "analytical"])
+    assert v.has_content() is True
+
+
+def test_voice_data_to_markdown():
+    v = VoiceData(
+        core_adjectives=["Direct", "analytical"],
+        style_notes=["Short sentences"],
+        preferred_phrases=["The key insight was..."],
+        avoid_phrases=["Passionate about"],
+        writing_samples=["I start simple."],
+    )
+    md = v.to_markdown(name="Test")
+    assert "## Core Adjectives" in md
+    assert "- Direct" in md
+    assert "- analytical" in md
+    assert "## Style Notes" in md
+    assert "## Phrases I Actually Use" in md
+    assert "## Phrases to Avoid" in md
+    assert "## Writing Sample 1" in md
+    assert "I start simple." in md
+
+
+def test_voice_data_from_markdown():
+    raw = (
+        "# Voice Profile\n\n"
+        "## Core Adjectives\n- Direct\n- Analytical\n\n"
+        "## Style Notes\n- Short sentences\n\n"
+        '## Phrases I Actually Use\n- "The key insight was..."\n\n'
+        '## Phrases to Avoid\n- "Passionate about"\n\n'
+        "## Writing Sample 1\nI start simple.\n"
+    )
+    v = VoiceData.from_markdown(raw)
+    assert v.core_adjectives == ["Direct", "Analytical"]
+    assert v.style_notes == ["Short sentences"]
+    assert v.preferred_phrases == ["The key insight was..."]
+    assert v.avoid_phrases == ["Passionate about"]
+    assert v.writing_samples == ["I start simple."]
+
+
+def test_voice_data_from_markdown_empty():
+    v = VoiceData.from_markdown("")
+    assert v.has_content() is False
 
 
 def test_drafting_context_requires_both_fields():
