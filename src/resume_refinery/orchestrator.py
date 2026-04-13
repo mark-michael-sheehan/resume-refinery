@@ -202,9 +202,6 @@ class ResumeRefineryOrchestrator:
                     "Run extract_context() first."
                 )
 
-        # Clean up staging files now that we have the context in memory.
-        self.store.clear_staging_context(session)
-
         docs = DocumentSet()
         for key, label in self._doc_labels(active_docs).items():
             self._progress(progress, f"Generating {label} (model is thinking, output appears after reasoning)...")
@@ -252,6 +249,10 @@ class ResumeRefineryOrchestrator:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, docs, output_dir=output_dir)
         self.store.save_reviews(session, reviews)
+
+        # Clean up staging files only after successful completion, so the
+        # curate page remains accessible if generation/reviews fail.
+        self.store.clear_staging_context(session)
 
         strict_failed = bool(reviews.truthfulness and not reviews.truthfulness.all_supported)
         return OrchestrationResult(
@@ -568,10 +569,12 @@ class ResumeRefineryOrchestrator:
 
             def _run_truth():
                 try:
-                    return self.verification_agent.review_truthfulness(
+                    result = self.verification_agent.review_truthfulness(
                         docs, career, job,
                         exemptions=sorted(suppressed_claims) if suppressed_claims else None,
                     )
+                    self._progress(progress, "    \u2713 Truth review complete")
+                    return result
                 except Exception as exc:
                     logging.warning("Truthfulness review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
@@ -579,10 +582,12 @@ class ResumeRefineryOrchestrator:
 
             def _run_consistency():
                 try:
-                    return self.verification_agent.review_consistency(
+                    result = self.verification_agent.review_consistency(
                         docs,
                         exemptions=sorted(suppressed_consistency_issues) if suppressed_consistency_issues else None,
                     )
+                    self._progress(progress, "    \u2713 Consistency review complete")
+                    return result
                 except Exception as exc:
                     logging.warning("Consistency review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Consistency review skipped: {exc}[/yellow]")
@@ -590,10 +595,12 @@ class ResumeRefineryOrchestrator:
 
             def _run_ats():
                 try:
-                    return self.verification_agent.review_ats_keyword(
+                    result = self.verification_agent.review_ats_keyword(
                         docs, job, career,
                         exemptions=sorted(suppressed_ats_issues) if suppressed_ats_issues else None,
                     )
+                    self._progress(progress, "    \u2713 ATS keyword review complete")
+                    return result
                 except Exception as exc:
                     logging.warning("ATS-keyword review failed (%s)", exc)
                     self._progress(progress, f"[yellow]ATS-keyword review skipped: {exc}[/yellow]")
@@ -601,10 +608,12 @@ class ResumeRefineryOrchestrator:
 
             def _run_grammar():
                 try:
-                    return self.verification_agent.review_grammar(
+                    result = self.verification_agent.review_grammar(
                         docs,
                         exemptions=sorted(suppressed_grammar_issues) if suppressed_grammar_issues else None,
                     )
+                    self._progress(progress, "    \u2713 Grammar review complete")
+                    return result
                 except Exception as exc:
                     logging.warning("Grammar review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Grammar review skipped: {exc}[/yellow]")
@@ -612,10 +621,12 @@ class ResumeRefineryOrchestrator:
 
             def _run_voice():
                 try:
-                    return self.verification_agent.review_voice(
+                    result = self.verification_agent.review_voice(
                         docs, voice,
                         exemptions=sorted(suppressed_voice_issues) if suppressed_voice_issues else None,
                     )
+                    self._progress(progress, "    \u2713 Voice review complete")
+                    return result
                 except Exception as exc:
                     logging.warning("Voice review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
@@ -623,10 +634,12 @@ class ResumeRefineryOrchestrator:
 
             def _run_ai():
                 try:
-                    return self.verification_agent.review_ai_detection(
+                    result = self.verification_agent.review_ai_detection(
                         docs,
                         exemptions=sorted(suppressed_ai_phrases) if suppressed_ai_phrases else None,
                     )
+                    self._progress(progress, "    \u2713 AI detection review complete")
+                    return result
                 except Exception as exc:
                     logging.warning("AI-detection review failed (%s)", exc)
                     self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
@@ -634,10 +647,12 @@ class ResumeRefineryOrchestrator:
 
             def _run_hm():
                 try:
-                    return self.verification_agent.review_hiring_manager(
+                    result = self.verification_agent.review_hiring_manager(
                         docs, job,
                         exemptions=sorted(suppressed_hm_issues) if suppressed_hm_issues else None,
                     )
+                    self._progress(progress, "    \u2713 Hiring manager review complete")
+                    return result
                 except Exception as exc:
                     logging.warning("Hiring-manager review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Hiring-manager review skipped: {exc}[/yellow]")
@@ -645,10 +660,12 @@ class ResumeRefineryOrchestrator:
 
             def _run_pruning():
                 try:
-                    return self.verification_agent.review_relevance_pruning(
+                    result = self.verification_agent.review_relevance_pruning(
                         docs, job,
                         exemptions=sorted(suppressed_pruning_issues) if suppressed_pruning_issues else None,
                     )
+                    self._progress(progress, "    \u2713 Relevance pruning review complete")
+                    return result
                 except Exception as exc:
                     logging.warning("Relevance-pruning review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Relevance-pruning review skipped: {exc}[/yellow]")

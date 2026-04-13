@@ -272,7 +272,7 @@ class SessionStore:
     def clear_staging_context(self, session: Session) -> None:
         """Remove staging context files after generation."""
         session_dir = self.root / session.session_id
-        for name in ("staging_evidence_pack.json", "staging_voice_guide.json"):
+        for name in ("staging_evidence_pack.json", "staging_voice_guide.json", "staging_options.json"):
             path = session_dir / name
             if path.exists():
                 path.unlink()

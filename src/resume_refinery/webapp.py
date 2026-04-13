@@ -1026,8 +1026,8 @@ def generate_session(
     _skip = opts.get("skip_review", False)
     _allow = opts.get("allow_unverified", False)
 
-    # Clean up the options file.
-    opts_path.unlink(missing_ok=True)
+    # NOTE: staging_options.json is cleaned up by orchestrator.clear_staging_context()
+    # after successful generation, not here — so the curate page still works on error.
 
     # Filter evidence unless "Generate with All Evidence" was clicked.
     if not use_all:
