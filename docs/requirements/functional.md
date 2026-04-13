@@ -12,7 +12,7 @@
 
 | ID | Requirement |
 |---|---|
-| FR-2.1 | **Evidence extraction** — The EvidenceAgent analyses the career profile against the job description and produces an `EvidencePack` (matched evidence + gaps). |
+| FR-2.1 | **Evidence extraction** — The EvidenceAgent analyses the career profile against the job description and produces an `EvidencePack` (matched evidence + gaps). Each LLM-returned evidence item is verified against the career profile via token-overlap grounding (≥60% non-stopword token match); ungrounded evidence is dropped to prevent hallucinated claims from entering downstream generation. |
 | FR-2.2 | **Voice extraction** — The VoiceAgent analyses the voice profile and produces a `VoiceStyleGuide` used to shape document tone. |
 | FR-2.3 | **Drafting** — The DraftingAgent generates documents from the selected set (cover letter, resume, interview guide). By default all three are generated; the user may select a subset via CLI (`--docs`) or web app checkboxes. Each document is a separate LLM call using thinking mode. The selection is persisted in the session and scopes all subsequent review, repair, and refine operations to only the selected documents. |
 | FR-2.4 | **Verification** — The VerificationAgent runs eight independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning, ATS keyword alignment, cross-document consistency, grammar & mechanics) on each document. |

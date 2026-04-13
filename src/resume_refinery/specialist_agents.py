@@ -201,18 +201,54 @@ class EvidenceAgent:
         items: list[EvidenceItem] = []
         for entry in data[:5]:
             if isinstance(entry, dict) and "evidence" in entry:
+                evidence_text = entry["evidence"]
+                if not self._is_grounded(evidence_text, career_content):
+                    logging.warning(
+                        "Dropping ungrounded evidence for requirement %r: %r",
+                        requirement, evidence_text[:120],
+                    )
+                    continue
                 score = entry.get("relevance_score", 3)
                 if not isinstance(score, int) or score < 1 or score > 5:
                     score = 3
                 items.append(
                     EvidenceItem(
                         requirement=requirement,
-                        evidence=entry["evidence"],
-                        source_excerpt=entry["evidence"],
+                        evidence=evidence_text,
+                        source_excerpt=entry.get("source_excerpt", evidence_text),
                         relevance_score=score,
                     )
                 )
         return items
+
+    def _is_grounded(self, evidence: str, career_content: str, threshold: float = 0.6) -> bool:
+        """Check that *evidence* is grounded in the career profile text.
+
+        Computes token overlap between the evidence string and every line in
+        the career profile.  If the best-matching line shares at least
+        *threshold* (default 60 %) of the evidence's non-stopword tokens, the
+        evidence is considered grounded.  This catches LLM hallucinations
+        that introduce facts absent from the source material.
+        """
+        ev_tokens = self._keywords(evidence)
+        if not ev_tokens:
+            return False
+        career_lines = self._career_lines(career_content)
+        best_overlap = 0.0
+        # Check individual lines first
+        for line in career_lines:
+            line_tokens = self._keywords(line)
+            overlap = len(ev_tokens & line_tokens) / len(ev_tokens)
+            if overlap > best_overlap:
+                best_overlap = overlap
+        # Also check sliding window of consecutive line pairs for multi-line evidence
+        for i in range(len(career_lines) - 1):
+            combined = career_lines[i] + " " + career_lines[i + 1]
+            combined_tokens = self._keywords(combined)
+            overlap = len(ev_tokens & combined_tokens) / len(ev_tokens)
+            if overlap > best_overlap:
+                best_overlap = overlap
+        return best_overlap >= threshold
 
     def _match_evidence_keyword(self, requirement: str, career_lines: list[str]) -> list[EvidenceItem]:
         """Keyword overlap fallback for evidence matching."""

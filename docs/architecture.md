@@ -287,6 +287,10 @@ full career profile independently for fact-checking.
 
 **Evidence extraction limits:** The EvidenceAgent extracts up to 15 job requirements
 (from the LLM or keyword fallback) and matches up to 5 evidence items per requirement.
+Each LLM-returned evidence item is verified against the career profile using token-overlap
+grounding: at least 60% of the evidence's non-stopword tokens must appear in the source
+text. Evidence that fails grounding is dropped with a warning, preventing hallucinated or
+embellished claims from entering the evidence pack and downstream document generation.
 All matched evidence, requirements, and gaps are forwarded to the DraftingAgent with no
 further display-level caps.
 

@@ -140,6 +140,66 @@ def test_evidence_agent_limits_requirements():
     assert len(pack.job_requirements) <= 15
 
 
+def test_evidence_grounding_accepts_verbatim_quote(career_profile):
+    """Evidence that is a verbatim quote from the career profile should be accepted."""
+    agent = EvidenceAgent(client=MagicMock())
+    # This text appears verbatim in the career profile fixture
+    assert agent._is_grounded(
+        "Led backend migration, cut deploy time 60%",
+        career_profile.raw_content,
+    )
+
+
+def test_evidence_grounding_rejects_fabricated_evidence(career_profile):
+    """Evidence containing fabricated facts not in the profile should be rejected."""
+    agent = EvidenceAgent(client=MagicMock())
+    # This text contains facts completely absent from the career profile
+    assert not agent._is_grounded(
+        "Architected a real-time streaming pipeline processing 50 billion events per day using Apache Kafka and Flink",
+        career_profile.raw_content,
+    )
+
+
+def test_evidence_grounding_rejects_embellished_evidence(career_profile):
+    """Evidence that embellishes real facts with fabricated details should be rejected."""
+    agent = EvidenceAgent(client=MagicMock())
+    # The career says "cut deploy time 60%" — this adds fabricated details
+    assert not agent._is_grounded(
+        "Led a cross-functional team of 15 engineers in a massive backend migration across three data centers, reducing deploy time by 60% and saving $2M annually",
+        career_profile.raw_content,
+    )
+
+
+def test_evidence_grounding_drops_hallucinated_llm_evidence(career_profile, job_description):
+    """Hallucinated LLM evidence should be dropped from the evidence pack."""
+    req_json = json.dumps([
+        {"requirement": "Python expertise", "category": "skill"},
+    ])
+    # LLM returns one grounded and one fabricated evidence item
+    ev_json = json.dumps([
+        {"evidence": "Led backend migration, cut deploy time 60%", "relevance_score": 5},
+        {"evidence": "Built a Python framework serving 100M requests per day with zero downtime", "relevance_score": 4},
+    ])
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_llm_resp(req_json),
+        _make_llm_resp(ev_json),
+    ]
+    agent = EvidenceAgent(client=mock_client)
+    pack = agent.build_evidence_pack(career_profile, job_description)
+
+    # Only the grounded evidence should survive
+    assert len(pack.matched_evidence) == 1
+    assert "backend migration" in pack.matched_evidence[0].evidence
+
+
+def test_evidence_grounding_empty_tokens():
+    """Evidence with no meaningful tokens should not be grounded."""
+    agent = EvidenceAgent(client=MagicMock())
+    assert not agent._is_grounded("", "Some career content here.")
+    assert not agent._is_grounded("a", "Some career content here.")
+
+
 # ---------------------------------------------------------------------------
 # VoiceAgent
 # ---------------------------------------------------------------------------
@@ -403,8 +463,8 @@ def test_evidence_agent_llm_evidence_matching(career_profile, job_description):
     """LLM evidence matching should return EvidenceItems with relevance scores."""
     req_response = json.dumps([{"requirement": "Python", "category": "skill"}])
     evidence_response = json.dumps([
-        {"evidence": "Led backend migration in Python", "relevance_score": 5},
-        {"evidence": "Built data pipeline", "relevance_score": 3},
+        {"evidence": "Led backend migration, cut deploy time 60%", "relevance_score": 5},
+        {"evidence": "Reduced infra costs by $180K/year", "relevance_score": 3},
     ])
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
