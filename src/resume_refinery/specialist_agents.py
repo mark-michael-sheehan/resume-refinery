@@ -24,6 +24,7 @@ from .models import (
     GrammarResult,
     HiringManagerReview,
     JobDescription,
+    NarrativeCoherenceResult,
     NarrativePillar,
     RelevancePruningResult,
     RepairEdit,
@@ -364,6 +365,9 @@ class VerificationAgent:
     def review_grammar(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> GrammarResult:
         return self.reviewer.review_grammar(docs, exemptions=exemptions)
 
+    def review_narrative_coherence(self, docs: DocumentSet, narrative: CandidacyNarrative, *, exemptions: list[str] | None = None) -> NarrativeCoherenceResult:
+        return self.reviewer.review_narrative_coherence(docs, narrative, exemptions=exemptions)
+
 
 class RepairAgent:
     """Produces surgical find/replace edits and applies them programmatically."""
@@ -391,6 +395,7 @@ class RepairAgent:
         pruning_review: RelevancePruningResult | None = None,
         ats_review: ATSKeywordResult | None = None,
         grammar_review: GrammarResult | None = None,
+        narrative_review: NarrativeCoherenceResult | None = None,
         preserve_instructions: str | None = None,
         phase: str = "a",
         pass_num: int = 0,
@@ -413,11 +418,12 @@ class RepairAgent:
         all_accepted_pruning_issues: list[str] = []
         all_accepted_ats_issues: list[str] = []
         all_accepted_grammar_issues: list[str] = []
+        all_accepted_narrative_issues: list[str] = []
 
         def _plan_for_key(key: str) -> tuple[str, list[dict], dict[str, list[str]]] | None:
             review_findings = self._build_review_findings(
                 key, truth, voice_review, ai_review, feedback, hm_review, pruning_review,
-                ats_review, grammar_review,
+                ats_review, grammar_review, narrative_review,
             )
             if not review_findings:
                 return None
@@ -455,8 +461,9 @@ class RepairAgent:
             all_accepted_pruning_issues.extend(acceptances.get("accepted_pruning_issues", []))
             all_accepted_ats_issues.extend(acceptances.get("accepted_ats_issues", []))
             all_accepted_grammar_issues.extend(acceptances.get("accepted_grammar_issues", []))
+            all_accepted_narrative_issues.extend(acceptances.get("accepted_narrative_issues", []))
             logging.debug(
-                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d/%d/%d/%d accepted (claims/ai/voice/hm/pruning/ats/grammar)",
+                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d/%d/%d/%d/%d accepted (claims/ai/voice/hm/pruning/ats/grammar/narrative)",
                 key, len(edits),
                 len(acceptances.get("accepted_claims", [])),
                 len(acceptances.get("accepted_ai_phrases", [])),
@@ -465,6 +472,7 @@ class RepairAgent:
                 len(acceptances.get("accepted_pruning_issues", [])),
                 len(acceptances.get("accepted_ats_issues", [])),
                 len(acceptances.get("accepted_grammar_issues", [])),
+                len(acceptances.get("accepted_narrative_issues", [])),
             )
             if edits:
                 for i, e in enumerate(edits):
@@ -506,6 +514,7 @@ class RepairAgent:
             accepted_pruning_issues=all_accepted_pruning_issues,
             accepted_ats_issues=all_accepted_ats_issues,
             accepted_grammar_issues=all_accepted_grammar_issues,
+            accepted_narrative_issues=all_accepted_narrative_issues,
         )
 
     @staticmethod
@@ -645,8 +654,9 @@ class RepairAgent:
                     "accepted_pruning_issues":{"type": "array", "items": {"type": "string"}},
                     "accepted_ats_issues":    {"type": "array", "items": {"type": "string"}},
                     "accepted_grammar_issues":{"type": "array", "items": {"type": "string"}},
+                    "accepted_narrative_issues":{"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_grammar_issues"],
+                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_grammar_issues", "accepted_narrative_issues"],
             },
             options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS * 2},
         )
@@ -654,16 +664,16 @@ class RepairAgent:
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
         if not raw:
             logging.warning("Repair LLM returned empty content")
-            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": []}
+            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": [], "accepted_narrative_issues": []}
         raw = _normalize_llm_json(raw)
         _empty: dict[str, list[str]] = {
-            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": []
+            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": [], "accepted_narrative_issues": []
         }
 
         def _extract_acceptances(d: dict) -> dict[str, list[str]]:
             return {
                 k: [x for x in d.get(k, []) if isinstance(x, str)]
-                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_grammar_issues")
+                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_grammar_issues", "accepted_narrative_issues")
             }
 
         try:
@@ -720,6 +730,7 @@ class RepairAgent:
         pruning_review: RelevancePruningResult | None = None,
         ats_review: ATSKeywordResult | None = None,
         grammar_review: GrammarResult | None = None,
+        narrative_review: NarrativeCoherenceResult | None = None,
     ) -> str:
         """Return a human-readable summary of review findings for *key*.
 
@@ -852,6 +863,22 @@ class RepairAgent:
                     + "\n".join(
                         f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion} (category: {i.category})'
                         for i in doc_grammar_issues
+                    )
+                )
+
+        # --- Narrative coherence ---
+        if narrative_review:
+            if narrative_review.resume_issues:
+                has_issues = True
+                logging.debug(
+                    "[repair:%s] narrative-coherence: %d issue(s) — passing ALL to repair",
+                    key, len(narrative_review.resume_issues),
+                )
+                parts.append(
+                    "NARRATIVE COHERENCE — Misaligned content (verbatim from document):\n"
+                    + "\n".join(
+                        f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
+                        for i in narrative_review.resume_issues
                     )
                 )
 

@@ -34,6 +34,7 @@ ensure convergence.
 | CR-3.7 | ATS keyword alignment: "strong" or "moderate" `alignment_score` is accepted. "weak" blocks convergence and triggers repair. |
 | CR-3.8 | _(Reserved — cross-document consistency reviewer removed; only one document type exists.)_ |
 | CR-3.9 | Grammar & mechanics: on passes before `RELAXED_PASS_START`, `clean=True` is required (zero issues). From `RELAXED_PASS_START` onward, total issues ≤ 2 is accepted. |
+| CR-3.10 | Narrative coherence: "strong" or "moderate" alignment is accepted (soft gate, same pattern as voice). "weak" triggers repair but does not block convergence on its own. |
 
 ## CR-4 Feedback Hygiene
 
@@ -58,7 +59,7 @@ ensure convergence.
 | CR-6.1 | The maximum number of review+repair passes is bounded by `RESUME_REFINERY_MAX_REPAIR_PASSES` (default 3). |
 | CR-6.2 | If all documents pass all reviewers on any pass, the loop exits early. |
 | CR-6.3 | If the loop exhausts all passes without convergence, the best version so far is kept and a warning is logged. |
-| CR-6.4 | Each pass runs all 7 reviewers concurrently (truthfulness, ATS, grammar, voice, AI detection, HM, pruning), checks all gates, and makes a single unified repair call if any gate fails. |
+| CR-6.4 | Each pass runs all 8 reviewers concurrently (truthfulness, ATS, grammar, voice, AI detection, HM, pruning, narrative coherence), checks all gates, and makes a single unified repair call if any gate fails. |
 | CR-6.5 | The repair prompt includes prior-edit context with conflict resolution instructions (fix/merge/accept), replacing the former Phase B preserve note. Cross-reviewer regressions are handled by the prior-edits annotated pass-through system (CR-8). |
 | CR-6.6 | The loop re-runs all reviewers after each repair, so any regression introduced by a repair is caught on the next pass. |
 
@@ -66,13 +67,13 @@ ensure convergence.
 
 | ID | Requirement |
 |---|---|
-| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of six per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice), `accepted_hm_issues` (hiring manager), `accepted_pruning_issues` (relevance pruning), `accepted_ats_issues` (ATS keyword), `accepted_grammar_issues` (grammar). |
-| CR-7.2 | The orchestrator maintains six independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
+| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of eight per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice), `accepted_hm_issues` (hiring manager), `accepted_pruning_issues` (relevance pruning), `accepted_ats_issues` (ATS keyword), `accepted_grammar_issues` (grammar), `accepted_narrative_issues` (narrative coherence). |
+| CR-7.2 | The orchestrator maintains eight independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
 | CR-7.3 | Before each pass's gate check and repair call, raw reviewer results are filtered through the corresponding suppression set. Suppressed items are removed from flag/issue/claim lists; truthfulness `pass_strict` and `all_supported` are recalculated; AI `risk_level` is recalculated from the remaining flag count; ATS `alignment_score` is recalculated from remaining missing/stuffing keywords; grammar `clean` is recalculated from remaining issue counts. Voice match levels are preserved as-is (they reflect holistic LLM judgment, not issue count). |
 | CR-7.4 | A phrase accepted in any pass is suppressed for all subsequent passes in the same run. Suppression sets persist beyond a single `create_session_run` call: `refine_session_run` loads the most recent `exempted_phrases.json` from prior versions, applies those exemptions during its review pass, and saves the combined (prior + any new) exemptions to the new version directory. |
 | CR-7.5 | Each reviewer's suppression set is independent — accepting a voice false positive cannot suppress a truthfulness or AI-detection finding (and vice versa). |
 | CR-7.6 | Whenever the repair agent adds items to any acceptance list, the orchestrator emits an explicit progress message naming each accepted phrase/claim/issue and the reviewer it came from, before proceeding to the next pass. |
-| CR-7.7 | At the end of each `create_session_run` call, if any items were exempted, the cumulative suppression sets are persisted to `exempted_phrases.json` in the active version directory as an `ExemptedPhrases` model (fields: `claims`, `ai_phrases`, `voice_issues`, `hm_issues`, `pruning_issues`, `ats_issues`, `grammar_issues`). No file is written when no items were exempted. The `refine_session_run` call also saves combined exemptions (loaded prior + newly accumulated) when any items are present. |
+| CR-7.7 | At the end of each `create_session_run` call, if any items were exempted, the cumulative suppression sets are persisted to `exempted_phrases.json` in the active version directory as an `ExemptedPhrases` model (fields: `claims`, `ai_phrases`, `voice_issues`, `hm_issues`, `pruning_issues`, `ats_issues`, `grammar_issues`, `narrative_issues`). No file is written when no items were exempted. The `refine_session_run` call also saves combined exemptions (loaded prior + newly accumulated) when any items are present. |
 | CR-7.8 | During both the `_verify_and_repair` loop and `_run_all_reviews` (used by `refine_session_run`), exempted phrases are passed directly into each reviewer's LLM prompt as a "Previously Accepted (DO NOT flag these)" section. This informs reviewers of accepted items before they produce findings, reducing false-positive churn. The post-filter suppression (CR-7.3) remains as a defence-in-depth layer. |
 
 ## CR-8 Edit Region Tracking (Annotated Pass-Through)

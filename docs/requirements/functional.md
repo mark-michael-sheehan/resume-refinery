@@ -15,10 +15,10 @@
 | FR-2.1 | **Narrative creation** — The NarrativeAgent analyses the career profile against the job description and produces a `CandidacyNarrative` (thesis, argument pillars with career evidence, and gap framing). When the LLM is available, it generates a structured argument for why the candidate is a strong fit. A keyword-overlap fallback produces a basic narrative when the LLM is unavailable. Pillars are capped at 5. |
 | FR-2.2 | **Voice extraction** — The VoiceAgent analyses the voice profile and produces a `VoiceStyleGuide` used to shape document tone. |
 | FR-2.3 | **Drafting** — The DraftingAgent generates the resume. The document is produced in a single LLM call using thinking mode. |
-| FR-2.4 | **Verification** — The VerificationAgent runs seven independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning, ATS keyword alignment, grammar & mechanics) on the resume. |
+| FR-2.4 | **Verification** — The VerificationAgent runs eight independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning, ATS keyword alignment, grammar & mechanics, narrative coherence) on the resume. |
 | FR-2.5 | **Repair** — The RepairAgent fixes documents that fail verification using surgical find/replace edits (see [convergence.md](convergence.md)). |
 | FR-2.6 | **Iteration** — Verification and repair repeat up to `MAX_REPAIR_PASSES` times or until all documents pass. |
-| FR-2.7 | **Refinement** — The `refine` operation applies user instructions via the RepairAgent (single pass, no loop), then runs all seven reviewers once on the result. The updated document is saved as a new version with review feedback. |
+| FR-2.7 | **Refinement** — The `refine` operation applies user instructions via the RepairAgent (single pass, no loop), then runs all eight reviewers once on the result. The updated document is saved as a new version with review feedback. |
 | FR-2.8 | _(Reserved)_ |
 
 ## FR-3 Outputs
@@ -72,3 +72,4 @@
 | FR-6.7 | **ATS keyword alignment reviewer** — Reviews the resume against the job description and career profile. Flags missing high-priority keywords the candidate genuinely possesses but that are absent from the resume, phrasing mismatches (synonym vs. exact JD term), and keyword stuffing. Never flags skills the candidate lacks. Returns an `alignment_score` ("strong" / "moderate" / "weak") plus per-keyword issue lists. Gating: "strong" or "moderate" passes. |
 | FR-6.8 | _(Reserved — cross-document consistency reviewer removed; only one document type exists.)_ |
 | FR-6.9 | **Grammar & mechanics reviewer** — Reviews the resume for grammar errors, tense inconsistency, punctuation problems, capitalisation issues, and formatting inconsistencies. Never flags intentional fragments, industry jargon, or stylistic preferences. Returns a `clean` boolean plus issue lists. Gating on early passes: `clean=True` required. On late passes (≥ `RELAXED_PASS_START`): ≤ 2 total issues allowed. |
+| FR-6.10 | **Narrative coherence reviewer** — Checks that every point in the resume connects back to the candidacy narrative's thesis and pillars. Flags phrases that are disconnected from the narrative structure. Returns an `alignment` rating ("strong" / "moderate" / "weak") plus issue lists. Gating: "strong" or "moderate" passes (soft gate, same as voice). Skipped when no candidacy narrative is available. |

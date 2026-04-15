@@ -14,6 +14,7 @@ from resume_refinery.models import (
     DocumentTruthResult,
     GrammarResult,
     HiringManagerReview,
+    NarrativeCoherenceResult,
     NarrativePillar,
     RepairPassResult,
     ReviewBundle,
@@ -120,12 +121,15 @@ class FakeVerificationAgent:
     def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
 
+    def review_narrative_coherence(self, docs, narrative, *, exemptions=None):
+        return NarrativeCoherenceResult(alignment="strong")
+
 
 class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, narrative_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
         self.unified_calls += 1
         docs.resume = "resume repaired"
         return RepairPassResult()
@@ -375,6 +379,9 @@ class AlwaysPassVerificationAgent:
     def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
 
+    def review_narrative_coherence(self, docs, narrative, *, exemptions=None):
+        return NarrativeCoherenceResult(alignment="strong")
+
     def review_all(self, docs, career, voice, job):
         return ReviewBundle(
             truthfulness=self.review_truthfulness(docs, career, job),
@@ -483,7 +490,7 @@ class AcceptsAIPhraseRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, narrative_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
 
@@ -994,7 +1001,7 @@ class AcceptsAIPhraseAndTrackRepair:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, narrative_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["flagged-phrase"])
 

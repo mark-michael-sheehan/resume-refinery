@@ -538,6 +538,22 @@ class GrammarResult(BaseModel):
     resume_issues: list[GrammarIssue] = Field(default_factory=list)
 
 
+class NarrativeCoherenceIssue(BaseModel):
+    """A single resume item that does not connect to the candidacy narrative."""
+
+    phrase: str = Field(description="Verbatim quote from the resume")
+    issue: str = Field(description="Why this content does not support any narrative pillar")
+    suggestion: str = Field(default="", description="How to realign or remove it")
+    severity: Literal["high", "medium", "low"] = "medium"
+
+
+class NarrativeCoherenceResult(BaseModel):
+    """Result of narrative coherence review — checks that every resume point supports the candidacy narrative."""
+
+    alignment: Literal["strong", "moderate", "weak"] = "moderate"
+    resume_issues: list[NarrativeCoherenceIssue] = Field(default_factory=list)
+
+
 class ReviewBundle(BaseModel):
     voice: Optional[VoiceReviewResult] = None
     ai_detection: Optional[AIDetectionResult] = None
@@ -546,6 +562,7 @@ class ReviewBundle(BaseModel):
     relevance_pruning: Optional[RelevancePruningResult] = None
     ats_keyword: Optional[ATSKeywordResult] = None
     grammar: Optional[GrammarResult] = None
+    narrative_coherence: Optional[NarrativeCoherenceResult] = None
 
 
 ReviewerPriority = Literal[
@@ -555,6 +572,7 @@ ReviewerPriority = Literal[
     "voice",
     "ai",
     "hm",
+    "narrative",
     "pruning",
 ]
 
@@ -565,6 +583,7 @@ REVIEWER_PRIORITY_RANK: dict[str, int] = {
     "ats": 60,
     "grammar": 50,
     "voice": 40,
+    "narrative": 35,
     "ai": 30,
     "hm": 20,
     "pruning": 10,
@@ -635,6 +654,7 @@ class RepairPassResult(BaseModel):
     accepted_pruning_issues: StrList = Field(default_factory=list)
     accepted_ats_issues: StrList = Field(default_factory=list)
     accepted_grammar_issues: StrList = Field(default_factory=list)
+    accepted_narrative_issues: StrList = Field(default_factory=list)
     # Edits that failed Phase 1 locate (could not find the ``find`` text in
     # the document).  Keyed by document, each value is a list of EditOp dicts.
     failed_edits: dict[str, list[dict]] = Field(default_factory=dict)
@@ -669,6 +689,10 @@ class ExemptedPhrases(BaseModel):
     grammar_issues: StrList = Field(
         default_factory=list,
         description="Grammar/mechanics issues accepted as reviewer false positives",
+    )
+    narrative_issues: StrList = Field(
+        default_factory=list,
+        description="Narrative-coherence issues accepted as reviewer false positives",
     )
 
 

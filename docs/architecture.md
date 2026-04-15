@@ -23,7 +23,7 @@ voice_profile.md + career_profile.md + job_description.md
   │                                                                      │
   │ DraftingAgent      -> DocumentSet (resume only)                      │
   │ VerificationAgent  -> Unified review + repair loop:                  │
-  │   All 7 reviewers concurrent -> single repair if any gate fails      │
+  │   All 8 reviewers concurrent -> single repair if any gate fails      │
   │ RepairAgent        -> targeted rewrites with prior-edit context       │
   └──────────────────────────────────────────────────────────────────────┘
             │
@@ -33,8 +33,8 @@ voice_profile.md + career_profile.md + job_description.md
             │
             ▼
     Unified review + repair loop (per pass):
-      All 7 reviewers run concurrently (truth, ATS, grammar,
-        voice, AI detection, HM, pruning)
+      All 8 reviewers run concurrently (truth, ATS, grammar,
+        voice, AI detection, HM, pruning, narrative coherence)
       Suppressions applied, gates checked, single repair if any fail
       Edit-region tracking (annotated pass-through): each repair records
         edits tagged with the reviewer that triggered them. On subsequent
@@ -224,7 +224,8 @@ Only written when the repair agent accepted at least one item as a false positiv
   "claims": ["Led cross-functional initiatives"],
   "ai_phrases": ["results-driven"],
   "voice_issues": [],
-  "hm_issues": []
+  "hm_issues": [],
+  "narrative_issues": []
 }
 ```
 

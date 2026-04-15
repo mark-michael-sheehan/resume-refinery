@@ -4,9 +4,11 @@ import pytest
 
 from resume_refinery.models import (
     AIDetectionResult,
+    CandidacyNarrative,
     CareerProfile,
     DocumentSet,
     JobDescription,
+    NarrativePillar,
     ReviewBundle,
     Session,
     VersionInfo,
@@ -100,4 +102,19 @@ def sample_session(job_description) -> Session:
                 has_reviews=False,
             )
         ],
+    )
+
+
+@pytest.fixture
+def candidacy_narrative() -> CandidacyNarrative:
+    return CandidacyNarrative(
+        thesis="Distributed systems expert driving cost-efficient platform migrations.",
+        pillars=[
+            NarrativePillar(
+                theme="Backend Migration",
+                argument="Led backend migration cutting deploy time 60% and infra costs by $180K/year.",
+            ),
+        ],
+        gap_framing=["No Rust experience"],
+        raw_narrative="Full narrative text.",
     )

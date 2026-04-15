@@ -13,6 +13,7 @@ from resume_refinery.models import (
     DocumentTruthResult,
     DraftingContext,
     GrammarResult,
+    NarrativeCoherenceResult,
     NarrativePillar,
     RepairPassResult,
     ReviewBundle,
@@ -266,6 +267,9 @@ class FakeReviewer:
     def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
 
+    def review_narrative_coherence(self, docs, narrative, *, exemptions=None):
+        return NarrativeCoherenceResult(alignment="strong")
+
 
 def test_verification_agent_review_all(document_set, career_profile, voice_profile, job_description):
     agent = VerificationAgent(reviewer=FakeReviewer())
@@ -305,6 +309,13 @@ def test_verification_agent_review_grammar(document_set):
     agent = VerificationAgent(reviewer=FakeReviewer())
     result = agent.review_grammar(document_set)
     assert result.clean is True
+
+
+def test_verification_agent_review_narrative_coherence(document_set, candidacy_narrative):
+    agent = VerificationAgent(reviewer=FakeReviewer())
+    result = agent.review_narrative_coherence(document_set, candidacy_narrative)
+    assert isinstance(result, NarrativeCoherenceResult)
+    assert result.alignment == "strong"
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +620,7 @@ def test_repair_plan_edits_handles_empty_response():
     edits, acceptances = agent._plan_edits("system", "user")
 
     assert edits == []
-    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": []}
+    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": [], "accepted_narrative_issues": []}
 
 
 def test_repair_build_review_findings_truthfulness():

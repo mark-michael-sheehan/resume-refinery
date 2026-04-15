@@ -11,6 +11,7 @@ from resume_refinery.models import (
     DocumentSet,
     GrammarResult,
     HiringManagerReview,
+    NarrativeCoherenceResult,
     RelevancePruningResult,
     TruthfulnessResult,
     VoiceReviewResult,
@@ -722,4 +723,109 @@ def test_review_grammar_all_clean(mock_client_cls, document_set):
     assert result.clean is True
     assert result.resume_issues == []
     assert mock_client.chat.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Narrative coherence reviewer
+# ---------------------------------------------------------------------------
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_narrative_coherence_returns_result(mock_client_cls, document_set, candidacy_narrative):
+    payload = json.dumps({
+        "alignment": "moderate",
+        "issues": [
+            {
+                "phrase": "Proficient in Kubernetes orchestration",
+                "issue": "Not connected to any narrative pillar",
+                "suggestion": "Tie to backend migration pillar",
+                "severity": "medium",
+            },
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_narrative_coherence(document_set, candidacy_narrative)
+
+    assert isinstance(result, NarrativeCoherenceResult)
+    assert result.alignment == "moderate"
+    assert len(result.resume_issues) == 1
+    assert result.resume_issues[0].phrase == "Proficient in Kubernetes orchestration"
+    assert result.resume_issues[0].severity == "medium"
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_narrative_coherence_strong_no_issues(mock_client_cls, document_set, candidacy_narrative):
+    payload = json.dumps({"alignment": "strong", "issues": []})
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_narrative_coherence(document_set, candidacy_narrative)
+
+    assert result.alignment == "strong"
+    assert result.resume_issues == []
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_narrative_coherence_skips_missing_resume(mock_client_cls, candidacy_narrative):
+    docs = DocumentSet(resume=None)
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_narrative_coherence(docs, candidacy_narrative)
+
+    assert result.alignment == "strong"
+    assert result.resume_issues == []
+    assert mock_client.chat.call_count == 0
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_narrative_coherence_skips_missing_thesis(mock_client_cls, document_set):
+    from resume_refinery.models import CandidacyNarrative
+    narrative = CandidacyNarrative(thesis="", pillars=[], gap_framing=[], raw_narrative="")
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_narrative_coherence(document_set, narrative)
+
+    assert result.alignment == "strong"
+    assert mock_client.chat.call_count == 0
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_narrative_coherence_invalid_alignment_defaults(mock_client_cls, document_set, candidacy_narrative):
+    payload = json.dumps({"alignment": "perfect", "issues": []})
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_narrative_coherence(document_set, candidacy_narrative)
+
+    assert result.alignment == "moderate"
+
+
+@patch("resume_refinery.reviewers.ollama.Client")
+def test_review_narrative_coherence_invalid_severity_defaults(mock_client_cls, document_set, candidacy_narrative):
+    payload = json.dumps({
+        "alignment": "weak",
+        "issues": [
+            {"phrase": "Led team", "issue": "No pillar link", "severity": "critical"},
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_mock_response(payload)
+    mock_client_cls.return_value = mock_client
+
+    reviewer = DocumentReviewer(api_key="test-key")
+    result = reviewer.review_narrative_coherence(document_set, candidacy_narrative)
+
+    assert result.resume_issues[0].severity == "medium"
 

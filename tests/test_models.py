@@ -11,6 +11,8 @@ from resume_refinery.models import (
     DocumentTruthResult,
     DraftingContext,
     JobDescription,
+    NarrativeCoherenceIssue,
+    NarrativeCoherenceResult,
     NarrativePillar,
     OrchestrationResult,
     ReviewBundle,
@@ -321,3 +323,48 @@ def test_version_info_with_feedback():
     assert vi.feedback == "Shorten the resume"
     assert vi.docs_regenerated == ["resume"]
     assert vi.has_reviews is False
+
+
+# ---------------------------------------------------------------------------
+# NarrativeCoherenceResult
+# ---------------------------------------------------------------------------
+
+
+def test_narrative_coherence_result_defaults():
+    nc = NarrativeCoherenceResult(alignment="strong")
+    assert nc.alignment == "strong"
+    assert nc.resume_issues == []
+
+
+def test_narrative_coherence_result_with_issues():
+    issue = NarrativeCoherenceIssue(
+        phrase="Proficient in Kubernetes orchestration",
+        issue="Not connected to any pillar",
+        suggestion="Tie to backend migration pillar",
+        severity="medium",
+    )
+    nc = NarrativeCoherenceResult(alignment="moderate", resume_issues=[issue])
+    assert nc.alignment == "moderate"
+    assert len(nc.resume_issues) == 1
+    assert nc.resume_issues[0].phrase == "Proficient in Kubernetes orchestration"
+
+
+def test_narrative_coherence_issue_defaults():
+    issue = NarrativeCoherenceIssue(
+        phrase="Led a team",
+        issue="Disconnected from thesis",
+        severity="high",
+    )
+    assert issue.suggestion == ""
+
+
+def test_review_bundle_includes_narrative_coherence():
+    nc = NarrativeCoherenceResult(alignment="weak", resume_issues=[])
+    bundle = ReviewBundle(narrative_coherence=nc)
+    assert bundle.narrative_coherence is not None
+    assert bundle.narrative_coherence.alignment == "weak"
+
+
+def test_review_bundle_narrative_coherence_defaults_none():
+    bundle = ReviewBundle()
+    assert bundle.narrative_coherence is None

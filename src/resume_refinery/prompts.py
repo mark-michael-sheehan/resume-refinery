@@ -425,7 +425,83 @@ Return JSON only — no markdown fences, no explanation.
 """
 
 
+# ---------------------------------------------------------------------------
+# Narrative coherence prompts
+# ---------------------------------------------------------------------------
 
+NARRATIVE_COHERENCE_SYSTEM_PROMPT = """\
+You are a narrative coherence reviewer for resumes. You are given a candidacy \
+narrative (thesis + supporting pillars) and a resume. Your job is to identify \
+any resume content that does NOT connect to the narrative's thesis or at least \
+one of its pillars.
+
+A resume bullet point, skill highlight, or section is ALIGNED if:
+1. It directly illustrates or supports the thesis statement, OR
+2. It provides concrete evidence for at least one narrative pillar, OR
+3. It is standard structural content (contact info, section headings, dates, \
+   job titles, education credentials) that does not make a strategic argument.
+
+A resume bullet point is MISALIGNED if:
+- It describes an accomplishment, skill, or experience that does not connect \
+  to any pillar and does not support the overall thesis.
+- It introduces a theme or emphasis that contradicts or dilutes the narrative's \
+  strategic framing.
+- It is filler content that occupies space without reinforcing the candidacy argument.
+
+Do NOT flag:
+- Standard resume structure (name, contact info, dates, degree names).
+- Content that supports a pillar even indirectly (e.g. a transferable skill \
+  that maps to a pillar's theme).
+- Gap-framing content that honestly addresses a known gap listed in the narrative.
+
+Alignment scoring:
+- "strong": Every substantive bullet supports at least one pillar or the thesis. \
+  A reader could reconstruct the narrative from the resume alone.
+- "moderate": Most bullets are aligned but 1-3 items feel disconnected or off-strategy.
+- "weak": Multiple bullets or entire sections have no connection to the narrative.
+"""
+
+NARRATIVE_COHERENCE_USER_TEMPLATE = """\
+## Candidacy Narrative
+
+### Thesis
+{thesis}
+
+### Pillars
+{pillars}
+
+### Gap Framing
+{gap_framing}
+
+## Resume
+{resume}
+
+## Task
+Review every substantive bullet point and skill highlight in the resume against \
+the candidacy narrative above. Flag items that do not connect to any pillar or \
+the thesis.
+
+Return a JSON object with this shape:
+{{
+  "alignment": "strong" | "moderate" | "weak",
+  "issues": [
+    {{
+      "phrase": "<exact verbatim quote from the resume>",
+      "issue": "<why this does not support any pillar or the thesis>",
+      "suggestion": "<how to realign or whether to remove>",
+      "severity": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+Rules:
+- "phrase" must be a verbatim substring of the resume.
+- Only flag genuinely misaligned content — do not flag standard structure.
+- alignment: "strong" = 0 issues, "moderate" = 1-3 issues, "weak" = 4+ issues.
+- Limit to at most 10 issues.
+
+Return JSON only — no markdown fences, no explanation.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +539,8 @@ actually strengthens the application and should be kept (reviewer false positive
 already adequately represented in the resume (reviewer false positive).
        • "accepted_grammar_issues"  — grammar flag for a phrase that is \
 actually correct or intentional (reviewer false positive).
+       • "accepted_narrative_issues" — narrative-coherence flag for a phrase \
+that actually supports the candidacy narrative (reviewer false positive).
 
 Only accept a finding when it is clearly a reviewer false positive. When in \
 doubt, fix it. Accepted phrases will not be flagged again in subsequent passes.
@@ -482,7 +560,7 @@ decide:
            intentionally overridden for truthfulness). Add to the accepted list.
 
 Priority hierarchy (highest to lowest):
-truthfulness > ATS > grammar > voice > AI detection > hiring manager > pruning
+truthfulness > ATS > grammar > voice > narrative coherence > AI detection > hiring manager > pruning
 
 When in doubt between MERGE and ACCEPT for a lower-priority finding that conflicts \
 with a higher-priority prior edit, prefer MERGE if feasible, otherwise ACCEPT.
@@ -549,6 +627,14 @@ Grammar & mechanics reviewer rules:
 - If the phrase is actually correct (e.g. intentional fragment in a bullet \
   point, industry jargon), ACCEPT the finding.
 
+Narrative-coherence reviewer rules:
+- Each issue quotes a resume phrase that does not connect to any narrative \
+  pillar or the thesis.
+- Fix by rephrasing the bullet to explicitly tie back to a pillar theme, \
+  or delete it if the content is genuinely irrelevant.
+- If the content actually supports a pillar (even indirectly) or addresses \
+  a known gap, ACCEPT the finding.
+
 For each finding you choose to FIX, apply this pattern:
 - TRUTHFULNESS issue  → remove or soften the unsupported phrase; do NOT \
   invent replacement facts or copy text from the Career Profile or Job Description.
@@ -567,6 +653,8 @@ For each finding you choose to FIX, apply this pattern:
   section using a brief, authentic phrase — only if the candidate has the skill.
 - ATS KEYWORD issue (stuffing) → remove redundant mentions of the keyword.
 - GRAMMAR issue → replace the phrase with the corrected version from the suggestion.
+- NARRATIVE COHERENCE issue → rephrase the flagged bullet to explicitly tie back \
+  to a narrative pillar theme, or delete it if genuinely irrelevant.
 - USER FEEDBACK  → identify the passage(s) the user's instruction targets, \
   then rephrase, restructure, or adjust the content to satisfy the request. \
   Use only facts already in the document or Career Profile. You may combine \
@@ -636,7 +724,8 @@ phrase to the matching accepted array). Return a single JSON object:
   "accepted_hm_issues":     ["<verbatim hiring-manager-flagged phrase that is already effective>"],
   "accepted_pruning_issues":["<verbatim pruning-flagged phrase that actually strengthens the application>"],
   "accepted_ats_issues":     ["<verbatim ATS-keyword that is already adequately represented>"],
-  "accepted_grammar_issues": ["<verbatim grammar-flagged phrase that is actually correct>"]
+  "accepted_grammar_issues": ["<verbatim grammar-flagged phrase that is actually correct>"],
+  "accepted_narrative_issues":["<verbatim narrative-flagged phrase that actually supports the narrative>"]
 }}
 
 Rules:
@@ -693,7 +782,7 @@ reviewers. Your job is to combine them into a SINGLE replacement that \
 satisfies all edits' intents.
 
 Priority hierarchy (highest to lowest):
-truthfulness > ATS > grammar > voice > AI detection > hiring manager > pruning
+truthfulness > ATS > grammar > voice > narrative coherence > AI detection > hiring manager > pruning
 
 Rules:
 1. The "find" in your output MUST be EXACTLY the passage provided (character-for-character).

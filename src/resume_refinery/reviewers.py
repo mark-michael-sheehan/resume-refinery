@@ -14,6 +14,7 @@ from .models import (
     AIDetectionResult,
     ATSKeywordIssue,
     ATSKeywordResult,
+    CandidacyNarrative,
     DocumentSet,
     DocumentTruthResult,
     GrammarIssue,
@@ -22,6 +23,8 @@ from .models import (
     HiringManagerIssue,
     HiringManagerReview,
     JobDescription,
+    NarrativeCoherenceIssue,
+    NarrativeCoherenceResult,
     RelevancePruningIssue,
     RelevancePruningResult,
     ReviewBundle,
@@ -39,6 +42,8 @@ from .prompts import (
     GRAMMAR_SYSTEM_PROMPT,
     HIRING_MANAGER_REVIEW_SYSTEM_PROMPT,
     HIRING_MANAGER_REVIEW_USER_TEMPLATE,
+    NARRATIVE_COHERENCE_SYSTEM_PROMPT,
+    NARRATIVE_COHERENCE_USER_TEMPLATE,
     RELEVANCE_PRUNING_DOC_USER_TEMPLATE,
     RELEVANCE_PRUNING_SYSTEM_PROMPT,
     TRUTHFULNESS_DOC_USER_TEMPLATE,
@@ -406,6 +411,53 @@ class DocumentReviewer:
 
         return GrammarResult(
             clean=all_clean,
+            resume_issues=resume_issues,
+        )
+
+    def review_narrative_coherence(
+        self, docs: DocumentSet, narrative: CandidacyNarrative, *, exemptions: list[str] | None = None,
+    ) -> NarrativeCoherenceResult:
+        """Check that every resume point connects to the candidacy narrative."""
+        exempt_block = _exemption_section(exemptions, "phrases")
+
+        if not docs.resume or not narrative.thesis:
+            return NarrativeCoherenceResult(alignment="strong")
+
+        pillars_text = "\n".join(
+            f"- **{p.theme}**: {p.argument}"
+            for p in narrative.pillars
+        ) or "(no pillars)"
+        gap_text = "\n".join(f"- {g}" for g in narrative.gap_framing) or "(none)"
+
+        user_msg = NARRATIVE_COHERENCE_USER_TEMPLATE.format(
+            thesis=narrative.thesis,
+            pillars=pillars_text,
+            gap_framing=gap_text,
+            resume=docs.resume,
+        ) + exempt_block
+        raw = self._call(NARRATIVE_COHERENCE_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+
+        alignment = data.get("alignment") or "moderate"
+        if alignment not in ("strong", "moderate", "weak"):
+            alignment = "moderate"
+
+        resume_issues: list[NarrativeCoherenceIssue] = []
+        for item in data.get("issues") or []:
+            if not isinstance(item, dict) or "phrase" not in item:
+                continue
+            severity = item.get("severity", "medium")
+            if severity not in ("high", "medium", "low"):
+                severity = "medium"
+            resume_issues.append(NarrativeCoherenceIssue(
+                phrase=item["phrase"],
+                issue=item.get("issue") or "",
+                suggestion=item.get("suggestion") or "",
+                severity=severity,
+            ))
+
+        return NarrativeCoherenceResult(
+            alignment=alignment,
             resume_issues=resume_issues,
         )
 

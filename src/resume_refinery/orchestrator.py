@@ -15,6 +15,7 @@ from .models import (
     ALL_DOC_KEYS,
     AIDetectionResult,
     ATSKeywordResult,
+    CandidacyNarrative,
     CareerProfile,
     DocumentKey,
     DocumentSet,
@@ -23,6 +24,7 @@ from .models import (
     ExemptedPhrases,
     GrammarResult,
     HiringManagerReview,
+    NarrativeCoherenceResult,
     OrchestrationResult,
     RelevancePruningResult,
     RepairPassResult,
@@ -308,6 +310,7 @@ class ResumeRefineryOrchestrator:
         suppressed_pruning_issues = set(exempted.pruning_issues)
         suppressed_ats_issues = set(exempted.ats_issues)
         suppressed_grammar_issues = set(exempted.grammar_issues)
+        suppressed_narrative_issues = set(exempted.narrative_issues)
         suppressed_claims.update(repair_pass.accepted_claims)
         suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
         suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
@@ -315,6 +318,7 @@ class ResumeRefineryOrchestrator:
         suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
         suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
         suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
+        suppressed_narrative_issues.update(repair_pass.accepted_narrative_issues)
 
         updated_exempted = ExemptedPhrases(
             claims=sorted(suppressed_claims),
@@ -324,6 +328,7 @@ class ResumeRefineryOrchestrator:
             pruning_issues=sorted(suppressed_pruning_issues),
             ats_issues=sorted(suppressed_ats_issues),
             grammar_issues=sorted(suppressed_grammar_issues),
+            narrative_issues=sorted(suppressed_narrative_issues),
         )
 
         # Restore documents that weren't targeted or aren't in selected_docs.
@@ -346,17 +351,19 @@ class ResumeRefineryOrchestrator:
         reviews = self._run_all_reviews(
             current_docs, career, voice, job, progress,
             exempted=updated_exempted,
+            narrative=context.narrative,
         )
 
         # Apply post-filter suppressions to review results.
         (reviews_truth, reviews_voice, reviews_ai, reviews_hm,
-         reviews_pruning, reviews_ats, reviews_grammar) = self._apply_suppressions(
+         reviews_pruning, reviews_ats, reviews_grammar, reviews_narrative) = self._apply_suppressions(
             reviews.truthfulness, reviews.voice, reviews.ai_detection,
             reviews.hiring_manager, reviews.relevance_pruning,
-            reviews.ats_keyword, reviews.grammar,
+            reviews.ats_keyword, reviews.grammar, reviews.narrative_coherence,
             suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
             suppressed_hm_issues, suppressed_pruning_issues,
             suppressed_ats_issues, suppressed_grammar_issues,
+            suppressed_narrative_issues,
         )
         reviews = ReviewBundle(
             truthfulness=reviews_truth,
@@ -366,13 +373,14 @@ class ResumeRefineryOrchestrator:
             relevance_pruning=reviews_pruning,
             ats_keyword=reviews_ats,
             grammar=reviews_grammar,
+            narrative_coherence=reviews_narrative,
         )
 
         # Persist the combined exemptions with the new version.
         if any([updated_exempted.claims, updated_exempted.ai_phrases,
                 updated_exempted.voice_issues, updated_exempted.hm_issues,
                 updated_exempted.pruning_issues, updated_exempted.ats_issues,
-                updated_exempted.grammar_issues]):
+                updated_exempted.grammar_issues, updated_exempted.narrative_issues]):
             self.store.save_suppressions(session, updated_exempted)
 
         exported = self._export(session, current_docs, output_dir=output_dir)
@@ -402,7 +410,7 @@ class ResumeRefineryOrchestrator:
         docs = self.store.load_documents(session, version=version)
         job = session.job_description
         context = self._build_context(career, voice, job, progress)
-        reviews = self._run_all_reviews(docs, career, voice, job, progress)
+        reviews = self._run_all_reviews(docs, career, voice, job, progress, narrative=context.narrative)
         self.store.save_reviews(session, reviews)
         return OrchestrationResult(
             session=session,
@@ -421,6 +429,7 @@ class ResumeRefineryOrchestrator:
         job: JobDescription,
         progress: ProgressCallback | None = None,
         exempted: ExemptedPhrases | None = None,
+        narrative: CandidacyNarrative | None = None,
     ) -> ReviewBundle:
         """Run every reviewer once and return the combined bundle."""
         truth = None
@@ -490,6 +499,16 @@ class ResumeRefineryOrchestrator:
             self._progress(progress, self._summarise_grammar(grammar_review))
         except Exception as exc:
             logging.warning("Grammar review failed (%s)", exc)
+        if narrative:
+            try:
+                narrative_review = self.verification_agent.review_narrative_coherence(
+                    docs, narrative,
+                    exemptions=exempted.narrative_issues if exempted and exempted.narrative_issues else None,
+                )
+                reviews = reviews.model_copy(update={"narrative_coherence": narrative_review})
+                self._progress(progress, self._summarise_narrative_coherence(narrative_review))
+            except Exception as exc:
+                logging.warning("Narrative-coherence review failed (%s)", exc)
         return reviews
 
     def _build_context(
@@ -529,6 +548,7 @@ class ResumeRefineryOrchestrator:
         pruning_result: RelevancePruningResult | None = None
         ats_result: ATSKeywordResult | None = None
         grammar_result: GrammarResult | None = None
+        narrative_result: NarrativeCoherenceResult | None = None
 
         # Per-reviewer suppression sets â€” accumulated across all repair passes.
         # Each reviewer has its own independent set so a voice false positive
@@ -540,6 +560,7 @@ class ResumeRefineryOrchestrator:
         suppressed_pruning_issues: set[str] = set()
         suppressed_ats_issues: set[str] = set()
         suppressed_grammar_issues: set[str] = set()
+        suppressed_narrative_issues: set[str] = set()
 
         repair_sub_pass = 0  # running counter for on_repair_pass snapshots
 
@@ -642,7 +663,22 @@ class ResumeRefineryOrchestrator:
                     self._progress(progress, f"[yellow]Relevance-pruning review skipped: {exc}[/yellow]")
                     return None
 
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 7)) as pool:
+            def _run_narrative():
+                if not context.narrative or not context.narrative.thesis:
+                    return None
+                try:
+                    result = self.verification_agent.review_narrative_coherence(
+                        docs, context.narrative,
+                        exemptions=sorted(suppressed_narrative_issues) if suppressed_narrative_issues else None,
+                    )
+                    self._progress(progress, "    \u2713 Narrative coherence review complete")
+                    return result
+                except Exception as exc:
+                    logging.warning("Narrative-coherence review failed (%s)", exc)
+                    self._progress(progress, f"[yellow]Narrative-coherence review skipped: {exc}[/yellow]")
+                    return None
+
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 8)) as pool:
                 truth_future = pool.submit(_run_truth)
                 ats_future = pool.submit(_run_ats)
                 grammar_future = pool.submit(_run_grammar)
@@ -650,6 +686,7 @@ class ResumeRefineryOrchestrator:
                 ai_future = pool.submit(_run_ai)
                 hm_future = pool.submit(_run_hm)
                 pruning_future = pool.submit(_run_pruning)
+                narrative_future = pool.submit(_run_narrative)
 
                 truth = truth_future.result()
                 ats_result = ats_future.result()
@@ -658,14 +695,16 @@ class ResumeRefineryOrchestrator:
                 ai_result = ai_future.result()
                 hm_result = hm_future.result()
                 pruning_result = pruning_future.result()
+                narrative_result = narrative_future.result()
 
             # Filter out items accepted as false positives in earlier passes.
-            truth, voice_result, ai_result, hm_result, pruning_result, ats_result, grammar_result = self._apply_suppressions(
+            truth, voice_result, ai_result, hm_result, pruning_result, ats_result, grammar_result, narrative_result = self._apply_suppressions(
                 truth, voice_result, ai_result, hm_result, pruning_result,
-                ats_result, grammar_result,
+                ats_result, grammar_result, narrative_result,
                 suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
                 suppressed_hm_issues, suppressed_pruning_issues,
                 suppressed_ats_issues, suppressed_grammar_issues,
+                suppressed_narrative_issues,
             )
 
             # Summarise all reviews
@@ -683,6 +722,8 @@ class ResumeRefineryOrchestrator:
                 self._progress(progress, self._summarise_hiring_manager(hm_result))
             if pruning_result:
                 self._progress(progress, self._summarise_relevance_pruning(pruning_result))
+            if narrative_result:
+                self._progress(progress, self._summarise_narrative_coherence(narrative_result))
 
             # Check all gates
             truth_ok = truth is None or truth.all_supported
@@ -697,6 +738,7 @@ class ResumeRefineryOrchestrator:
                 grammar_ok = grammar_result is None or grammar_result.clean
 
             voice_ok = voice_result is None or voice_result.overall_match in ("strong", "moderate")
+            narrative_ok = narrative_result is None or narrative_result.alignment in ("strong", "moderate")
 
             if is_late_pass:
                 total_ai_flags = (
@@ -708,7 +750,7 @@ class ResumeRefineryOrchestrator:
 
             # Hiring manager and relevance pruning are advisory â€” they feed
             # findings into repair but never block convergence (no hard gate).
-            all_ok = truth_ok and ats_ok and grammar_ok and voice_ok and ai_ok
+            all_ok = truth_ok and ats_ok and grammar_ok and voice_ok and ai_ok and narrative_ok
 
             if all_ok:
                 break
@@ -723,6 +765,7 @@ class ResumeRefineryOrchestrator:
                 pruning_review=pruning_result,
                 ats_review=ats_result,
                 grammar_review=grammar_result,
+                narrative_review=narrative_result,
                 pass_num=pass_num,
                 prior_edits=self._build_prior_edits(repair_results),
             )
@@ -734,9 +777,10 @@ class ResumeRefineryOrchestrator:
             suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
             suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
             suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
+            suppressed_narrative_issues.update(repair_pass.accepted_narrative_issues)
             if repair_pass.edits:
                 self._progress(progress, self._summarise_repair(repair_pass))
-            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_grammar_issues:
+            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_grammar_issues or repair_pass.accepted_narrative_issues:
                 self._progress(progress, self._summarise_acceptances(repair_pass))
             if repair_pass.failed_edits:
                 self._progress(progress, self._summarise_failed_edits(repair_pass))
@@ -750,6 +794,7 @@ class ResumeRefineryOrchestrator:
                     relevance_pruning=pruning_result,
                     ats_keyword=ats_result,
                     grammar=grammar_result,
+                    narrative_coherence=narrative_result,
                 )
                 on_repair_pass(repair_sub_pass, docs, pass_reviews)
             repair_sub_pass += 1
@@ -762,6 +807,7 @@ class ResumeRefineryOrchestrator:
             relevance_pruning=pruning_result,
             ats_keyword=ats_result,
             grammar=grammar_result,
+            narrative_coherence=narrative_result,
         ), repair_results, ExemptedPhrases(
             claims=sorted(suppressed_claims),
             ai_phrases=sorted(suppressed_ai_phrases),
@@ -770,6 +816,7 @@ class ResumeRefineryOrchestrator:
             pruning_issues=sorted(suppressed_pruning_issues),
             ats_issues=sorted(suppressed_ats_issues),
             grammar_issues=sorted(suppressed_grammar_issues),
+            narrative_issues=sorted(suppressed_narrative_issues),
         )
 
     def _export(
@@ -803,6 +850,7 @@ class ResumeRefineryOrchestrator:
         pruning_result: RelevancePruningResult | None,
         ats_result: ATSKeywordResult | None,
         grammar_result: GrammarResult | None,
+        narrative_result: NarrativeCoherenceResult | None,
         suppressed_claims: set[str],
         suppressed_ai_phrases: set[str],
         suppressed_voice_issues: set[str],
@@ -810,7 +858,8 @@ class ResumeRefineryOrchestrator:
         suppressed_pruning_issues: set[str],
         suppressed_ats_issues: set[str],
         suppressed_grammar_issues: set[str],
-    ) -> tuple[TruthfulnessResult | None, VoiceReviewResult | None, AIDetectionResult | None, HiringManagerReview | None, RelevancePruningResult | None, ATSKeywordResult | None, GrammarResult | None]:
+        suppressed_narrative_issues: set[str],
+    ) -> tuple[TruthfulnessResult | None, VoiceReviewResult | None, AIDetectionResult | None, HiringManagerReview | None, RelevancePruningResult | None, ATSKeywordResult | None, GrammarResult | None, NarrativeCoherenceResult | None]:
         """Return copies of review results with suppressed items removed.
 
         Each reviewer has its own independent suppression set so that accepting
@@ -896,7 +945,19 @@ class ResumeRefineryOrchestrator:
                 "clean": not res_issues,
             })
 
-        return filtered_truth, filtered_voice, filtered_ai, filtered_hm, filtered_pruning, filtered_ats, filtered_grammar
+        # --- Narrative coherence ---
+        filtered_narrative = narrative_result
+        if narrative_result and suppressed_narrative_issues:
+            res_issues = [i for i in narrative_result.resume_issues if i.phrase not in suppressed_narrative_issues]
+            alignment = narrative_result.alignment
+            if not res_issues and alignment == "weak":
+                alignment = "moderate"
+            filtered_narrative = narrative_result.model_copy(update={
+                "resume_issues": res_issues,
+                "alignment": alignment,
+            })
+
+        return filtered_truth, filtered_voice, filtered_ai, filtered_hm, filtered_pruning, filtered_ats, filtered_grammar, filtered_narrative
 
     # ------------------------------------------------------------------
     # Prior-edit context builder (annotated pass-through)
@@ -1036,6 +1097,18 @@ class ResumeRefineryOrchestrator:
                 parts.append(f'    [{issue.severity.upper()}] ({issue.category}) "{issue.phrase[:60]}" â€” {issue.issue}')
         return "\n".join(parts)
 
+    def _summarise_narrative_coherence(self, nc: NarrativeCoherenceResult) -> str:
+        color = {"strong": "green", "moderate": "yellow", "weak": "red"}[nc.alignment]
+        total = len(nc.resume_issues)
+        parts = [f"[{color}]Narrative coherence: {nc.alignment.upper()} ({total} issue(s))[/{color}]"]
+        if nc.resume_issues:
+            for issue in nc.resume_issues:
+                sev = issue.severity.upper()
+                parts.append(f'    [{sev}] "{issue.phrase[:80]}" — {issue.issue}')
+                if issue.suggestion:
+                    parts.append(f"      Suggestion: {issue.suggestion}")
+        return "\n".join(parts)
+
     def _summarise_repair(self, repair_pass: RepairPassResult) -> str:
         doc_labels = self._doc_labels()
         parts = ["[bold]Repair edits applied:[/bold]"]
@@ -1080,6 +1153,10 @@ class ResumeRefineryOrchestrator:
             parts.append("  [cyan]Grammar issues (accepted as correct/intentional):[/cyan]")
             for issue in repair_pass.accepted_grammar_issues:
                 parts.append(f'    [cyan]âœ“ "{issue}"[/cyan]')
+        if repair_pass.accepted_narrative_issues:
+            parts.append("  [cyan]Narrative-coherence issues (accepted as aligned with narrative):[/cyan]")
+            for issue in repair_pass.accepted_narrative_issues:
+                parts.append(f'    [cyan]\u2713 "{issue}"[/cyan]')
         return "\n".join(parts)
 
     def _summarise_failed_edits(self, repair_pass: RepairPassResult) -> str:

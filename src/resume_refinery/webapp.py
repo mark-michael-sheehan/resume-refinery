@@ -454,6 +454,26 @@ def _grammar_summary(grammar) -> str:
     return "".join(parts)
 
 
+def _narrative_coherence_summary(nc) -> str:
+    if not nc:
+        return "<p class='muted'>No narrative coherence review available.</p>"
+    color = {"strong": "ok", "moderate": "muted", "weak": "bad"}[nc.alignment]
+    total = len(nc.resume_issues)
+    parts = [f"<p class='{color}'>Alignment: <strong>{html.escape(nc.alignment.upper())}</strong> ({total} issue(s))</p>"]
+    if nc.resume_issues:
+        parts.append("<ul>")
+        for issue in nc.resume_issues:
+            badge = "bad" if issue.severity == "high" else "muted"
+            sug = f" <em>Suggestion: {html.escape(issue.suggestion[:100])}</em>" if issue.suggestion else ""
+            parts.append(
+                f"<li><span class='{badge}'>[{html.escape(issue.severity.upper())}]</span> "
+                f"&ldquo;{html.escape(issue.phrase[:100])}&rdquo; &mdash; {html.escape(issue.issue)}"
+                f"{sug}</li>"
+            )
+        parts.append("</ul>")
+    return "".join(parts)
+
+
 def _narrative_summary(narrative: CandidacyNarrative | None) -> str:
     """Render the candidacy narrative as an HTML card."""
     if not narrative:
@@ -970,6 +990,10 @@ def show_session(session_id: str) -> HTMLResponse:
 <div class=\"card\">
   <h2>Grammar &amp; Mechanics</h2>
   {_grammar_summary(reviews.grammar)}
+</div>
+<div class=\"card\">
+  <h2>Narrative Coherence</h2>
+  {_narrative_coherence_summary(reviews.narrative_coherence)}
 </div>
 {_artifact_summary(context)}
 <div class=\"card\">
