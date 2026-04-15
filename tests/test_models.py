@@ -5,12 +5,13 @@ from pydantic import ValidationError
 
 from resume_refinery.models import (
     AIDetectionResult,
+    CandidacyNarrative,
     CareerProfile,
     DocumentSet,
     DocumentTruthResult,
     DraftingContext,
-    EvidencePack,
     JobDescription,
+    NarrativePillar,
     OrchestrationResult,
     ReviewBundle,
     Session,
@@ -46,9 +47,9 @@ def test_job_description_raw_content(job_description):
 
 def test_document_set_get_set():
     ds = DocumentSet()
-    assert ds.get("cover_letter") is None
-    ds.set("cover_letter", "Hello world")
-    assert ds.get("cover_letter") == "Hello world"
+    assert ds.get("resume") is None
+    ds.set("resume", "Hello world")
+    assert ds.get("resume") == "Hello world"
 
 
 def test_document_set_all_present(document_set):
@@ -56,7 +57,7 @@ def test_document_set_all_present(document_set):
 
 
 def test_document_set_not_all_present():
-    ds = DocumentSet(cover_letter="x", resume="y")
+    ds = DocumentSet()
     assert not ds.all_present()
 
 
@@ -68,10 +69,8 @@ def test_voice_review_per_doc_match_defaults():
     """Per-doc match fields default to 'moderate' when not explicitly set."""
     vr = VoiceReviewResult(
         overall_match="strong",
-        cover_letter_assessment="Good",
         resume_assessment="Good",
     )
-    assert vr.cover_letter_match == "moderate"
     assert vr.resume_match == "moderate"
 
 
@@ -79,12 +78,9 @@ def test_voice_review_per_doc_match_explicit():
     """Per-doc match fields can be set explicitly."""
     vr = VoiceReviewResult(
         overall_match="weak",
-        cover_letter_match="strong",
         resume_match="weak",
-        cover_letter_assessment="On-voice",
         resume_assessment="Off-voice",
     )
-    assert vr.cover_letter_match == "strong"
     assert vr.resume_match == "weak"
 
 
@@ -92,10 +88,8 @@ def test_voice_review_per_doc_issues_defaults():
     """Per-doc issues default to empty lists."""
     vr = VoiceReviewResult(
         overall_match="strong",
-        cover_letter_assessment="Good",
         resume_assessment="Good",
     )
-    assert vr.cover_letter_issues == []
     assert vr.resume_issues == []
 
 
@@ -103,21 +97,17 @@ def test_voice_review_per_doc_issues_explicit():
     """Per-doc issues can be set explicitly."""
     vr = VoiceReviewResult(
         overall_match="weak",
-        cover_letter_assessment="Off",
         resume_assessment="Good",
-        cover_letter_issues=["too formal"],
-        resume_issues=[],
+        resume_issues=["too formal"],
     )
-    assert vr.cover_letter_issues == ["too formal"]
-    assert vr.resume_issues == []
+    assert vr.resume_issues == ["too formal"]
 
 
 def test_voice_review_per_doc_match_invalid_literal():
     with pytest.raises(ValidationError):
         VoiceReviewResult(
             overall_match="strong",
-            cover_letter_match="excellent",  # invalid
-            cover_letter_assessment="",
+            resume_match="excellent",  # invalid
             resume_assessment="",
         )
 
@@ -126,7 +116,6 @@ def test_voice_review_invalid_literal():
     with pytest.raises(ValidationError):
         VoiceReviewResult(
             overall_match="excellent",  # not a valid literal
-            cover_letter_assessment="",
             resume_assessment="",
         )
 
@@ -153,9 +142,9 @@ def test_session_structure(sample_session):
 
 
 def test_document_set_overwrite():
-    ds = DocumentSet(cover_letter="original")
-    ds.set("cover_letter", "updated")
-    assert ds.get("cover_letter") == "updated"
+    ds = DocumentSet(resume="original")
+    ds.set("resume", "updated")
+    assert ds.get("resume") == "updated"
 
 
 def test_document_set_empty_is_not_all_present():
@@ -168,12 +157,12 @@ def test_document_set_empty_is_not_all_present():
 # ---------------------------------------------------------------------------
 
 
-def test_evidence_pack_defaults():
-    pack = EvidencePack()
-    assert pack.job_requirements == []
-    assert pack.matched_evidence == []
-    assert pack.gaps == []
-    assert pack.source_summary == []
+def test_narrative_defaults():
+    narrative = CandidacyNarrative(thesis="", pillars=[], gap_framing=[], raw_narrative="")
+    assert narrative.thesis == ""
+    assert narrative.pillars == []
+    assert narrative.gap_framing == []
+    assert narrative.raw_narrative == ""
 
 
 def test_voice_style_guide_defaults():
@@ -238,10 +227,15 @@ def test_voice_data_from_markdown_empty():
 
 
 def test_drafting_context_requires_both_fields():
-    pack = EvidencePack()
+    narrative = CandidacyNarrative(
+        thesis="Strong fit",
+        pillars=[NarrativePillar(theme="Backend", argument="Led migrations", career_evidence=["Cut costs"])],
+        gap_framing=[],
+        raw_narrative="Narrative text.",
+    )
     guide = VoiceStyleGuide()
-    ctx = DraftingContext(evidence_pack=pack, voice_style_guide=guide)
-    assert ctx.evidence_pack is not None
+    ctx = DraftingContext(narrative=narrative, voice_style_guide=guide)
+    assert ctx.narrative is not None
     assert ctx.voice_style_guide is not None
 
 
@@ -261,9 +255,7 @@ def test_truthfulness_result_all_supported():
     doc_fail = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
     tr = TruthfulnessResult(
         all_supported=False,
-        cover_letter=doc_pass,
         resume=doc_fail,
-        interview_guide=doc_pass,
     )
     assert tr.all_supported is False
     assert len(tr.resume.unsupported_claims) == 1
@@ -289,11 +281,10 @@ def test_review_bundle_all_populated():
     rb = ReviewBundle(
         truthfulness=TruthfulnessResult(
             all_supported=True,
-            cover_letter=doc, resume=doc, interview_guide=doc,
+            resume=doc,
         ),
         voice=VoiceReviewResult(
             overall_match="strong",
-            cover_letter_assessment="Good",
             resume_assessment="Good",
         ),
         ai_detection=AIDetectionResult(risk_level="low"),
@@ -324,9 +315,9 @@ def test_version_info_with_feedback():
     vi = VersionInfo(
         version=2,
         created_at="2026-03-20T11:00:00+00:00",
-        feedback="Shorten the cover letter",
-        docs_regenerated=["cover_letter"],
+        feedback="Shorten the resume",
+        docs_regenerated=["resume"],
     )
-    assert vi.feedback == "Shorten the cover letter"
-    assert vi.docs_regenerated == ["cover_letter"]
+    assert vi.feedback == "Shorten the resume"
+    assert vi.docs_regenerated == ["resume"]
     assert vi.has_reviews is False

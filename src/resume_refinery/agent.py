@@ -11,9 +11,7 @@ from dotenv import load_dotenv
 
 from .models import CareerProfile, DocumentKey, DocumentSet, JobDescription, VoiceProfile
 from .prompts import (
-    COVER_LETTER_PROMPT,
     GENERATION_SYSTEM_PROMPT,
-    INTERVIEW_GUIDE_PROMPT,
     RESUME_PROMPT,
     generation_user_message,
 )
@@ -26,9 +24,7 @@ MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "8192"))
 NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
 
 _DOC_PROMPTS: dict[DocumentKey, str] = {
-    "cover_letter": COVER_LETTER_PROMPT,
     "resume": RESUME_PROMPT,
-    "interview_guide": INTERVIEW_GUIDE_PROMPT,
 }
 
 
@@ -48,10 +44,9 @@ class ResumeRefineryAgent:
         voice: VoiceProfile,
         job: JobDescription,
     ) -> DocumentSet:
-        """Generate all three documents from scratch. Returns a DocumentSet."""
+        """Generate the resume from scratch. Returns a DocumentSet."""
         docs = DocumentSet()
-        for key in ("cover_letter", "resume", "interview_guide"):
-            docs.set(key, self._generate_one(key, career, voice, job))  # type: ignore[arg-type]
+        docs.set("resume", self._generate_one("resume", career, voice, job))
         return docs
 
     def generate_document(
@@ -60,11 +55,12 @@ class ResumeRefineryAgent:
         career: CareerProfile,
         voice: VoiceProfile,
         job: JobDescription,
+        narrative_text: str = "",
         feedback: str | None = None,
         previous_version: str | None = None,
     ) -> str:
         """Generate (or regenerate with feedback) a single document. Returns Markdown."""
-        return self._generate_one(key, career, voice, job, feedback, previous_version)
+        return self._generate_one(key, career, voice, job, narrative_text=narrative_text, feedback=feedback, previous_version=previous_version)
 
     def stream_document(
         self,
@@ -72,6 +68,7 @@ class ResumeRefineryAgent:
         career: CareerProfile,
         voice: VoiceProfile,
         job: JobDescription,
+        narrative_text: str = "",
         feedback: str | None = None,
         previous_version: str | None = None,
     ) -> Iterator[str]:
@@ -81,6 +78,7 @@ class ResumeRefineryAgent:
             voice_profile_content=voice.raw_content,
             job_description_content=job.raw_content,
             doc_prompt=_DOC_PROMPTS[key],
+            narrative_text=narrative_text,
             feedback=feedback,
             previous_version=previous_version,
         )
@@ -137,6 +135,7 @@ class ResumeRefineryAgent:
         career: CareerProfile,
         voice: VoiceProfile,
         job: JobDescription,
+        narrative_text: str = "",
         feedback: str | None = None,
         previous_version: str | None = None,
     ) -> str:
@@ -145,6 +144,7 @@ class ResumeRefineryAgent:
             voice_profile_content=voice.raw_content,
             job_description_content=job.raw_content,
             doc_prompt=_DOC_PROMPTS[key],
+            narrative_text=narrative_text,
             feedback=feedback,
             previous_version=previous_version,
         )

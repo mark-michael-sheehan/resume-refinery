@@ -16,7 +16,6 @@ from .models import (
     AIDetectionResult,
     ATSKeywordResult,
     CareerProfile,
-    ConsistencyResult,
     DocumentKey,
     DocumentSet,
     DocumentTruthResult,
@@ -35,7 +34,7 @@ from .models import (
     JobDescription,
 )
 from .session import SessionStore
-from .specialist_agents import DraftingAgent, EvidenceAgent, RepairAgent, VerificationAgent, VoiceAgent
+from .specialist_agents import DraftingAgent, NarrativeAgent, RepairAgent, VerificationAgent, VoiceAgent
 
 load_dotenv()
 
@@ -58,14 +57,14 @@ class ResumeRefineryOrchestrator:
     def __init__(
         self,
         store: SessionStore | None = None,
-        evidence_agent: EvidenceAgent | None = None,
+        narrative_agent: NarrativeAgent | None = None,
         voice_agent: VoiceAgent | None = None,
         drafting_agent: DraftingAgent | None = None,
         verification_agent: VerificationAgent | None = None,
         repair_agent: RepairAgent | None = None,
     ) -> None:
         self.store = store or SessionStore()
-        self.evidence_agent = evidence_agent or EvidenceAgent()
+        self.narrative_agent = narrative_agent or NarrativeAgent()
         self.voice_agent = voice_agent or VoiceAgent()
         self.drafting_agent = drafting_agent or DraftingAgent()
         self.verification_agent = verification_agent or VerificationAgent()
@@ -102,7 +101,7 @@ class ResumeRefineryOrchestrator:
             text = "".join(chunks).strip()
             if not text:
                 raise ValueError(
-                    f"'{label}' generated empty content — the model may have "
+                    f"'{label}' generated empty content â€” the model may have "
                     "exhausted its context window on reasoning. Try raising "
                     "RESUME_REFINERY_NUM_CTX in your .env."
                 )
@@ -134,7 +133,7 @@ class ResumeRefineryOrchestrator:
                 docs, career, voice, job, context, progress=progress,
                 on_repair_pass=_on_repair_pass,
             )
-        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.consistency_issues or exempted.grammar_issues:
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.grammar_issues:
             self.store.save_suppressions(session, exempted)
         # Final export with the fully-repaired documents.
         exported = self._export(session, docs, output_dir=output_dir)
@@ -147,7 +146,7 @@ class ResumeRefineryOrchestrator:
             documents=docs,
             reviews=reviews,
             repair_passes=repair_passes,
-            evidence_pack=context.evidence_pack,
+            narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
             strict_truth_failed=strict_failed and not allow_unverified,
@@ -162,10 +161,10 @@ class ResumeRefineryOrchestrator:
         selected_docs: list[DocumentKey] | None = None,
         progress: ProgressCallback | None = None,
     ) -> tuple[Session, DraftingContext]:
-        """Create a session, extract evidence + voice context, and stage it.
+        """Create a session, build narrative + voice context, and stage it.
 
-        Returns the session and context so the caller can present evidence
-        for curation before calling :meth:`generate_session_run`.
+        Returns the session and context so the caller can present the
+        narrative for review before calling :meth:`generate_session_run`.
         """
         active_docs = selected_docs or list(ALL_DOC_KEYS)
         session = self.store.create(job, career, voice, selected_docs=active_docs)
@@ -215,7 +214,7 @@ class ResumeRefineryOrchestrator:
             text = "".join(chunks).strip()
             if not text:
                 raise ValueError(
-                    f"'{label}' generated empty content — the model may have "
+                    f"'{label}' generated empty content â€” the model may have "
                     "exhausted its context window on reasoning. Try raising "
                     "RESUME_REFINERY_NUM_CTX in your .env."
                 )
@@ -245,7 +244,7 @@ class ResumeRefineryOrchestrator:
                 docs, career, voice, job, context, progress=progress,
                 on_repair_pass=_on_repair_pass,
             )
-        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.consistency_issues or exempted.grammar_issues:
+        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.grammar_issues:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, docs, output_dir=output_dir)
         self.store.save_reviews(session, reviews)
@@ -260,7 +259,7 @@ class ResumeRefineryOrchestrator:
             documents=docs,
             reviews=reviews,
             repair_passes=repair_passes,
-            evidence_pack=context.evidence_pack,
+            narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
             strict_truth_failed=strict_failed and not allow_unverified,
@@ -308,7 +307,6 @@ class ResumeRefineryOrchestrator:
         suppressed_hm_issues = set(exempted.hm_issues)
         suppressed_pruning_issues = set(exempted.pruning_issues)
         suppressed_ats_issues = set(exempted.ats_issues)
-        suppressed_consistency_issues = set(exempted.consistency_issues)
         suppressed_grammar_issues = set(exempted.grammar_issues)
         suppressed_claims.update(repair_pass.accepted_claims)
         suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
@@ -316,7 +314,6 @@ class ResumeRefineryOrchestrator:
         suppressed_hm_issues.update(repair_pass.accepted_hm_issues)
         suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
         suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
-        suppressed_consistency_issues.update(repair_pass.accepted_consistency_issues)
         suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
 
         updated_exempted = ExemptedPhrases(
@@ -326,7 +323,6 @@ class ResumeRefineryOrchestrator:
             hm_issues=sorted(suppressed_hm_issues),
             pruning_issues=sorted(suppressed_pruning_issues),
             ats_issues=sorted(suppressed_ats_issues),
-            consistency_issues=sorted(suppressed_consistency_issues),
             grammar_issues=sorted(suppressed_grammar_issues),
         )
 
@@ -354,13 +350,13 @@ class ResumeRefineryOrchestrator:
 
         # Apply post-filter suppressions to review results.
         (reviews_truth, reviews_voice, reviews_ai, reviews_hm,
-         reviews_pruning, reviews_ats, reviews_consistency, reviews_grammar) = self._apply_suppressions(
+         reviews_pruning, reviews_ats, reviews_grammar) = self._apply_suppressions(
             reviews.truthfulness, reviews.voice, reviews.ai_detection,
             reviews.hiring_manager, reviews.relevance_pruning,
-            reviews.ats_keyword, reviews.consistency, reviews.grammar,
+            reviews.ats_keyword, reviews.grammar,
             suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
             suppressed_hm_issues, suppressed_pruning_issues,
-            suppressed_ats_issues, suppressed_consistency_issues, suppressed_grammar_issues,
+            suppressed_ats_issues, suppressed_grammar_issues,
         )
         reviews = ReviewBundle(
             truthfulness=reviews_truth,
@@ -369,7 +365,6 @@ class ResumeRefineryOrchestrator:
             hiring_manager=reviews_hm,
             relevance_pruning=reviews_pruning,
             ats_keyword=reviews_ats,
-            consistency=reviews_consistency,
             grammar=reviews_grammar,
         )
 
@@ -377,7 +372,7 @@ class ResumeRefineryOrchestrator:
         if any([updated_exempted.claims, updated_exempted.ai_phrases,
                 updated_exempted.voice_issues, updated_exempted.hm_issues,
                 updated_exempted.pruning_issues, updated_exempted.ats_issues,
-                updated_exempted.consistency_issues, updated_exempted.grammar_issues]):
+                updated_exempted.grammar_issues]):
             self.store.save_suppressions(session, updated_exempted)
 
         exported = self._export(session, current_docs, output_dir=output_dir)
@@ -389,7 +384,7 @@ class ResumeRefineryOrchestrator:
             documents=current_docs,
             reviews=reviews,
             repair_passes=[repair_pass],
-            evidence_pack=context.evidence_pack,
+            narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
             strict_truth_failed=strict_failed and not allow_unverified,
@@ -413,7 +408,7 @@ class ResumeRefineryOrchestrator:
             session=session,
             documents=docs,
             reviews=reviews,
-            evidence_pack=context.evidence_pack,
+            narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
             strict_truth_failed=bool(reviews.truthfulness and not reviews.truthfulness.all_supported),
         )
@@ -487,15 +482,6 @@ class ResumeRefineryOrchestrator:
         except Exception as exc:
             logging.warning("ATS-keyword review failed (%s)", exc)
         try:
-            consistency_review = self.verification_agent.review_consistency(
-                docs,
-                exemptions=exempted.consistency_issues if exempted and exempted.consistency_issues else None,
-            )
-            reviews = reviews.model_copy(update={"consistency": consistency_review})
-            self._progress(progress, self._summarise_consistency(consistency_review))
-        except Exception as exc:
-            logging.warning("Consistency review failed (%s)", exc)
-        try:
             grammar_review = self.verification_agent.review_grammar(
                 docs,
                 exemptions=exempted.grammar_issues if exempted and exempted.grammar_issues else None,
@@ -513,11 +499,11 @@ class ResumeRefineryOrchestrator:
         job: JobDescription,
         progress: ProgressCallback | None = None,
     ) -> DraftingContext:
-        self._progress(progress, "Extracting evidence pack...")
-        evidence_pack = self.evidence_agent.build_evidence_pack(career, job)
+        self._progress(progress, "Building candidacy narrative...")
+        narrative = self.narrative_agent.build_narrative(career, job)
         self._progress(progress, "Distilling voice guide...")
         style_guide = self.voice_agent.build_style_guide(voice)
-        return DraftingContext(evidence_pack=evidence_pack, voice_style_guide=style_guide)
+        return DraftingContext(narrative=narrative, voice_style_guide=style_guide)
 
     def _verify_and_repair(
         self,
@@ -542,10 +528,9 @@ class ResumeRefineryOrchestrator:
         hm_result: HiringManagerReview | None = None
         pruning_result: RelevancePruningResult | None = None
         ats_result: ATSKeywordResult | None = None
-        consistency_result: ConsistencyResult | None = None
         grammar_result: GrammarResult | None = None
 
-        # Per-reviewer suppression sets — accumulated across all repair passes.
+        # Per-reviewer suppression sets â€” accumulated across all repair passes.
         # Each reviewer has its own independent set so a voice false positive
         # cannot accidentally suppress a truthfulness finding (and vice versa).
         suppressed_claims: set[str] = set()
@@ -554,18 +539,17 @@ class ResumeRefineryOrchestrator:
         suppressed_hm_issues: set[str] = set()
         suppressed_pruning_issues: set[str] = set()
         suppressed_ats_issues: set[str] = set()
-        suppressed_consistency_issues: set[str] = set()
         suppressed_grammar_issues: set[str] = set()
 
         repair_sub_pass = 0  # running counter for on_repair_pass snapshots
 
         for pass_num in range(max_passes):
-            self._progress(progress, f"─── Review Pass {pass_num + 1}/{max_passes} ───")
+            self._progress(progress, f"â”€â”€â”€ Review Pass {pass_num + 1}/{max_passes} â”€â”€â”€")
 
             # ============================================================
             # Run all 8 reviewers concurrently
             # ============================================================
-            self._progress(progress, "  Running all reviews (truth, consistency, ATS, grammar, voice, AI, HM, pruning)...")
+            self._progress(progress, "  Running all reviews (truth, ATS, grammar, voice, AI, HM, pruning)...")
 
             def _run_truth():
                 try:
@@ -578,19 +562,6 @@ class ResumeRefineryOrchestrator:
                 except Exception as exc:
                     logging.warning("Truthfulness review failed (%s)", exc)
                     self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_consistency():
-                try:
-                    result = self.verification_agent.review_consistency(
-                        docs,
-                        exemptions=sorted(suppressed_consistency_issues) if suppressed_consistency_issues else None,
-                    )
-                    self._progress(progress, "    \u2713 Consistency review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("Consistency review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Consistency review skipped: {exc}[/yellow]")
                     return None
 
             def _run_ats():
@@ -671,9 +642,8 @@ class ResumeRefineryOrchestrator:
                     self._progress(progress, f"[yellow]Relevance-pruning review skipped: {exc}[/yellow]")
                     return None
 
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 8)) as pool:
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 7)) as pool:
                 truth_future = pool.submit(_run_truth)
-                consistency_future = pool.submit(_run_consistency)
                 ats_future = pool.submit(_run_ats)
                 grammar_future = pool.submit(_run_grammar)
                 voice_future = pool.submit(_run_voice)
@@ -682,7 +652,6 @@ class ResumeRefineryOrchestrator:
                 pruning_future = pool.submit(_run_pruning)
 
                 truth = truth_future.result()
-                consistency_result = consistency_future.result()
                 ats_result = ats_future.result()
                 grammar_result = grammar_future.result()
                 voice_result = voice_future.result()
@@ -691,12 +660,12 @@ class ResumeRefineryOrchestrator:
                 pruning_result = pruning_future.result()
 
             # Filter out items accepted as false positives in earlier passes.
-            truth, voice_result, ai_result, hm_result, pruning_result, ats_result, consistency_result, grammar_result = self._apply_suppressions(
+            truth, voice_result, ai_result, hm_result, pruning_result, ats_result, grammar_result = self._apply_suppressions(
                 truth, voice_result, ai_result, hm_result, pruning_result,
-                ats_result, consistency_result, grammar_result,
+                ats_result, grammar_result,
                 suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
                 suppressed_hm_issues, suppressed_pruning_issues,
-                suppressed_ats_issues, suppressed_consistency_issues, suppressed_grammar_issues,
+                suppressed_ats_issues, suppressed_grammar_issues,
             )
 
             # Summarise all reviews
@@ -704,8 +673,6 @@ class ResumeRefineryOrchestrator:
                 self._progress(progress, self._summarise_truth(truth))
             if ats_result:
                 self._progress(progress, self._summarise_ats_keyword(ats_result))
-            if consistency_result:
-                self._progress(progress, self._summarise_consistency(consistency_result))
             if grammar_result:
                 self._progress(progress, self._summarise_grammar(grammar_result))
             if voice_result:
@@ -720,14 +687,11 @@ class ResumeRefineryOrchestrator:
             # Check all gates
             truth_ok = truth is None or truth.all_supported
             ats_ok = ats_result is None or ats_result.alignment_score in ("strong", "moderate")
-            consistency_ok = consistency_result is None or consistency_result.consistent
 
             is_late_pass = pass_num >= _RELAXED_PASS_START
             if is_late_pass:
                 grammar_ok = grammar_result is None or (
-                    len(grammar_result.cover_letter_issues)
-                    + len(grammar_result.resume_issues)
-                    + len(grammar_result.interview_guide_issues)
+                    len(grammar_result.resume_issues)
                 ) <= 2
             else:
                 grammar_ok = grammar_result is None or grammar_result.clean
@@ -736,19 +700,15 @@ class ResumeRefineryOrchestrator:
 
             if is_late_pass:
                 total_ai_flags = (
-                    len(ai_result.cover_letter_flags)
-                    + len(ai_result.resume_flags)
+                    len(ai_result.resume_flags)
                 ) if ai_result else 0
                 ai_ok = ai_result is None or total_ai_flags <= _AI_FLAG_TOLERANCE_LATE
             else:
-                ai_ok = ai_result is None or not any([
-                    ai_result.cover_letter_flags,
-                    ai_result.resume_flags,
-                ])
+                ai_ok = ai_result is None or not ai_result.resume_flags
 
-            # Hiring manager and relevance pruning are advisory — they feed
+            # Hiring manager and relevance pruning are advisory â€” they feed
             # findings into repair but never block convergence (no hard gate).
-            all_ok = truth_ok and ats_ok and consistency_ok and grammar_ok and voice_ok and ai_ok
+            all_ok = truth_ok and ats_ok and grammar_ok and voice_ok and ai_ok
 
             if all_ok:
                 break
@@ -762,7 +722,6 @@ class ResumeRefineryOrchestrator:
                 hm_review=hm_result,
                 pruning_review=pruning_result,
                 ats_review=ats_result,
-                consistency_review=consistency_result,
                 grammar_review=grammar_result,
                 pass_num=pass_num,
                 prior_edits=self._build_prior_edits(repair_results),
@@ -774,11 +733,10 @@ class ResumeRefineryOrchestrator:
             suppressed_hm_issues.update(repair_pass.accepted_hm_issues)
             suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
             suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
-            suppressed_consistency_issues.update(repair_pass.accepted_consistency_issues)
             suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
             if repair_pass.edits:
                 self._progress(progress, self._summarise_repair(repair_pass))
-            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_consistency_issues or repair_pass.accepted_grammar_issues:
+            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_grammar_issues:
                 self._progress(progress, self._summarise_acceptances(repair_pass))
             if repair_pass.failed_edits:
                 self._progress(progress, self._summarise_failed_edits(repair_pass))
@@ -791,7 +749,6 @@ class ResumeRefineryOrchestrator:
                     hiring_manager=hm_result,
                     relevance_pruning=pruning_result,
                     ats_keyword=ats_result,
-                    consistency=consistency_result,
                     grammar=grammar_result,
                 )
                 on_repair_pass(repair_sub_pass, docs, pass_reviews)
@@ -804,7 +761,6 @@ class ResumeRefineryOrchestrator:
             hiring_manager=hm_result,
             relevance_pruning=pruning_result,
             ats_keyword=ats_result,
-            consistency=consistency_result,
             grammar=grammar_result,
         ), repair_results, ExemptedPhrases(
             claims=sorted(suppressed_claims),
@@ -813,7 +769,6 @@ class ResumeRefineryOrchestrator:
             hm_issues=sorted(suppressed_hm_issues),
             pruning_issues=sorted(suppressed_pruning_issues),
             ats_issues=sorted(suppressed_ats_issues),
-            consistency_issues=sorted(suppressed_consistency_issues),
             grammar_issues=sorted(suppressed_grammar_issues),
         )
 
@@ -847,7 +802,6 @@ class ResumeRefineryOrchestrator:
         hm_result: HiringManagerReview | None,
         pruning_result: RelevancePruningResult | None,
         ats_result: ATSKeywordResult | None,
-        consistency_result: ConsistencyResult | None,
         grammar_result: GrammarResult | None,
         suppressed_claims: set[str],
         suppressed_ai_phrases: set[str],
@@ -855,9 +809,8 @@ class ResumeRefineryOrchestrator:
         suppressed_hm_issues: set[str],
         suppressed_pruning_issues: set[str],
         suppressed_ats_issues: set[str],
-        suppressed_consistency_issues: set[str],
         suppressed_grammar_issues: set[str],
-    ) -> tuple[TruthfulnessResult | None, VoiceReviewResult | None, AIDetectionResult | None, HiringManagerReview | None, RelevancePruningResult | None, ATSKeywordResult | None, ConsistencyResult | None, GrammarResult | None]:
+    ) -> tuple[TruthfulnessResult | None, VoiceReviewResult | None, AIDetectionResult | None, HiringManagerReview | None, RelevancePruningResult | None, ATSKeywordResult | None, GrammarResult | None]:
         """Return copies of review results with suppressed items removed.
 
         Each reviewer has its own independent suppression set so that accepting
@@ -870,28 +823,20 @@ class ResumeRefineryOrchestrator:
             def _filter_doc(doc: DocumentTruthResult) -> DocumentTruthResult:
                 remaining = [c for c in doc.unsupported_claims if c not in suppressed_claims]
                 return doc.model_copy(update={"unsupported_claims": remaining, "pass_strict": not remaining})
-            cl = _filter_doc(truth.cover_letter)
             res = _filter_doc(truth.resume)
-            ig = _filter_doc(truth.interview_guide)
             filtered_truth = truth.model_copy(update={
-                "cover_letter": cl,
                 "resume": res,
-                "interview_guide": ig,
-                "all_supported": cl.pass_strict and res.pass_strict and ig.pass_strict,
+                "all_supported": res.pass_strict,
             })
 
         # --- AI detection ---
         filtered_ai = ai_result
         if ai_result and suppressed_ai_phrases:
-            cl_flags = [f for f in ai_result.cover_letter_flags if f not in suppressed_ai_phrases]
             res_flags = [f for f in ai_result.resume_flags if f not in suppressed_ai_phrases]
-            ig_flags = [f for f in ai_result.interview_guide_flags if f not in suppressed_ai_phrases]
-            total = len(cl_flags) + len(res_flags) + len(ig_flags)
+            total = len(res_flags)
             risk = "low" if total <= 1 else "medium" if total <= 3 else "high"
             filtered_ai = ai_result.model_copy(update={
-                "cover_letter_flags": cl_flags,
                 "resume_flags": res_flags,
-                "interview_guide_flags": ig_flags,
                 "risk_level": risk,
             })
 
@@ -899,7 +844,6 @@ class ResumeRefineryOrchestrator:
         filtered_voice = voice_result
         if voice_result and suppressed_voice_issues:
             filtered_voice = voice_result.model_copy(update={
-                "cover_letter_issues": [i for i in voice_result.cover_letter_issues if i not in suppressed_voice_issues],
                 "resume_issues": [i for i in voice_result.resume_issues if i not in suppressed_voice_issues],
                 "specific_issues": [i for i in voice_result.specific_issues if i not in suppressed_voice_issues],
             })
@@ -908,10 +852,6 @@ class ResumeRefineryOrchestrator:
         filtered_hm = hm_result
         if hm_result and suppressed_hm_issues:
             filtered_hm = hm_result.model_copy(update={
-                "cover_letter_issues": [
-                    i for i in hm_result.cover_letter_issues
-                    if i.phrase not in suppressed_hm_issues
-                ],
                 "resume_issues": [
                     i for i in hm_result.resume_issues
                     if i.phrase not in suppressed_hm_issues
@@ -922,10 +862,6 @@ class ResumeRefineryOrchestrator:
         filtered_pruning = pruning_result
         if pruning_result and suppressed_pruning_issues:
             filtered_pruning = pruning_result.model_copy(update={
-                "cover_letter_issues": [
-                    i for i in pruning_result.cover_letter_issues
-                    if i.phrase not in suppressed_pruning_issues
-                ],
                 "resume_issues": [
                     i for i in pruning_result.resume_issues
                     if i.phrase not in suppressed_pruning_issues
@@ -951,33 +887,16 @@ class ResumeRefineryOrchestrator:
                 "alignment_score": score,
             })
 
-        # --- Consistency ---
-        filtered_consistency = consistency_result
-        if consistency_result and suppressed_consistency_issues:
-            filtered_issues = [
-                i for i in consistency_result.issues
-                if i.quote_a not in suppressed_consistency_issues
-                and i.quote_b not in suppressed_consistency_issues
-            ]
-            filtered_consistency = consistency_result.model_copy(update={
-                "issues": filtered_issues,
-                "consistent": not filtered_issues,
-            })
-
         # --- Grammar ---
         filtered_grammar = grammar_result
         if grammar_result and suppressed_grammar_issues:
-            cl_issues = [i for i in grammar_result.cover_letter_issues if i.phrase not in suppressed_grammar_issues]
             res_issues = [i for i in grammar_result.resume_issues if i.phrase not in suppressed_grammar_issues]
-            ig_issues = [i for i in grammar_result.interview_guide_issues if i.phrase not in suppressed_grammar_issues]
             filtered_grammar = grammar_result.model_copy(update={
-                "cover_letter_issues": cl_issues,
                 "resume_issues": res_issues,
-                "interview_guide_issues": ig_issues,
-                "clean": not (cl_issues or res_issues or ig_issues),
+                "clean": not res_issues,
             })
 
-        return filtered_truth, filtered_voice, filtered_ai, filtered_hm, filtered_pruning, filtered_ats, filtered_consistency, filtered_grammar
+        return filtered_truth, filtered_voice, filtered_ai, filtered_hm, filtered_pruning, filtered_ats, filtered_grammar
 
     # ------------------------------------------------------------------
     # Prior-edit context builder (annotated pass-through)
@@ -993,7 +912,7 @@ class ResumeRefineryOrchestrator:
         regions, we pass this context to the repair agent so it can make
         informed fix/merge/accept decisions.
 
-        Returns a dict mapping document key → human-readable prior-edit summary.
+        Returns a dict mapping document key â†’ human-readable prior-edit summary.
         """
         from .models import REVIEWER_PRIORITY_RANK
 
@@ -1018,7 +937,7 @@ class ResumeRefineryOrchestrator:
                     )
                 elif replace_text:
                     lines.append(
-                        f'- [{reviewer}] "{find_text[:80]}" → "{replace_text[:80]}"'
+                        f'- [{reviewer}] "{find_text[:80]}" â†’ "{replace_text[:80]}"'
                         + (f"  ({reason[:60]})" if reason else "")
                     )
                 else:
@@ -1040,68 +959,55 @@ class ResumeRefineryOrchestrator:
             parts = ["[green]Truthfulness: ALL SUPPORTED[/green]"]
         else:
             parts = ["[red]Truthfulness: UNSUPPORTED CLAIMS DETECTED[/red]"]
-        for label, doc in [("Cover Letter", truth.cover_letter),
-                           ("Resume", truth.resume),
-                           ("Interview Guide", truth.interview_guide)]:
-            status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗ ({len(doc.unsupported_claims)} unsupported)[/red]"
-            parts.append(f"  {label}: {status}")
-            if not doc.pass_strict:
-                for claim in doc.unsupported_claims:
-                    parts.append(f"    • {claim}")
+        doc = truth.resume
+        status = "[green]âœ“[/green]" if doc.pass_strict else f"[red]âœ— ({len(doc.unsupported_claims)} unsupported)[/red]"
+        parts.append(f"  Resume: {status}")
+        if not doc.pass_strict:
+            for claim in doc.unsupported_claims:
+                parts.append(f"    â€¢ {claim}")
         return "\n".join(parts)
 
     def _summarise_voice(self, voice: VoiceReviewResult) -> str:
         color = {"strong": "green", "moderate": "yellow", "weak": "red"}[voice.overall_match]
         parts = [f"[{color}]Voice match: {voice.overall_match.upper()}[/{color}]"]
-        for label, match, issues in [
-            ("Cover Letter", voice.cover_letter_match, voice.cover_letter_issues),
-            ("Resume", voice.resume_match, voice.resume_issues),
-        ]:
-            mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
-            parts.append(f"  {label}: [{mc}]{match}[/{mc}]")
-            if match != "strong" and issues:
-                for issue in issues:
-                    parts.append(f"    • {issue}")
+        mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[voice.resume_match]
+        parts.append(f"  Resume: [{mc}]{voice.resume_match}[/{mc}]")
+        if voice.resume_match != "strong" and voice.resume_issues:
+            for issue in voice.resume_issues:
+                parts.append(f"    â€¢ {issue}")
         return "\n".join(parts)
 
     def _summarise_ai(self, ai: AIDetectionResult) -> str:
         color = {"low": "green", "medium": "yellow", "high": "red"}[ai.risk_level]
         parts = [f"[{color}]AI-detection risk: {ai.risk_level.upper()}[/{color}]"]
-        for label, flags in [
-            ("Cover Letter", ai.cover_letter_flags),
-            ("Resume", ai.resume_flags),
-            ("Interview Guide", ai.interview_guide_flags),
-        ]:
-            if flags:
-                parts.append(f"  {label}: {len(flags)} flag(s)")
-                for flag in flags:
-                    parts.append(f'    • "{flag}"')
+        if ai.resume_flags:
+            parts.append(f"  Resume: {len(ai.resume_flags)} flag(s)")
+            for flag in ai.resume_flags:
+                parts.append(f'    â€¢ "{flag}"')
         return "\n".join(parts)
 
     def _summarise_hiring_manager(self, hm: HiringManagerReview) -> str:
         pct = hm.advance_likelihood
         color = "green" if pct >= 70 else "yellow" if pct >= 40 else "red"
-        total_issues = len(hm.cover_letter_issues) + len(hm.resume_issues)
+        total_issues = len(hm.resume_issues)
         parts = [f"[{color}]Hiring-manager advance likelihood: {pct}% ({total_issues} issue(s))[/{color}]"]
         if hm.summary:
             parts.append(f"  {hm.summary}")
-        for label, issues in [("Cover Letter", hm.cover_letter_issues), ("Resume", hm.resume_issues)]:
-            if issues:
-                parts.append(f"  {label}:")
-                for i in issues:
-                    parts.append(f'    [{i.impact.upper()}] "{i.phrase[:80]}" — {i.issue}')
+        if hm.resume_issues:
+            parts.append("  Resume:")
+            for i in hm.resume_issues:
+                parts.append(f'    [{i.impact.upper()}] "{i.phrase[:80]}" â€” {i.issue}')
         return "\n".join(parts)
 
     def _summarise_relevance_pruning(self, pruning: RelevancePruningResult) -> str:
         density = pruning.overall_density
         color = "green" if density == "lean" else "yellow" if density == "balanced" else "red"
-        total = len(pruning.cover_letter_issues) + len(pruning.resume_issues)
+        total = len(pruning.resume_issues)
         parts = [f"[{color}]Relevance pruning: {density} ({total} removal candidate(s))[/{color}]"]
-        for label, issues in [("Cover Letter", pruning.cover_letter_issues), ("Resume", pruning.resume_issues)]:
-            if issues:
-                parts.append(f"  {label}:")
-                for issue in issues:
-                    parts.append(f'    [{issue.severity.upper()}] ({issue.category}) "{issue.phrase[:80]}" \u2014 {issue.reason}')
+        if pruning.resume_issues:
+            parts.append("  Resume:")
+            for issue in pruning.resume_issues:
+                parts.append(f'    [{issue.severity.upper()}] ({issue.category}) "{issue.phrase[:80]}" — {issue.reason}')
         return "\n".join(parts)
 
     def _summarise_ats_keyword(self, ats: ATSKeywordResult) -> str:
@@ -1112,39 +1018,22 @@ class ResumeRefineryOrchestrator:
         if ats.missing_keywords:
             parts.append("  Missing keywords:")
             for kw in ats.missing_keywords:
-                parts.append(f'    [{kw.priority.upper()}] "{kw.keyword}" — {kw.suggestion}')
+                parts.append(f'    [{kw.priority.upper()}] "{kw.keyword}" â€” {kw.suggestion}')
         if ats.stuffing_keywords:
             parts.append("  Keyword stuffing:")
             for kw in ats.stuffing_keywords:
-                parts.append(f'    "{kw.keyword}" in {kw.section} — {kw.suggestion}')
-        return "\n".join(parts)
-
-    def _summarise_consistency(self, consistency: ConsistencyResult) -> str:
-        if consistency.consistent:
-            return "[green]Cross-document consistency: NO CONTRADICTIONS[/green]"
-        parts = [f"[red]Cross-document consistency: {len(consistency.issues)} CONTRADICTION(S)[/red]"]
-        for issue in consistency.issues:
-            parts.append(
-                f'  [{issue.severity.upper()}] {issue.field}: '
-                f'"{issue.quote_a[:60]}" ({issue.document_a}) vs '
-                f'"{issue.quote_b[:60]}" ({issue.document_b})'
-            )
+                parts.append(f'    "{kw.keyword}" in {kw.section} â€” {kw.suggestion}')
         return "\n".join(parts)
 
     def _summarise_grammar(self, grammar: GrammarResult) -> str:
-        total = len(grammar.cover_letter_issues) + len(grammar.resume_issues) + len(grammar.interview_guide_issues)
+        total = len(grammar.resume_issues)
         if grammar.clean:
             return "[green]Grammar & mechanics: CLEAN[/green]"
         parts = [f"[red]Grammar & mechanics: {total} issue(s)[/red]"]
-        for label, issues in [
-            ("Cover Letter", grammar.cover_letter_issues),
-            ("Resume", grammar.resume_issues),
-            ("Interview Guide", grammar.interview_guide_issues),
-        ]:
-            if issues:
-                parts.append(f"  {label}:")
-                for issue in issues:
-                    parts.append(f'    [{issue.severity.upper()}] ({issue.category}) "{issue.phrase[:60]}" — {issue.issue}')
+        if grammar.resume_issues:
+            parts.append("  Resume:")
+            for issue in grammar.resume_issues:
+                parts.append(f'    [{issue.severity.upper()}] ({issue.category}) "{issue.phrase[:60]}" â€” {issue.issue}')
         return "\n".join(parts)
 
     def _summarise_repair(self, repair_pass: RepairPassResult) -> str:
@@ -1166,35 +1055,31 @@ class ResumeRefineryOrchestrator:
         if repair_pass.accepted_claims:
             parts.append("  [cyan]Truthfulness claims (accepted as supported by career evidence):[/cyan]")
             for claim in repair_pass.accepted_claims:
-                parts.append(f'    [cyan]✓ "{claim}"[/cyan]')
+                parts.append(f'    [cyan]âœ“ "{claim}"[/cyan]')
         if repair_pass.accepted_ai_phrases:
             parts.append("  [cyan]AI-detection flags (accepted as natural human language):[/cyan]")
             for phrase in repair_pass.accepted_ai_phrases:
-                parts.append(f'    [cyan]✓ "{phrase}"[/cyan]')
+                parts.append(f'    [cyan]âœ“ "{phrase}"[/cyan]')
         if repair_pass.accepted_voice_issues:
             parts.append("  [cyan]Voice-match issues (accepted as reviewer false positives):[/cyan]")
             for issue in repair_pass.accepted_voice_issues:
-                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
+                parts.append(f'    [cyan]âœ“ "{issue}"[/cyan]')
         if repair_pass.accepted_hm_issues:
             parts.append("  [cyan]Hiring-manager issues (accepted as false positives):[/cyan]")
             for issue in repair_pass.accepted_hm_issues:
-                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
+                parts.append(f'    [cyan]âœ“ "{issue}"[/cyan]')
         if repair_pass.accepted_pruning_issues:
             parts.append("  [cyan]Relevance-pruning issues (accepted as valuable content):[/cyan]")
             for issue in repair_pass.accepted_pruning_issues:
-                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
+                parts.append(f'    [cyan]âœ“ "{issue}"[/cyan]')
         if repair_pass.accepted_ats_issues:
             parts.append("  [cyan]ATS-keyword issues (accepted as adequately represented):[/cyan]")
             for issue in repair_pass.accepted_ats_issues:
-                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
-        if repair_pass.accepted_consistency_issues:
-            parts.append("  [cyan]Consistency issues (accepted as not contradictory):[/cyan]")
-            for issue in repair_pass.accepted_consistency_issues:
-                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
+                parts.append(f'    [cyan]âœ“ "{issue}"[/cyan]')
         if repair_pass.accepted_grammar_issues:
             parts.append("  [cyan]Grammar issues (accepted as correct/intentional):[/cyan]")
             for issue in repair_pass.accepted_grammar_issues:
-                parts.append(f'    [cyan]✓ "{issue}"[/cyan]')
+                parts.append(f'    [cyan]âœ“ "{issue}"[/cyan]')
         return "\n".join(parts)
 
     def _summarise_failed_edits(self, repair_pass: RepairPassResult) -> str:
@@ -1207,16 +1092,14 @@ class ResumeRefineryOrchestrator:
             for fail in failures:
                 find_snippet = fail.get("find", "")[:80]
                 reason = fail.get("reason", "")
-                parts.append(f'    [yellow]✗ "{find_snippet}"[/yellow]')
+                parts.append(f'    [yellow]âœ— "{find_snippet}"[/yellow]')
                 if reason:
                     parts.append(f"      ({reason})")
         return "\n".join(parts)
 
     def _doc_labels(self, selected: list[DocumentKey] | None = None) -> dict[DocumentKey, str]:
         all_labels: dict[DocumentKey, str] = {
-            "cover_letter": "Cover Letter",
             "resume": "Resume",
-            "interview_guide": "Interview Guide",
         }
         if selected is None:
             return all_labels

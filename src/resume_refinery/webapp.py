@@ -18,7 +18,7 @@ import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
-from .models import DocumentSet, DraftingContext, EvidencePack, OrchestrationResult, ReviewBundle
+from .models import CandidacyNarrative, DocumentSet, DraftingContext, OrchestrationResult, ReviewBundle
 from .orchestrator import ResumeRefineryOrchestrator
 from .parsers import (
     parse_career_profile_content,
@@ -271,9 +271,7 @@ def _truth_failed(truth) -> bool:
 
 
 _DOC_LABELS: dict[str, str] = {
-    "cover_letter": "Cover Letter",
     "resume": "Resume",
-    "interview_guide": "Interview Guide",
 }
 
 
@@ -282,39 +280,17 @@ def _doc_label(key: str) -> str:
     return _DOC_LABELS.get(key, key)
 
 
-def _doc_cards(docs, selected_docs: list[str], esc) -> str:
-    """Build HTML cards only for selected documents."""
-    from .models import DocumentKey
-
-    cards: list[str] = []
-    # Use a 2-column grid for the first pair, then a single card for third
-    grid_keys = [k for k in ("cover_letter", "resume") if k in selected_docs]
-    extra_keys = [k for k in ("interview_guide",) if k in selected_docs]
-
-    if grid_keys:
-        inner = ""
-        for k in grid_keys:
-            label = _doc_label(k)
-            content = docs.get(k)
-            inner += (
-                f'<div class="card"><h2>{html.escape(label)} '
-                f'<button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2>'
-                f'<div class="rendered-md">{_render_md(content)}</div>'
-                f'<pre style="display:none">{esc(content)}</pre></div>'
-            )
-        cards.append(f'<div class="grid">{inner}</div>')
-
-    for k in extra_keys:
-        label = _doc_label(k)
-        content = docs.get(k)
-        cards.append(
-            f'<div class="card"><h2>{html.escape(label)} '
-            f'<button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2>'
-            f'<div class="rendered-md">{_render_md(content)}</div>'
-            f'<pre style="display:none">{esc(content)}</pre></div>'
-        )
-
-    return "\n".join(cards)
+def _doc_cards(docs, esc) -> str:
+    """Build HTML card for the resume document."""
+    content = docs.get("resume")
+    if not content:
+        return "<div class='card'><p class='muted'>No resume generated yet.</p></div>"
+    return (
+        '<div class="card"><h2>Resume '
+        '<button class="view-toggle" onclick="toggleView(this)">Show raw</button></h2>'
+        f'<div class="rendered-md">{_render_md(content)}</div>'
+        f'<pre style="display:none">{esc(content)}</pre></div>'
+    )
 
 
 def _truth_summary(truth) -> str:
@@ -323,19 +299,14 @@ def _truth_summary(truth) -> str:
     status = "PASS" if truth.all_supported else "FAIL"
     klass = "ok" if truth.all_supported else "bad"
     parts = [f"<p>Strict truth check: <span class='{klass}'>{status}</span></p>"]
-    for label, doc_result in [
-        ("Cover Letter", truth.cover_letter),
-        ("Resume", truth.resume),
-        ("Interview Guide", truth.interview_guide),
-    ]:
-        claims = doc_result.unsupported_claims
-        if claims:
-            parts.append(f"<h3>{label} — {len(claims)} unsupported claim(s)</h3><ul>")
-            for claim in claims:
-                parts.append(f"<li>&ldquo;{html.escape(claim)}&rdquo;</li>")
-            parts.append("</ul>")
-        else:
-            parts.append(f"<p><strong>{label}</strong>: <span class='ok'>all claims supported</span></p>")
+    claims = truth.resume.unsupported_claims
+    if claims:
+        parts.append(f"<h3>Resume — {len(claims)} unsupported claim(s)</h3><ul>")
+        for claim in claims:
+            parts.append(f"<li>&ldquo;{html.escape(claim)}&rdquo;</li>")
+        parts.append("</ul>")
+    else:
+        parts.append("<p><strong>Resume</strong>: <span class='ok'>all claims supported</span></p>")
     return "".join(parts)
 
 
@@ -347,15 +318,12 @@ def _voice_summary(voice) -> str:
     parts = [
         f"<p>Voice match: <span class='{klass}' style='font-size:1.1em'>{html.escape(match)}</span></p>",
     ]
-    for label, assessment, per_match in [
-        ("Cover Letter", voice.cover_letter_assessment, getattr(voice, "cover_letter_match", None)),
-        ("Resume", voice.resume_assessment, getattr(voice, "resume_match", None)),
-    ]:
-        badge = ""
-        if per_match:
-            m_cls = "ok" if per_match == "strong" else "muted" if per_match == "moderate" else "bad"
-            badge = f" <span class='{m_cls}'>[{html.escape(per_match)}]</span>"
-        parts.append(f"<p><strong>{label}</strong>{badge}: {html.escape(assessment or '—')}</p>")
+    badge = ""
+    per_match = getattr(voice, "resume_match", None)
+    if per_match:
+        m_cls = "ok" if per_match == "strong" else "muted" if per_match == "moderate" else "bad"
+        badge = f" <span class='{m_cls}'>[{html.escape(per_match)}]</span>"
+    parts.append(f"<p><strong>Resume</strong>{badge}: {html.escape(voice.resume_assessment or '—')}</p>")
     if voice.specific_issues:
         parts.append("<h3>Issues</h3><ul>")
         for issue in voice.specific_issues:
@@ -372,15 +340,11 @@ def _ai_detection_summary(ai) -> str:
     parts = [
         f"<p>AI-detection risk: <span class='{klass}' style='font-size:1.1em'>{html.escape(risk)}</span></p>",
     ]
-    for label, flags in [
-        ("Cover Letter", ai.cover_letter_flags),
-        ("Resume", ai.resume_flags),
-    ]:
-        if flags:
-            parts.append(f"<h3>{label} Flags</h3><ul>")
-            for flag in flags:
-                parts.append(f"<li>&ldquo;{html.escape(flag)}&rdquo;</li>")
-            parts.append("</ul>")
+    if ai.resume_flags:
+        parts.append("<h3>Resume Flags</h3><ul>")
+        for flag in ai.resume_flags:
+            parts.append(f"<li>&ldquo;{html.escape(flag)}&rdquo;</li>")
+        parts.append("</ul>")
     return "".join(parts)
 
 
@@ -419,22 +383,21 @@ def _relevance_pruning_summary(pruning) -> str:
         return "<p class='muted'>No relevance-pruning review available.</p>"
     density = pruning.overall_density
     klass = "ok" if density == "lean" else "muted" if density == "balanced" else "bad"
-    total = len(pruning.cover_letter_issues) + len(pruning.resume_issues)
+    total = len(pruning.resume_issues)
     parts = [
         f"<p>Overall density: <span class='{klass}' style='font-size:1.1em'>{html.escape(density)}</span>"
         f" ({total} removal candidate{'s' if total != 1 else ''})</p>",
     ]
-    for label, issues in [("Cover Letter", pruning.cover_letter_issues), ("Resume", pruning.resume_issues)]:
-        if issues:
-            parts.append(f"<h3>{label}</h3><ul>")
-            for issue in issues:
-                impact_badge = {"high": "bad", "medium": "muted", "low": "muted"}[issue.severity]
-                parts.append(
-                    f"<li><span class='{impact_badge}'>[{html.escape(issue.severity.upper())}]</span> "
-                    f"<strong>{html.escape(issue.category)}</strong>: "
-                    f"&ldquo;{html.escape(issue.phrase[:120])}&rdquo; &mdash; {html.escape(issue.reason)}</li>"
-                )
-            parts.append("</ul>")
+    if pruning.resume_issues:
+        parts.append("<h3>Resume</h3><ul>")
+        for issue in pruning.resume_issues:
+            impact_badge = {"high": "bad", "medium": "muted", "low": "muted"}[issue.severity]
+            parts.append(
+                f"<li><span class='{impact_badge}'>[{html.escape(issue.severity.upper())}]</span> "
+                f"<strong>{html.escape(issue.category)}</strong>: "
+                f"&ldquo;{html.escape(issue.phrase[:120])}&rdquo; &mdash; {html.escape(issue.reason)}</li>"
+            )
+        parts.append("</ul>")
     return "".join(parts)
 
 
@@ -470,101 +433,55 @@ def _ats_keyword_summary(ats) -> str:
     return "".join(parts)
 
 
-def _consistency_summary(consistency) -> str:
-    if not consistency:
-        return "<p class='muted'>No cross-document consistency review available.</p>"
-    if consistency.consistent:
-        return "<p class='ok'>No contradictions found across documents.</p>"
-    parts = [f"<p class='bad'>{len(consistency.issues)} contradiction(s) found.</p><ul>"]
-    for issue in consistency.issues:
-        badge = "bad" if issue.severity == "high" else "muted"
-        parts.append(
-            f"<li><span class='{badge}'>[{html.escape(issue.severity.upper())}]</span> "
-            f"<strong>{html.escape(issue.field)}</strong>: "
-            f"&ldquo;{html.escape(issue.quote_a[:80])}&rdquo; ({html.escape(issue.document_a)}) vs "
-            f"&ldquo;{html.escape(issue.quote_b[:80])}&rdquo; ({html.escape(issue.document_b)})</li>"
-        )
-    parts.append("</ul>")
-    return "".join(parts)
-
-
 def _grammar_summary(grammar) -> str:
     if not grammar:
         return "<p class='muted'>No grammar review available.</p>"
-    total = len(grammar.cover_letter_issues) + len(grammar.resume_issues) + len(grammar.interview_guide_issues)
     if grammar.clean:
         return "<p class='ok'>No grammar or mechanics issues found.</p>"
+    total = len(grammar.resume_issues)
     parts = [f"<p class='bad'>{total} issue(s) found.</p>"]
-    for label, issues in [
-        ("Cover Letter", grammar.cover_letter_issues),
-        ("Resume", grammar.resume_issues),
-        ("Interview Guide", grammar.interview_guide_issues),
-    ]:
-        if issues:
-            parts.append(f"<h3>{label}</h3><ul>")
-            for issue in issues:
-                badge = "bad" if issue.severity == "high" else "muted"
-                parts.append(
-                    f"<li><span class='{badge}'>[{html.escape(issue.severity.upper())}]</span> "
-                    f"<strong>{html.escape(issue.category)}</strong>: "
-                    f"&ldquo;{html.escape(issue.phrase[:100])}&rdquo; &mdash; {html.escape(issue.issue)}"
-                    f" <em>Suggestion: {html.escape(issue.suggestion[:100])}</em></li>"
-                )
-            parts.append("</ul>")
+    if grammar.resume_issues:
+        parts.append("<h3>Resume</h3><ul>")
+        for issue in grammar.resume_issues:
+            badge = "bad" if issue.severity == "high" else "muted"
+            parts.append(
+                f"<li><span class='{badge}'>[{html.escape(issue.severity.upper())}]</span> "
+                f"<strong>{html.escape(issue.category)}</strong>: "
+                f"&ldquo;{html.escape(issue.phrase[:100])}&rdquo; &mdash; {html.escape(issue.issue)}"
+                f" <em>Suggestion: {html.escape(issue.suggestion[:100])}</em></li>"
+            )
+        parts.append("</ul>")
     return "".join(parts)
 
 
-def _evidence_pack_summary(evidence) -> str:
-    """Render a full evidence pack as HTML cards."""
-    if not evidence:
-        return "<p class='muted'>No evidence pack available.</p>"
+def _narrative_summary(narrative: CandidacyNarrative | None) -> str:
+    """Render the candidacy narrative as an HTML card."""
+    if not narrative:
+        return "<p class='muted'>No candidacy narrative available.</p>"
 
-    parts = []
+    parts = ["<div class='card'><h2>Candidacy Narrative</h2>"]
 
-    # Job requirements
-    parts.append("<div class='card'><h2>Evidence Pack</h2>")
-    parts.append(f"<p>Requirements: {len(evidence.job_requirements)} | "
-                 f"Matches: {len(evidence.matched_evidence)} | "
-                 f"Gaps: {len(evidence.gaps)}</p>")
+    # Thesis
+    if narrative.thesis:
+        parts.append(f"<h3>Thesis</h3><p>{html.escape(narrative.thesis)}</p>")
 
-    if evidence.job_requirements:
-        parts.append("<h3>Job Requirements</h3><ul>")
-        for req in evidence.job_requirements:
-            category_badge = f" <em>[{html.escape(req.category)}]</em>" if req.category else ""
-            excerpt = f" &mdash; <small>{html.escape(req.source_excerpt)}</small>" if req.source_excerpt else ""
-            parts.append(f"<li><strong>{html.escape(req.requirement)}</strong>{category_badge}{excerpt}</li>")
-        parts.append("</ul>")
+    # Pillars
+    if narrative.pillars:
+        parts.append(f"<h3>Pillars ({len(narrative.pillars)})</h3>")
+        for pillar in narrative.pillars:
+            parts.append(f"<h4>{html.escape(pillar.theme)}</h4>")
+            parts.append(f"<p>{html.escape(pillar.argument)}</p>")
+            if pillar.career_evidence:
+                parts.append("<ul>")
+                for ev in pillar.career_evidence:
+                    parts.append(f"<li>{html.escape(ev)}</li>")
+                parts.append("</ul>")
 
-    # Matched evidence
-    if evidence.matched_evidence:
-        parts.append("<h3>Matched Evidence</h3><ul>")
-        for item in evidence.matched_evidence:
-            score_cls = "ok" if item.relevance_score >= 4 else "muted" if item.relevance_score >= 3 else "bad"
-            parts.append(
-                f"<li><span class='{score_cls}'>[{item.relevance_score}/5]</span> "
-                f"<strong>{html.escape(item.requirement)}</strong>: {html.escape(item.evidence)}"
-            )
-            if item.source_excerpt:
-                parts.append(f"<br/><small>Source: {html.escape(item.source_excerpt)}</small>")
-            parts.append("</li>")
-        parts.append("</ul>")
-    else:
-        parts.append("<p class='muted'>No matched evidence extracted.</p>")
-
-    # Gaps
-    if evidence.gaps:
-        parts.append("<h3>Gaps</h3><ul>")
-        for gap in evidence.gaps:
+    # Gap framing
+    if narrative.gap_framing:
+        parts.append("<h3>Gap Framing</h3><ul>")
+        for gap in narrative.gap_framing:
             parts.append(f"<li>{html.escape(gap)}</li>")
-        parts.append("</ul>")
-    else:
-        parts.append("<p class='muted'>No obvious gaps.</p>")
-
-    # Source summary
-    if evidence.source_summary:
-        parts.append("<h3>Source Summary</h3><ul>")
-        for src in evidence.source_summary:
-            parts.append(f"<li>{html.escape(src)}</li>")
         parts.append("</ul>")
 
     parts.append("</div>")
@@ -572,14 +489,14 @@ def _evidence_pack_summary(evidence) -> str:
 
 
 def _artifact_summary(context: DraftingContext | None) -> str:
-    evidence = context.evidence_pack if context else None
+    narrative = context.narrative if context else None
     style = context.voice_style_guide if context else None
-    if not evidence and not style:
+    if not narrative and not style:
         return "<p class='muted'>No orchestration artifacts available.</p>"
 
     parts = ["<div class='grid'>"]
-    if evidence:
-        parts.append(_evidence_pack_summary(evidence))
+    if narrative:
+        parts.append(_narrative_summary(narrative))
     if style:
         style_items = "".join(f"<li>{html.escape(item)}</li>" for item in style.style_rules[:6]) or "<li>No style rules extracted.</li>"
         adjective_items = "".join(f"<li>{html.escape(item)}</li>" for item in style.core_adjectives[:6]) or "<li>No adjectives extracted.</li>"
@@ -713,11 +630,11 @@ def _stream_orchestration(
             result = run_fn(progress=_timed_progress)
             sid = html.escape(result.session.session_id)
             url = redirect_url_fn(result)
-            # Emit evidence pack summary inline in the streaming output
-            if result.evidence_pack:
+            # Emit narrative summary inline in the streaming output
+            if result.narrative:
                 q.put(
                     "</div></div>"  # close progress-log and its card
-                    + _evidence_pack_summary(result.evidence_pack)
+                    + _narrative_summary(result.narrative)
                     + "<div class='card'><div id='progress-log'>"  # re-open for final messages
                 )
             # Final success message + total elapsed time
@@ -773,7 +690,7 @@ def home() -> HTMLResponse:
     body = f"""
 <div class=\"card\">
   <h1>Resume Refinery</h1>
-  <p class=\"muted\">Local-only web app for tailored resume, cover letter, and interview focus points.</p>
+  <p class=\"muted\">Local-only web app for tailored resume generation.</p>
   <p><a href=\"/sessions\">Browse sessions</a> &middot; <a href=\"/career\">Career Builder</a></p>
 </div>
 <div class=\"card\">
@@ -801,10 +718,6 @@ def home() -> HTMLResponse:
       <input type="text" name="output_dir" id="output_dir_new" readonly required />
       <button type="button" onclick="openDirPicker('output_dir_new')">Browse…</button>
     </div>
-    <label style="margin-top:.9rem;margin-bottom:.3rem">Documents to Generate</label>
-    <label><input type=\"checkbox\" name=\"selected_docs\" value=\"resume\" checked /> Resume</label>
-    <label><input type=\"checkbox\" name=\"selected_docs\" value=\"cover_letter\" checked /> Cover Letter</label>
-    <label><input type=\"checkbox\" name=\"selected_docs\" value=\"interview_guide\" checked /> Interview Guide</label>
     <label><input type=\"checkbox\" name=\"skip_review\" value=\"true\" /> Skip voice and AI style reviews</label>
     <label><input type=\"checkbox\" name=\"allow_unverified\" value=\"true\" /> Allow saving when strict truth check fails</label>
 
@@ -824,16 +737,11 @@ async def create_session(
     company: Optional[str] = Form(None),
     title: Optional[str] = Form(None),
     output_dir: str = Form(...),
-    selected_docs: list[str] = Form([]),
     skip_review: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
 ) -> StreamingResponse:
     # Validate output directory
     output_path = _validate_output_dir(output_dir)
-
-    # Validate selected documents
-    valid_keys = {"cover_letter", "resume", "interview_guide"}
-    _selected = [d for d in selected_docs if d in valid_keys] or None
 
     try:
         job_text = (await job_description.read()).decode("utf-8")
@@ -883,7 +791,6 @@ async def create_session(
     def _run(progress):
         session, context = orchestrator.extract_context(
             career, voice, job,
-            selected_docs=_selected,
             progress=progress,
         )
         # Persist generation options for the generate route.
@@ -897,7 +804,7 @@ async def create_session(
             session=session,
             documents=DocumentSet(),
             reviews=ReviewBundle(),
-            evidence_pack=context.evidence_pack,
+            narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
         )
 
@@ -929,89 +836,66 @@ def list_sessions() -> HTMLResponse:
 
 
 @app.get("/sessions/{session_id}/curate", response_class=HTMLResponse)
-def curate_evidence(session_id: str) -> HTMLResponse:
-    """Render the evidence curation page where users can deselect evidence items."""
+def review_narrative(session_id: str) -> HTMLResponse:
+    """Render the narrative review page where users can review the candidacy narrative before generation."""
     session = store.get(session_id)
     context = store.load_staging_context(session)
     if context is None:
         # No staged context — session already generated; redirect to detail.
         return RedirectResponse(f"/sessions/{session_id}", status_code=303)
 
-    evidence = context.evidence_pack
+    narrative = context.narrative
 
-    # --- Build evidence checklist ---
-    req_items = ""
-    if evidence.job_requirements:
-        for req in evidence.job_requirements:
-            category_badge = f" <em>[{html.escape(req.category)}]</em>" if req.category else ""
-            req_items += f"<li><strong>{html.escape(req.requirement)}</strong>{category_badge}</li>"
+    # Build narrative display
+    thesis_html = f"<p>{html.escape(narrative.thesis)}</p>" if narrative.thesis else "<p class='muted'>No thesis generated.</p>"
 
-    evidence_rows = ""
-    if evidence.matched_evidence:
-        for idx, item in enumerate(evidence.matched_evidence):
-            score_cls = "ok" if item.relevance_score >= 4 else "muted" if item.relevance_score >= 3 else "bad"
-            source_html = (
-                f"<br/><small class='muted'>Source: {html.escape(item.source_excerpt)}</small>"
-                if item.source_excerpt else ""
-            )
-            evidence_rows += (
-                f"<tr>"
-                f"<td style='text-align:center'>"
-                f"<input type='checkbox' name='evidence_idx' value='{idx}' checked />"
-                f"</td>"
-                f"<td><span class='{score_cls}'>[{item.relevance_score}/5]</span></td>"
-                f"<td><strong>{html.escape(item.requirement)}</strong></td>"
-                f"<td>{html.escape(item.evidence)}{source_html}</td>"
-                f"</tr>"
+    pillars_html = ""
+    if narrative.pillars:
+        for pillar in narrative.pillars:
+            evidence_items = "".join(f"<li>{html.escape(ev)}</li>" for ev in pillar.career_evidence)
+            pillars_html += (
+                f"<div style='margin-bottom:.8rem'>"
+                f"<h3>{html.escape(pillar.theme)}</h3>"
+                f"<p>{html.escape(pillar.argument)}</p>"
+                f"{'<ul>' + evidence_items + '</ul>' if evidence_items else ''}"
+                f"</div>"
             )
     else:
-        evidence_rows = "<tr><td colspan='4' class='muted'>No matched evidence extracted.</td></tr>"
+        pillars_html = "<p class='muted'>No pillars generated.</p>"
 
     gap_items = ""
-    if evidence.gaps:
-        for gap in evidence.gaps:
+    if narrative.gap_framing:
+        for gap in narrative.gap_framing:
             gap_items += f"<li>{html.escape(gap)}</li>"
 
     body = f"""
 <div class="card">
-  <h1>Curate Evidence</h1>
+  <h1>Review Narrative</h1>
   <p class="muted">{html.escape(session.job_description.title or '—')} @ {html.escape(session.job_description.company or '—')}</p>
-  <p>Review the extracted evidence below. Uncheck any items you want to <strong>exclude</strong> from document generation.</p>
+  <p>Review the candidacy narrative below. This narrative will guide how your resume is framed.</p>
 </div>
+<div class="card">
+  <h2>Thesis</h2>
+  {thesis_html}
+</div>
+<div class="card">
+  <h2>Pillars ({len(narrative.pillars)})</h2>
+  {pillars_html}
+</div>
+{"<div class='card'><h2>Gap Framing</h2><ul>" + gap_items + "</ul></div>" if gap_items else ""}
 <form method="post" action="/sessions/{html.escape(session_id)}/generate">
-<div class="card">
-  <h2>Job Requirements</h2>
-  <ul>{req_items or "<li class='muted'>No requirements extracted.</li>"}</ul>
-</div>
-<div class="card">
-  <h2>Matched Evidence ({len(evidence.matched_evidence)} items)</h2>
-  <p style="margin-bottom:.5rem">
-    <button type="button" onclick="document.querySelectorAll('input[name=evidence_idx]').forEach(cb=>cb.checked=true)" style="font-size:.85em;padding:.3rem .6rem;margin-top:0">Select All</button>
-    <button type="button" onclick="document.querySelectorAll('input[name=evidence_idx]').forEach(cb=>cb.checked=false)" style="font-size:.85em;padding:.3rem .6rem;margin-top:0;background:#888">Deselect All</button>
-  </p>
-  <table>
-    <thead><tr><th style="width:3rem">Use</th><th style="width:3.5rem">Score</th><th>Requirement</th><th>Evidence</th></tr></thead>
-    <tbody>{evidence_rows}</tbody>
-  </table>
-</div>
-{"<div class='card'><h2>Gaps (no evidence found)</h2><ul>" + gap_items + "</ul></div>" if gap_items else ""}
 <div class="card" style="display:flex;gap:.8rem;justify-content:flex-end">
   <a href="/" style="padding:.65rem 1rem;color:var(--muted);text-decoration:none;font-weight:600">Cancel</a>
-  <button type="submit" name="use_all" value="true" style="background:#888">Generate with All Evidence</button>
-  <button type="submit">Generate with Selected Evidence</button>
+  <button type="submit">Generate Resume</button>
 </div>
 </form>
 """
-    return _page("Curate Evidence", body)
+    return _page("Review Narrative", body)
 
 
 @app.post("/sessions/{session_id}/generate")
-def generate_session(
-    session_id: str,
-    evidence_idx: list[str] = Form([]),
-    use_all: Optional[str] = Form(None),
-):
-    """Filter evidence to selected items and run document generation."""
+def generate_session(session_id: str):
+    """Run document generation using the staged narrative context."""
     session = store.get(session_id)
     context = store.load_staging_context(session)
     if context is None:
@@ -1027,29 +911,7 @@ def generate_session(
     _allow = opts.get("allow_unverified", False)
 
     # NOTE: staging_options.json is cleaned up by orchestrator.clear_staging_context()
-    # after successful generation, not here — so the curate page still works on error.
-
-    # Filter evidence unless "Generate with All Evidence" was clicked.
-    if not use_all:
-        try:
-            selected_indices = {int(i) for i in evidence_idx}
-        except (ValueError, TypeError):
-            raise HTTPException(status_code=400, detail="Invalid evidence selection.")
-        filtered = [
-            item for idx, item in enumerate(context.evidence_pack.matched_evidence)
-            if idx in selected_indices
-        ]
-        context = DraftingContext(
-            evidence_pack=EvidencePack(
-                job_requirements=context.evidence_pack.job_requirements,
-                matched_evidence=filtered,
-                gaps=context.evidence_pack.gaps,
-                source_summary=context.evidence_pack.source_summary,
-            ),
-            voice_style_guide=context.voice_style_guide,
-        )
-        # Update the staging context so generate_session_run picks up the filtered version.
-        store.save_staging_context(session, context)
+    # after successful generation, not here — so the narrative review page still works on error.
 
     return _stream_orchestration(
         run_fn=lambda progress: orchestrator.generate_session_run(
@@ -1106,10 +968,6 @@ def show_session(session_id: str) -> HTMLResponse:
   {_ats_keyword_summary(reviews.ats_keyword)}
 </div>
 <div class=\"card\">
-  <h2>Cross-Document Consistency</h2>
-  {_consistency_summary(reviews.consistency)}
-</div>
-<div class=\"card\">
   <h2>Grammar &amp; Mechanics</h2>
   {_grammar_summary(reviews.grammar)}
 </div>
@@ -1117,11 +975,6 @@ def show_session(session_id: str) -> HTMLResponse:
 <div class=\"card\">
   <h2>Refine</h2>
   <form method=\"post\" action=\"/sessions/{html.escape(session.session_id)}/refine\">
-    <label>Document</label>
-    <select name=\"doc\">
-      <option value=\"\">All documents</option>
-      {"".join(f'<option value="{k}">{_doc_label(k)}</option>' for k in session.selected_docs)}
-    </select>
     <label>Feedback (free-form)</label>
     <textarea name=\"feedback\" rows=\"5\" required></textarea>
     <label>Output Directory</label>
@@ -1133,7 +986,7 @@ def show_session(session_id: str) -> HTMLResponse:
     <button type=\"submit\">Refine</button>
   </form>
 </div>
-{_doc_cards(docs, session.selected_docs, esc)}
+{_doc_cards(docs, esc)}
 """
     return _page(session.session_id, body)
 
@@ -1142,23 +995,17 @@ def show_session(session_id: str) -> HTMLResponse:
 def refine_session(
     session_id: str,
     feedback: str = Form(...),
-    doc: str = Form(""),
     output_dir: str = Form(...),
     allow_unverified: Optional[str] = Form(None),
 ):
-    if doc and doc not in ("cover_letter", "resume", "interview_guide"):
-        raise HTTPException(status_code=400, detail=f"Unknown document: {doc}")
-
     output_path = _validate_output_dir(output_dir)
 
-    _doc = doc or None
     _allow = bool(allow_unverified)
 
     return _stream_orchestration(
         run_fn=lambda progress: orchestrator.refine_session_run(
             session_id,
             feedback,
-            doc=_doc,
             output_dir=output_path,
             allow_unverified=_allow,
             progress=progress,

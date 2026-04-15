@@ -16,17 +16,15 @@ from .agent import ResumeRefineryAgent
 from .models import (
     AIDetectionResult,
     ATSKeywordResult,
+    CandidacyNarrative,
     CareerProfile,
-    ConsistencyResult,
     DocumentKey,
     DocumentSet,
     DraftingContext,
-    EvidenceItem,
-    EvidencePack,
     GrammarResult,
     HiringManagerReview,
     JobDescription,
-    JobRequirement,
+    NarrativePillar,
     RelevancePruningResult,
     RepairEdit,
     RepairPassResult,
@@ -37,10 +35,8 @@ from .models import (
     VoiceStyleGuide,
 )
 from .prompts import (
-    EVIDENCE_MATCHING_SYSTEM_PROMPT,
-    EVIDENCE_MATCHING_USER_TEMPLATE,
-    REQUIREMENT_EXTRACTION_SYSTEM_PROMPT,
-    REQUIREMENT_EXTRACTION_USER_TEMPLATE,
+    NARRATIVE_SYSTEM_PROMPT,
+    NARRATIVE_USER_TEMPLATE,
 )
 from .reviewers import DocumentReviewer
 
@@ -81,256 +77,82 @@ _STOPWORDS = {
 }
 
 
-class EvidenceAgent:
-    """Extracts job requirements and grounded evidence from raw inputs.
+class NarrativeAgent:
+    """Builds a candidacy narrative from career profile and job description.
 
-    Uses LLM calls for semantic understanding with keyword-based fallbacks
-    when the LLM is unavailable or returns invalid results.
+    The narrative frames why the applicant is a strong fit and guides
+    resume generation.
     """
 
     def __init__(self, client: ollama.Client | None = None) -> None:
         self.client = client or ollama.Client(host=_BASE_URL)
 
-    def build_evidence_pack(self, career: CareerProfile, job: JobDescription) -> EvidencePack:
-        requirements = self._extract_requirements(job.raw_content)
-        matched: list[EvidenceItem] = []
-        gaps: list[str] = []
-
-        def _match_one(req: JobRequirement) -> tuple[str, list[EvidenceItem]]:
-            items = self._match_evidence(req.requirement, career.raw_content)
-            return req.requirement, items
-
-        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(requirements) or 1)) as pool:
-            futures = [pool.submit(_match_one, req) for req in requirements]
-            for future in futures:
-                req_text, evidence_items = future.result()
-                if evidence_items:
-                    matched.extend(evidence_items)
-                else:
-                    gaps.append(req_text)
-
-        career_lines = self._career_lines(career.raw_content)
-        summary = [line for line in career_lines if len(line) > 20][:15]
-        return EvidencePack(
-            job_requirements=requirements,
-            matched_evidence=matched,
-            gaps=gaps,
-            source_summary=summary,
-        )
-
-    def _extract_requirements(self, raw_job: str) -> list[JobRequirement]:
-        """Extract requirements using LLM, falling back to keyword heuristics."""
+    def build_narrative(self, career: CareerProfile, job: JobDescription) -> CandidacyNarrative:
         try:
-            return self._extract_requirements_llm(raw_job)
+            return self._build_narrative_llm(career.raw_content, job.raw_content)
         except Exception as exc:
-            logging.warning("LLM requirement extraction failed (%s); using keyword fallback.", exc)
-            return self._extract_requirements_keyword(raw_job)
+            logging.warning("LLM narrative generation failed (%s); using keyword fallback.", exc)
+            return self._build_narrative_fallback(career.raw_content, job.raw_content)
 
-    def _extract_requirements_llm(self, raw_job: str) -> list[JobRequirement]:
-        """Use the LLM to extract structured requirements from the job description."""
-        user_msg = REQUIREMENT_EXTRACTION_USER_TEMPLATE.format(job_description=raw_job)
-        raw = self._call_llm(REQUIREMENT_EXTRACTION_SYSTEM_PROMPT, user_msg)
-        data = json.loads(raw)
-        if not isinstance(data, list):
-            raise ValueError(f"Expected JSON array, got {type(data).__name__}")
-        requirements: list[JobRequirement] = []
-        for item in data[:15]:
-            if isinstance(item, dict) and "requirement" in item:
-                category = item.get("category", "other")
-                if category not in ("skill", "experience", "leadership", "domain", "other"):
-                    category = "other"
-                requirements.append(
-                    JobRequirement(
-                        requirement=item["requirement"],
-                        category=category,
-                        source_excerpt=item.get("source_excerpt", item["requirement"]),
-                    )
-                )
-        if not requirements:
-            raise ValueError("LLM returned empty requirements list")
-        return requirements
-
-    def _extract_requirements_keyword(self, raw_job: str) -> list[JobRequirement]:
-        """Keyword heuristic fallback for requirement extraction."""
-        requirements: list[JobRequirement] = []
-        seen: set[str] = set()
-        for line in raw_job.splitlines():
-            clean = line.strip(" -\t")
-            if not clean:
-                continue
-            lowered = clean.lower()
-            if any(token in lowered for token in ("required", "must", "need", "experience", "skills", "responsible")):
-                for piece in self._split_requirement_line(clean):
-                    normalized = piece.strip()
-                    if normalized and normalized.lower() not in seen:
-                        seen.add(normalized.lower())
-                        requirements.append(
-                            JobRequirement(
-                                requirement=normalized,
-                                category=self._categorize_requirement(normalized),
-                                source_excerpt=clean,
-                            )
-                        )
-        if not requirements:
-            fallback = [line.strip() for line in raw_job.splitlines() if line.strip()][:5]
-            for line in fallback:
-                if line.lower().startswith("company:"):
-                    continue
-                requirements.append(JobRequirement(requirement=line, source_excerpt=line))
-        return requirements[:15]
-
-    def _match_evidence(self, requirement: str, career_content: str) -> list[EvidenceItem]:
-        """Match evidence using LLM, falling back to keyword overlap."""
-        try:
-            return self._match_evidence_llm(requirement, career_content)
-        except Exception as exc:
-            logging.warning("LLM evidence matching failed (%s); using keyword fallback.", exc)
-            career_lines = self._career_lines(career_content)
-            return self._match_evidence_keyword(requirement, career_lines)
-
-    def _match_evidence_llm(self, requirement: str, career_content: str) -> list[EvidenceItem]:
-        """Use the LLM to find semantically relevant evidence for a requirement."""
-        user_msg = EVIDENCE_MATCHING_USER_TEMPLATE.format(
-            requirement=requirement,
+    def _build_narrative_llm(self, career_content: str, job_content: str) -> CandidacyNarrative:
+        user_msg = NARRATIVE_USER_TEMPLATE.format(
             career_profile=career_content,
+            job_description=job_content,
         )
-        raw = self._call_llm(EVIDENCE_MATCHING_SYSTEM_PROMPT, user_msg)
+        raw = self._call_llm(NARRATIVE_SYSTEM_PROMPT, user_msg)
         data = json.loads(raw)
-        if not isinstance(data, list):
-            raise ValueError(f"Expected JSON array, got {type(data).__name__}")
-        items: list[EvidenceItem] = []
-        for entry in data[:5]:
-            if isinstance(entry, dict) and "evidence" in entry:
-                evidence_text = entry["evidence"]
-                source_excerpt = entry.get("source_excerpt", "")
-                grounded, reason = self._is_grounded(
-                    evidence_text, source_excerpt, career_content,
-                )
-                if not grounded:
-                    logging.warning(
-                        "Dropping ungrounded evidence for requirement %r: %r (%s)",
-                        requirement, evidence_text[:120], reason,
-                    )
-                    continue
-                score = entry.get("relevance_score", 3)
-                if not isinstance(score, int) or score < 1 or score > 5:
-                    score = 3
-                items.append(
-                    EvidenceItem(
-                        requirement=requirement,
-                        evidence=evidence_text,
-                        source_excerpt=source_excerpt or evidence_text,
-                        relevance_score=score,
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+        pillars: list[NarrativePillar] = []
+        for p in data.get("pillars", [])[:5]:
+            if isinstance(p, dict) and "theme" in p:
+                pillars.append(
+                    NarrativePillar(
+                        theme=p["theme"],
+                        argument=p.get("argument", ""),
+                        career_evidence=p.get("career_evidence", []),
                     )
                 )
-        return items
 
-    def _is_grounded(
-        self,
-        evidence: str,
-        source_excerpt: str,
-        career_content: str,
-        anchor_threshold: float = 0.6,
-        relevance_threshold: float = 0.3,
-    ) -> tuple[bool, str]:
-        """Check that evidence is grounded in the career profile.
-
-        Two-part verification:
-        1. **Anchor check** — The ``source_excerpt`` must be traceable to the
-           career profile.  At least *anchor_threshold* (default 60%) of its
-           non-stopword tokens must appear in a single line or consecutive
-           line-pair of the career profile.
-        2. **Relevance check** — The ``evidence`` (which may be a paraphrase)
-           must share at least *relevance_threshold* (default 30%) of its
-           non-stopword tokens with the anchor text, ensuring the summary
-           doesn't introduce facts entirely absent from the source.
-
-        Returns ``(True, "")`` on success or ``(False, reason)`` on failure.
-        """
-        ev_tokens = self._keywords(evidence)
-        if not ev_tokens:
-            return False, "evidence has no meaningful tokens"
-
-        # If no source_excerpt provided, fall back to checking evidence
-        # directly against career content (legacy / keyword fallback path).
-        if not source_excerpt:
-            return self._is_evidence_in_career(
-                ev_tokens, career_content, anchor_threshold,
-            )
-
-        # --- Part 1: Anchor check ---
-        anchor_tokens = self._keywords(source_excerpt)
-        if not anchor_tokens:
-            return False, "source_excerpt has no meaningful tokens"
-
-        anchor_ok, anchor_reason = self._is_evidence_in_career(
-            anchor_tokens, career_content, anchor_threshold,
+        return CandidacyNarrative(
+            thesis=data.get("thesis", ""),
+            pillars=pillars,
+            gap_framing=data.get("gap_framing", []),
+            raw_narrative=data.get("raw_narrative", ""),
         )
-        if not anchor_ok:
-            return False, f"source_excerpt not found in career profile ({anchor_reason})"
 
-        # --- Part 2: Relevance check ---
-        # The evidence summary should mostly reference content from the
-        # source_excerpt, not introduce unrelated facts.
-        overlap = len(ev_tokens & anchor_tokens) / len(ev_tokens)
-        if overlap < relevance_threshold:
-            return False, (
-                f"evidence diverges from source_excerpt "
-                f"(token overlap {overlap:.0%} < {relevance_threshold:.0%})"
-            )
+    def _build_narrative_fallback(self, career_content: str, job_content: str) -> CandidacyNarrative:
+        """Keyword heuristic fallback for narrative generation."""
+        career_keywords = self._keywords(career_content)
+        job_keywords = self._keywords(job_content)
+        overlap = career_keywords & job_keywords
+        gaps = job_keywords - career_keywords
 
-        return True, ""
-
-    def _is_evidence_in_career(
-        self,
-        tokens: set[str],
-        career_content: str,
-        threshold: float,
-    ) -> tuple[bool, str]:
-        """Check whether *tokens* are present in the career profile text."""
-        career_lines = self._career_lines(career_content)
-        best_overlap = 0.0
-        # Check individual lines
-        for line in career_lines:
-            line_tokens = self._keywords(line)
-            overlap = len(tokens & line_tokens) / len(tokens)
-            if overlap > best_overlap:
-                best_overlap = overlap
-        # Also check sliding window of consecutive line pairs
-        for i in range(len(career_lines) - 1):
-            combined = career_lines[i] + " " + career_lines[i + 1]
-            combined_tokens = self._keywords(combined)
-            overlap = len(tokens & combined_tokens) / len(tokens)
-            if overlap > best_overlap:
-                best_overlap = overlap
-        if best_overlap >= threshold:
-            return True, ""
-        return False, f"best token overlap {best_overlap:.0%} < {threshold:.0%}"
-
-    def _match_evidence_keyword(self, requirement: str, career_lines: list[str]) -> list[EvidenceItem]:
-        """Keyword overlap fallback for evidence matching."""
-        req_keywords = self._keywords(requirement)
-        scored: list[tuple[int, str]] = []
-        for line in career_lines:
-            line_keywords = self._keywords(line)
-            overlap = len(req_keywords & line_keywords)
-            if overlap:
-                scored.append((overlap, line))
-        scored.sort(key=lambda item: (-item[0], -len(item[1])))
-        items: list[EvidenceItem] = []
-        for rank, (_, evidence) in enumerate(scored[:5], start=1):
-            items.append(
-                EvidenceItem(
-                    requirement=requirement,
-                    evidence=evidence,
-                    source_excerpt=evidence,
-                    relevance_score=max(1, 6 - rank),
+        pillars = []
+        overlap_list = sorted(overlap)[:5]
+        for kw in overlap_list:
+            pillars.append(
+                NarrativePillar(
+                    theme=kw.title(),
+                    argument=f"Candidate has demonstrated experience with {kw}.",
+                    career_evidence=[kw],
                 )
             )
-        return items
+
+        gap_framing = [
+            f"Gap: {g} — consider highlighting transferable skills"
+            for g in sorted(gaps)[:3]
+        ]
+
+        return CandidacyNarrative(
+            thesis="Candidate's experience aligns with key role requirements.",
+            pillars=pillars,
+            gap_framing=gap_framing,
+            raw_narrative="",
+        )
 
     def _call_llm(self, system: str, user_msg: str) -> str:
-        """Make an Ollama API call and return cleaned JSON text."""
         response = self.client.chat(
             model=_MODEL,
             messages=[
@@ -342,42 +164,17 @@ class EvidenceAgent:
             options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
         )
         raw = response.message.content.strip()
-        # Strip residual think blocks
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
-        # Repair LLM JSON quirks
         from .reviewers import _normalize_llm_json
         raw = _normalize_llm_json(raw)
         if not raw:
             raise ValueError("LLM returned empty content")
-        # Strip markdown fences if present
         if raw.startswith("```"):
             raw = raw.split("```", 2)[1]
             if raw.startswith("json"):
                 raw = raw[4:]
             raw = raw.rsplit("```", 1)[0].strip()
         return raw
-
-    def _split_requirement_line(self, line: str) -> list[str]:
-        if ":" in line:
-            _, tail = line.split(":", 1)
-        else:
-            tail = line
-        return [piece.strip() for piece in re.split(r",|;", tail) if piece.strip()]
-
-    def _categorize_requirement(self, requirement: str) -> str:
-        lowered = requirement.lower()
-        if any(word in lowered for word in ("python", "sql", "aws", "system", "distributed", "architecture")):
-            return "skill"
-        if any(word in lowered for word in ("lead", "mentor", "stakeholder", "strategy")):
-            return "leadership"
-        if any(word in lowered for word in ("years", "experience", "background")):
-            return "experience"
-        if any(word in lowered for word in ("fintech", "healthcare", "platform", "data")):
-            return "domain"
-        return "other"
-
-    def _career_lines(self, raw_career: str) -> list[str]:
-        return [line.strip(" -\t") for line in raw_career.splitlines() if line.strip()]
 
     def _keywords(self, text: str) -> set[str]:
         return {
@@ -442,8 +239,7 @@ class DraftingAgent:
         context: DraftingContext,
     ) -> DocumentSet:
         docs = DocumentSet()
-        for key in ("cover_letter", "resume", "interview_guide"):
-            docs.set(key, self.generate_document(key, career, voice, job, context))
+        docs.set("resume", self.generate_document("resume", career, voice, job, context))
         return docs
 
     def generate_document(
@@ -458,9 +254,10 @@ class DraftingAgent:
     ) -> str:
         return self.generator.generate_document(
             key,
-            self._career_context(career, context.evidence_pack),
+            self._career_context(career, context.narrative),
             self._voice_context(voice, context.voice_style_guide),
             job,
+            narrative_text=context.narrative.raw_narrative if context.narrative else "",
             feedback=feedback,
             previous_version=previous_version,
         )
@@ -477,101 +274,42 @@ class DraftingAgent:
     ) -> Iterator[str]:
         yield from self.generator.stream_document(
             key,
-            self._career_context(career, context.evidence_pack),
+            self._career_context(career, context.narrative),
             self._voice_context(voice, context.voice_style_guide),
             job,
+            narrative_text=context.narrative.raw_narrative if context.narrative else "",
             feedback=feedback,
             previous_version=previous_version,
         )
 
-    def _career_context(self, career: CareerProfile, evidence_pack: EvidencePack) -> CareerProfile:
+    def _career_context(self, career: CareerProfile, narrative: CandidacyNarrative | None) -> CareerProfile:
+        if not narrative:
+            return career
+
         summary_lines = [
-            "## Evidence Pack",
-            "**Use the evidence pack below as your PRIMARY source for claims. "
-            "The career summary provides structure, contact details, and constraints only.**",
+            "## Candidacy Narrative",
+            "**Use the narrative below as your PRIMARY guide for emphasis, ordering, and framing.**",
             "",
-            "### Job Requirements",
+            f"### Thesis\n{narrative.thesis}",
+            "",
+            "### Supporting Pillars",
         ]
-        summary_lines.extend(f"- {item.requirement}" for item in evidence_pack.job_requirements)
-
-        # Sort matched evidence by relevance score descending
-        sorted_evidence = sorted(
-            evidence_pack.matched_evidence,
-            key=lambda e: e.relevance_score,
-            reverse=True,
-        )
-        summary_lines.append("\n### Matched Evidence (highest relevance first)")
-        for item in sorted_evidence:
-            priority = "HIGH PRIORITY" if item.relevance_score >= 4 else "supporting"
+        for pillar in narrative.pillars:
+            summary_lines.append(f"**{pillar.theme}**: {pillar.argument}")
+            for ev in pillar.career_evidence:
+                summary_lines.append(f"  - {ev}")
+        if narrative.gap_framing:
+            summary_lines.append("\n### Gap Framing")
+            for gap in narrative.gap_framing:
+                summary_lines.append(f"- {gap}")
             summary_lines.append(
-                f"- [{priority}] Requirement: {item.requirement} | "
-                f"Evidence: {item.evidence} (relevance: {item.relevance_score}/5)"
+                "\n**Important**: The gaps above are areas where the candidate's experience "
+                "does not perfectly match. Do NOT fabricate experience to cover them. "
+                "Instead, frame related transferable skills honestly."
             )
-        if evidence_pack.gaps:
-            summary_lines.append("\n### Potential Gaps")
-            summary_lines.extend(f"- {gap}" for gap in evidence_pack.gaps)
-            summary_lines.append(
-                "\n**Important**: The gaps above are requirements from the job description "
-                "that have no direct evidence in the career profile. Do NOT fabricate "
-                "experience to cover them. Either omit them or frame related transferable "
-                "skills honestly."
-            )
-        summary_lines.append("\n### Career Summary (structure & constraints)")
-        summary_lines.append(self._compact_career_summary(career))
+        summary_lines.append("\n### Career Profile")
+        summary_lines.append(career.raw_content)
         return career.model_copy(update={"raw_content": "\n".join(summary_lines)})
-
-    def _compact_career_summary(self, career: CareerProfile) -> str:
-        """Build a compact career summary for the drafting prompt.
-
-        Retains identity/contact, role timeline (titles/dates/tech only),
-        education, certifications, skills, domain knowledge, story titles,
-        and strategic meta (anti-claims, gaps, differentiators).
-        Drops verbose role narratives already captured in the evidence pack.
-        """
-        raw = career.raw_content
-        section_pattern = re.compile(r"^(## .+)$", re.MULTILINE)
-        parts = section_pattern.split(raw)
-
-        sections: list[tuple[str, str]] = [("_header", parts[0])]
-        for i in range(1, len(parts), 2):
-            heading = parts[i]
-            content = parts[i + 1] if i + 1 < len(parts) else ""
-            sections.append((heading, content))
-
-        compact: list[str] = []
-        for heading, content in sections:
-            if heading == "_header":
-                compact.append(content.strip())
-            elif "Work Experience" in heading:
-                compact.append(f"\n{heading}")
-                compact.append("*(Narratives omitted — see Evidence Pack for details)*")
-                in_anti = False
-                for line in content.splitlines():
-                    stripped = line.strip()
-                    if stripped.startswith("### "):
-                        in_anti = False
-                        compact.append(stripped)
-                    elif stripped.startswith("**Technologies:**"):
-                        in_anti = False
-                        compact.append(stripped)
-                    elif stripped.startswith("**Do NOT claim:**"):
-                        in_anti = True
-                        compact.append(stripped)
-                    elif in_anti and stripped and not stripped.startswith("**") and stripped != "---":
-                        compact.append(stripped)
-                    elif stripped.startswith("**"):
-                        in_anti = False
-            elif "Key Stories" in heading:
-                compact.append(f"\n{heading}")
-                for line in content.splitlines():
-                    stripped = line.strip()
-                    if stripped.startswith("### ") or stripped.startswith("Tags:") or stripped.startswith("**What this shows:**"):
-                        compact.append(stripped)
-            else:
-                compact.append(f"\n{heading}")
-                compact.append(content.rstrip())
-
-        return "\n".join(compact)
 
     def _voice_context(self, voice: VoiceProfile, guide: VoiceStyleGuide) -> VoiceProfile:
         lines = ["## Distilled Voice Guide"]
@@ -623,9 +361,6 @@ class VerificationAgent:
     def review_ats_keyword(self, docs: DocumentSet, job: JobDescription, career: CareerProfile, *, exemptions: list[str] | None = None) -> ATSKeywordResult:
         return self.reviewer.review_ats_keyword(docs, job, career, exemptions=exemptions)
 
-    def review_consistency(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> ConsistencyResult:
-        return self.reviewer.review_consistency(docs, exemptions=exemptions)
-
     def review_grammar(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> GrammarResult:
         return self.reviewer.review_grammar(docs, exemptions=exemptions)
 
@@ -655,7 +390,6 @@ class RepairAgent:
         hm_review: HiringManagerReview | None = None,
         pruning_review: RelevancePruningResult | None = None,
         ats_review: ATSKeywordResult | None = None,
-        consistency_review: ConsistencyResult | None = None,
         grammar_review: GrammarResult | None = None,
         preserve_instructions: str | None = None,
         phase: str = "a",
@@ -667,9 +401,7 @@ class RepairAgent:
         from .prompts import REPAIR_SYSTEM_PROMPT, repair_user_message
         from .utils import apply_edits
 
-        # Determine the dominant reviewer for this phase so that edit
-        # regions are tagged with the correct priority.
-        phase_reviewer: ReviewerPriority = self._phase_reviewer(phase, truth, ats_review, consistency_review, grammar_review, voice_review, ai_review)
+        phase_reviewer: ReviewerPriority = self._phase_reviewer(phase, truth, ats_review, grammar_review, voice_review, ai_review)
 
         all_edits: dict[str, list[RepairEdit]] = {}
         all_regions: dict[str, list[EditRegion]] = {}
@@ -680,13 +412,12 @@ class RepairAgent:
         all_accepted_hm_issues: list[str] = []
         all_accepted_pruning_issues: list[str] = []
         all_accepted_ats_issues: list[str] = []
-        all_accepted_consistency_issues: list[str] = []
         all_accepted_grammar_issues: list[str] = []
 
         def _plan_for_key(key: str) -> tuple[str, list[dict], dict[str, list[str]]] | None:
             review_findings = self._build_review_findings(
                 key, truth, voice_review, ai_review, feedback, hm_review, pruning_review,
-                ats_review, consistency_review, grammar_review,
+                ats_review, grammar_review,
             )
             if not review_findings:
                 return None
@@ -708,8 +439,8 @@ class RepairAgent:
             edits, acceptances = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
             return key, edits, acceptances
 
-        keys = ["cover_letter", "resume", "interview_guide"]
-        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, 3)) as pool:
+        keys = ["resume"]
+        with ThreadPoolExecutor(max_workers=1) as pool:
             futures = [pool.submit(_plan_for_key, key) for key in keys]
             results = [f.result() for f in futures]
 
@@ -723,10 +454,9 @@ class RepairAgent:
             all_accepted_hm_issues.extend(acceptances.get("accepted_hm_issues", []))
             all_accepted_pruning_issues.extend(acceptances.get("accepted_pruning_issues", []))
             all_accepted_ats_issues.extend(acceptances.get("accepted_ats_issues", []))
-            all_accepted_consistency_issues.extend(acceptances.get("accepted_consistency_issues", []))
             all_accepted_grammar_issues.extend(acceptances.get("accepted_grammar_issues", []))
             logging.debug(
-                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d/%d/%d/%d/%d accepted (claims/ai/voice/hm/pruning/ats/consistency/grammar)",
+                "[repair:%s] LLM returned %d edit(s), %d/%d/%d/%d/%d/%d/%d accepted (claims/ai/voice/hm/pruning/ats/grammar)",
                 key, len(edits),
                 len(acceptances.get("accepted_claims", [])),
                 len(acceptances.get("accepted_ai_phrases", [])),
@@ -734,7 +464,6 @@ class RepairAgent:
                 len(acceptances.get("accepted_hm_issues", [])),
                 len(acceptances.get("accepted_pruning_issues", [])),
                 len(acceptances.get("accepted_ats_issues", [])),
-                len(acceptances.get("accepted_consistency_issues", [])),
                 len(acceptances.get("accepted_grammar_issues", [])),
             )
             if edits:
@@ -776,7 +505,6 @@ class RepairAgent:
             accepted_hm_issues=all_accepted_hm_issues,
             accepted_pruning_issues=all_accepted_pruning_issues,
             accepted_ats_issues=all_accepted_ats_issues,
-            accepted_consistency_issues=all_accepted_consistency_issues,
             accepted_grammar_issues=all_accepted_grammar_issues,
         )
 
@@ -785,29 +513,20 @@ class RepairAgent:
         phase: str,
         truth: TruthfulnessResult | None,
         ats_review: ATSKeywordResult | None,
-        consistency_review: ConsistencyResult | None,
         grammar_review: GrammarResult | None,
         voice_review: VoiceReviewResult | None,
         ai_review: AIDetectionResult | None,
     ) -> str:
-        """Return the highest-priority reviewer that has findings.
-
-        Checks all reviewers in priority order regardless of phase:
-        truth > consistency > ats > grammar > voice > ai.
-        The ``phase`` parameter is retained for call-site compatibility
-        but no longer affects the result.
-        """
+        """Return the highest-priority reviewer that has findings."""
         if truth and not truth.all_supported:
             return "truthfulness"
-        if consistency_review and not consistency_review.consistent:
-            return "consistency"
         if ats_review and ats_review.alignment_score not in ("strong", "moderate"):
             return "ats"
         if grammar_review and not grammar_review.clean:
             return "grammar"
         if voice_review and voice_review.overall_match not in ("strong", "moderate"):
             return "voice"
-        if ai_review and (ai_review.cover_letter_flags or ai_review.resume_flags):
+        if ai_review and ai_review.resume_flags:
             return "ai"
         return "grammar"
 
@@ -925,10 +644,9 @@ class RepairAgent:
                     "accepted_hm_issues":     {"type": "array", "items": {"type": "string"}},
                     "accepted_pruning_issues":{"type": "array", "items": {"type": "string"}},
                     "accepted_ats_issues":    {"type": "array", "items": {"type": "string"}},
-                    "accepted_consistency_issues":{"type": "array", "items": {"type": "string"}},
                     "accepted_grammar_issues":{"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_consistency_issues", "accepted_grammar_issues"],
+                "required": ["edits", "accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_grammar_issues"],
             },
             options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS * 2},
         )
@@ -936,16 +654,16 @@ class RepairAgent:
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
         if not raw:
             logging.warning("Repair LLM returned empty content")
-            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_consistency_issues": [], "accepted_grammar_issues": []}
+            return [], {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": []}
         raw = _normalize_llm_json(raw)
         _empty: dict[str, list[str]] = {
-            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_consistency_issues": [], "accepted_grammar_issues": []
+            "accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": []
         }
 
         def _extract_acceptances(d: dict) -> dict[str, list[str]]:
             return {
                 k: [x for x in d.get(k, []) if isinstance(x, str)]
-                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_consistency_issues", "accepted_grammar_issues")
+                for k in ("accepted_claims", "accepted_ai_phrases", "accepted_voice_issues", "accepted_hm_issues", "accepted_pruning_issues", "accepted_ats_issues", "accepted_grammar_issues")
             }
 
         try:
@@ -1001,7 +719,6 @@ class RepairAgent:
         hm_review: HiringManagerReview | None = None,
         pruning_review: RelevancePruningResult | None = None,
         ats_review: ATSKeywordResult | None = None,
-        consistency_review: ConsistencyResult | None = None,
         grammar_review: GrammarResult | None = None,
     ) -> str:
         """Return a human-readable summary of review findings for *key*.
@@ -1017,12 +734,7 @@ class RepairAgent:
 
         # --- Truthfulness ---
         if truth:
-            truth_map = {
-                "cover_letter": truth.cover_letter,
-                "resume": truth.resume,
-                "interview_guide": truth.interview_guide,
-            }
-            doc_truth = truth_map[key]
+            doc_truth = truth.resume
             if not doc_truth.pass_strict:
                 has_issues = True
                 if doc_truth.unsupported_claims:
@@ -1046,19 +758,11 @@ class RepairAgent:
                         + "\n".join(f"- {e}" for e in doc_truth.evidence_examples)
                     )
 
-        # --- Voice (cover letter and resume only) ---
-        if voice_review and key in ("cover_letter", "resume"):
-            voice_matches: dict[str, str] = {
-                "cover_letter": voice_review.cover_letter_match,
-                "resume": voice_review.resume_match,
-            }
-            if voice_matches[key] not in ("strong",):
+        # --- Voice ---
+        if voice_review:
+            if voice_review.resume_match not in ("strong",):
                 has_issues = True
-                doc_issues_map: dict[str, list[str]] = {
-                    "cover_letter": voice_review.cover_letter_issues,
-                    "resume": voice_review.resume_issues,
-                }
-                issues = doc_issues_map[key] or voice_review.specific_issues
+                issues = voice_review.resume_issues or voice_review.specific_issues
                 if issues:
                     logging.debug(
                         "[repair:%s] voice: %d off-voice issue(s) — passing ALL to repair",
@@ -1069,13 +773,9 @@ class RepairAgent:
                         + "\n".join(f"- {i}" for i in issues)
                     )
 
-        # --- AI detection (cover letter and resume only) ---
-        if ai_review and key in ("cover_letter", "resume"):
-            flag_map: dict[str, list[str]] = {
-                "cover_letter": ai_review.cover_letter_flags,
-                "resume": ai_review.resume_flags,
-            }
-            flags = flag_map.get(key, [])
+        # --- AI detection ---
+        if ai_review:
+            flags = ai_review.resume_flags
             if flags:
                 has_issues = True
                 logging.debug(
@@ -1084,15 +784,12 @@ class RepairAgent:
                 )
                 parts.append(
                     "AI DETECTION — Flagged phrases (verbatim from document):\n"
-                    + "\n".join(f'- "{f}"' for f in flags)
+                    + "\n".join(f'"- "{f}"' for f in flags)
                 )
 
-        # --- Hiring manager (cover letter and resume only) ---
-        if hm_review and key in ("cover_letter", "resume"):
-            doc_issues = (
-                hm_review.cover_letter_issues if key == "cover_letter"
-                else hm_review.resume_issues
-            )
+        # --- Hiring manager ---
+        if hm_review:
+            doc_issues = hm_review.resume_issues
             if doc_issues:
                 has_issues = True
                 logging.debug(
@@ -1107,12 +804,9 @@ class RepairAgent:
                     )
                 )
 
-        # --- Relevance pruning (cover letter and resume only) ---
-        if pruning_review and key in ("cover_letter", "resume"):
-            doc_pruning_issues = (
-                pruning_review.cover_letter_issues if key == "cover_letter"
-                else pruning_review.resume_issues
-            )
+        # --- Relevance pruning ---
+        if pruning_review:
+            doc_pruning_issues = pruning_review.resume_issues
             if doc_pruning_issues:
                 has_issues = True
                 logging.debug(
@@ -1144,37 +838,9 @@ class RepairAgent:
                     )
                 )
 
-        # --- Cross-document consistency (all documents) ---
-        if consistency_review and consistency_review.issues:
-            # Only include issues where this document is involved
-            doc_consistency_issues = [
-                i for i in consistency_review.issues
-                if i.document_a == key or i.document_b == key
-            ]
-            if doc_consistency_issues:
-                has_issues = True
-                logging.debug(
-                    "[repair:%s] consistency: %d issue(s) — passing ALL to repair",
-                    key, len(doc_consistency_issues),
-                )
-                lines = []
-                for i in doc_consistency_issues:
-                    lines.append(
-                        f'- {i.field}: "{i.quote_a}" (in {i.document_a}) vs "{i.quote_b}" (in {i.document_b}) — severity: {i.severity}'
-                    )
-                parts.append(
-                    "CROSS-DOCUMENT CONSISTENCY — Contradictions involving this document:\n"
-                    + "\n".join(lines)
-                )
-
         # --- Grammar & mechanics ---
-        if grammar_review and key in ("cover_letter", "resume", "interview_guide"):
-            doc_grammar_map = {
-                "cover_letter": grammar_review.cover_letter_issues,
-                "resume": grammar_review.resume_issues,
-                "interview_guide": grammar_review.interview_guide_issues,
-            }
-            doc_grammar_issues = doc_grammar_map.get(key, [])
+        if grammar_review:
+            doc_grammar_issues = grammar_review.resume_issues
             if doc_grammar_issues:
                 has_issues = True
                 logging.debug(

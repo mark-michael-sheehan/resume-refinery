@@ -6,10 +6,11 @@ import os
 import pytest
 
 from resume_refinery.models import (
+    CandidacyNarrative,
     DocumentSet,
     DocumentTruthResult,
     DraftingContext,
-    EvidencePack,
+    NarrativePillar,
     ReviewBundle,
     TruthfulnessResult,
     VoiceReviewResult,
@@ -46,7 +47,6 @@ def test_save_and_load_documents(tmp_path, career_profile, voice_profile, job_de
 
     assert session.current_version == 1
     loaded = store.load_documents(session)
-    assert loaded.cover_letter == document_set.cover_letter
     assert loaded.resume == document_set.resume
 
 
@@ -141,16 +141,16 @@ def test_load_documents_specific_version(tmp_path, career_profile, voice_profile
     store = SessionStore()
 
     session = store.create(job_description, career_profile, voice_profile)
-    docs_v1 = DocumentSet(cover_letter="v1 letter", resume="v1 resume", interview_guide="v1 guide")
+    docs_v1 = DocumentSet(resume="v1 resume")
     session = store.save_documents(session, docs_v1)
-    docs_v2 = DocumentSet(cover_letter="v2 letter", resume="v2 resume", interview_guide="v2 guide")
+    docs_v2 = DocumentSet(resume="v2 resume")
     session = store.save_documents(session, docs_v2)
 
     loaded_v1 = store.load_documents(session, version=1)
     loaded_v2 = store.load_documents(session, version=2)
 
-    assert loaded_v1.cover_letter == "v1 letter"
-    assert loaded_v2.cover_letter == "v2 letter"
+    assert loaded_v1.resume == "v1 resume"
+    assert loaded_v2.resume == "v2 resume"
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ def test_save_and_load_truthfulness_review(tmp_path, career_profile, voice_profi
     doc = DocumentTruthResult(pass_strict=True)
     truth = TruthfulnessResult(
         all_supported=True,
-        cover_letter=doc, resume=doc, interview_guide=doc,
+        resume=doc,
     )
     bundle = ReviewBundle(truthfulness=truth)
     session = store.save_reviews(session, bundle)
@@ -208,9 +208,9 @@ def test_save_documents_with_docs_regenerated(tmp_path, career_profile, voice_pr
     store = SessionStore()
 
     session = store.create(job_description, career_profile, voice_profile)
-    session = store.save_documents(session, document_set, docs_regenerated=["cover_letter"])
+    session = store.save_documents(session, document_set, docs_regenerated=["resume"])
 
-    assert session.versions[0].docs_regenerated == ["cover_letter"]
+    assert session.versions[0].docs_regenerated == ["resume"]
 
 
 # ---------------------------------------------------------------------------
@@ -243,14 +243,19 @@ def test_save_and_load_context(tmp_path, career_profile, voice_profile, job_desc
     session = store.save_documents(session, document_set)
 
     context = DraftingContext(
-        evidence_pack=EvidencePack(gaps=["Rust experience"], source_summary=["profile"]),
+        narrative=CandidacyNarrative(
+            thesis="Strong fit",
+            pillars=[NarrativePillar(theme="Backend", argument="Led migrations", career_evidence=["Cut costs"])],
+            gap_framing=["Rust experience"],
+            raw_narrative="Narrative text.",
+        ),
         voice_style_guide=VoiceStyleGuide(core_adjectives=["direct", "analytical"]),
     )
     store.save_context(session, context)
 
     loaded = store.load_context(session)
     assert loaded is not None
-    assert loaded.evidence_pack.gaps == ["Rust experience"]
+    assert loaded.narrative.gap_framing == ["Rust experience"]
     assert loaded.voice_style_guide.core_adjectives == ["direct", "analytical"]
 
 
@@ -277,15 +282,15 @@ def test_save_and_load_repair_pass(tmp_path, career_profile, voice_profile, job_
     session = store.create(job_description, career_profile, voice_profile)
     session = store.save_documents(session, document_set)
 
-    pass0_docs = DocumentSet(cover_letter="pass 0 CL", resume="pass 0 resume", interview_guide="pass 0 guide")
-    pass1_docs = DocumentSet(cover_letter="pass 1 CL", resume="pass 1 resume", interview_guide="pass 1 guide")
+    pass0_docs = DocumentSet(resume="pass 0 resume")
+    pass1_docs = DocumentSet(resume="pass 1 resume")
     store.save_repair_pass(session, 0, pass0_docs)
     store.save_repair_pass(session, 1, pass1_docs)
 
     docs0, reviews0 = store.load_repair_pass(session, 0)
     docs1, reviews1 = store.load_repair_pass(session, 1)
     assert docs0 is not None
-    assert docs0.cover_letter == "pass 0 CL"
+    assert docs0.resume == "pass 0 resume"
     assert reviews0 is None
     assert docs1 is not None
     assert docs1.resume == "pass 1 resume"
@@ -311,16 +316,13 @@ def test_save_and_load_repair_pass_with_reviews(tmp_path, career_profile, voice_
     session = store.create(job_description, career_profile, voice_profile)
     session = store.save_documents(session, document_set)
 
-    docs = DocumentSet(cover_letter="CL text", resume="Resume text", interview_guide="Guide text")
+    docs = DocumentSet(resume="Resume text")
     truth = TruthfulnessResult(
         all_supported=True,
-        cover_letter=DocumentTruthResult(pass_strict=True),
         resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
     )
     voice = VoiceReviewResult(
         overall_match="strong",
-        cover_letter_assessment="good",
         resume_assessment="good",
     )
     ai = AIDetectionResult(
@@ -332,7 +334,7 @@ def test_save_and_load_repair_pass_with_reviews(tmp_path, career_profile, voice_
 
     loaded_docs, loaded_reviews = store.load_repair_pass(session, 0)
     assert loaded_docs is not None
-    assert loaded_docs.cover_letter == "CL text"
+    assert loaded_docs.resume == "Resume text"
     assert loaded_reviews is not None
     assert loaded_reviews.truthfulness.all_supported is True
     assert loaded_reviews.voice.overall_match == "strong"
@@ -352,14 +354,12 @@ def test_update_documents_overwrites_without_version_bump(tmp_path, career_profi
     session = store.save_documents(session, document_set)
     assert session.current_version == 1
 
-    updated = DocumentSet(cover_letter="updated CL", resume="updated resume", interview_guide="updated guide")
+    updated = DocumentSet(resume="updated resume")
     store.update_documents(session, updated)
 
     assert session.current_version == 1  # version did not bump
     loaded = store.load_documents(session)
-    assert loaded.cover_letter == "updated CL"
     assert loaded.resume == "updated resume"
-    assert loaded.interview_guide == "updated guide"
 
 
 # ---------------------------------------------------------------------------
@@ -374,14 +374,19 @@ def test_save_and_load_staging_context(tmp_path, career_profile, voice_profile, 
     session = store.create(job_description, career_profile, voice_profile)
 
     context = DraftingContext(
-        evidence_pack=EvidencePack(gaps=["Go experience"], source_summary=["summary"]),
+        narrative=CandidacyNarrative(
+            thesis="Strong fit",
+            pillars=[],
+            gap_framing=["Go experience"],
+            raw_narrative="Narrative.",
+        ),
         voice_style_guide=VoiceStyleGuide(core_adjectives=["concise"]),
     )
     store.save_staging_context(session, context)
 
     loaded = store.load_staging_context(session)
     assert loaded is not None
-    assert loaded.evidence_pack.gaps == ["Go experience"]
+    assert loaded.narrative.gap_framing == ["Go experience"]
     assert loaded.voice_style_guide.core_adjectives == ["concise"]
 
 
@@ -402,7 +407,12 @@ def test_clear_staging_context(tmp_path, career_profile, voice_profile, job_desc
     session = store.create(job_description, career_profile, voice_profile)
 
     context = DraftingContext(
-        evidence_pack=EvidencePack(gaps=["Rust"]),
+        narrative=CandidacyNarrative(
+            thesis="Strong fit",
+            pillars=[],
+            gap_framing=["Rust"],
+            raw_narrative="Narrative.",
+        ),
         voice_style_guide=VoiceStyleGuide(core_adjectives=["bold"]),
     )
     store.save_staging_context(session, context)

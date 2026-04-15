@@ -11,16 +11,13 @@ Layout:
             voice_profile.md
             job_description.md
         v1/
-            cover_letter.md
             resume.md
-            interview_guide.md
             voice_review.json               (optional)
             ai_review.json                  (optional)
             truth_review.json               (optional)
             hiring_manager_review.json      (optional)
             relevance_pruning_review.json   (optional)
             ats_keyword_review.json         (optional)
-            consistency_review.json         (optional)
             grammar_review.json             (optional)
         v2/
             ...
@@ -41,12 +38,11 @@ from .models import (
     ALL_DOC_KEYS,
     AIDetectionResult,
     ATSKeywordResult,
+    CandidacyNarrative,
     CareerProfile,
-    ConsistencyResult,
     DocumentKey,
     DocumentSet,
     DraftingContext,
-    EvidencePack,
     ExemptedPhrases,
     GrammarResult,
     HiringManagerReview,
@@ -160,14 +156,8 @@ class SessionStore:
         version_dir = self.root / session.session_id / f"v{version}"
         version_dir.mkdir(parents=True, exist_ok=True)
 
-        if docs.cover_letter:
-            (version_dir / "cover_letter.md").write_text(docs.cover_letter, encoding="utf-8")
         if docs.resume:
             (version_dir / "resume.md").write_text(docs.resume, encoding="utf-8")
-        if docs.interview_guide:
-            (version_dir / "interview_guide.md").write_text(
-                docs.interview_guide, encoding="utf-8"
-            )
 
         session.versions.append(
             VersionInfo(
@@ -186,22 +176,14 @@ class SessionStore:
         v = version or session.current_version
         version_dir = self.root / session.session_id / f"v{v}"
         return DocumentSet(
-            cover_letter=_read_opt(version_dir / "cover_letter.md"),
             resume=_read_opt(version_dir / "resume.md"),
-            interview_guide=_read_opt(version_dir / "interview_guide.md"),
         )
 
     def update_documents(self, session: Session, docs: DocumentSet) -> None:
         """Overwrite the current version's document files without bumping the version."""
         version_dir = self.root / session.session_id / f"v{session.current_version}"
-        if docs.cover_letter:
-            (version_dir / "cover_letter.md").write_text(docs.cover_letter, encoding="utf-8")
         if docs.resume:
             (version_dir / "resume.md").write_text(docs.resume, encoding="utf-8")
-        if docs.interview_guide:
-            (version_dir / "interview_guide.md").write_text(
-                docs.interview_guide, encoding="utf-8"
-            )
 
     # --- Reviews -----------------------------------------------------------
 
@@ -215,7 +197,6 @@ class SessionStore:
             ("hiring_manager_review.json", reviews.hiring_manager),
             ("relevance_pruning_review.json", reviews.relevance_pruning),
             ("ats_keyword_review.json", reviews.ats_keyword),
-            ("consistency_review.json", reviews.consistency),
             ("grammar_review.json", reviews.grammar),
         ]
         for filename, model in _save_pairs:
@@ -244,17 +225,16 @@ class SessionStore:
             hiring_manager=_load_model_opt(version_dir / "hiring_manager_review.json", HiringManagerReview),
             relevance_pruning=_load_model_opt(version_dir / "relevance_pruning_review.json", RelevancePruningResult),
             ats_keyword=_load_model_opt(version_dir / "ats_keyword_review.json", ATSKeywordResult),
-            consistency=_load_model_opt(version_dir / "consistency_review.json", ConsistencyResult),
             grammar=_load_model_opt(version_dir / "grammar_review.json", GrammarResult),
         )
 
-    # --- Staging context (pre-generation evidence curation) ---------------
+    # --- Staging context (pre-generation narrative review) ----------------
 
     def save_staging_context(self, session: Session, context: DraftingContext) -> None:
-        """Persist context at session root for evidence curation before generation."""
+        """Persist context at session root for narrative review before generation."""
         session_dir = self.root / session.session_id
-        (session_dir / "staging_evidence_pack.json").write_text(
-            context.evidence_pack.model_dump_json(indent=2), encoding="utf-8"
+        (session_dir / "staging_narrative.json").write_text(
+            context.narrative.model_dump_json(indent=2), encoding="utf-8"
         )
         (session_dir / "staging_voice_guide.json").write_text(
             context.voice_style_guide.model_dump_json(indent=2), encoding="utf-8"
@@ -263,42 +243,43 @@ class SessionStore:
     def load_staging_context(self, session: Session) -> DraftingContext | None:
         """Load the staged context saved before generation."""
         session_dir = self.root / session.session_id
-        ep = _load_model_opt(session_dir / "staging_evidence_pack.json", EvidencePack)
+        narrative = _load_model_opt(session_dir / "staging_narrative.json", CandidacyNarrative)
         vg = _load_model_opt(session_dir / "staging_voice_guide.json", VoiceStyleGuide)
-        if ep is None or vg is None:
+        if narrative is None or vg is None:
             return None
-        return DraftingContext(evidence_pack=ep, voice_style_guide=vg)
+        return DraftingContext(narrative=narrative, voice_style_guide=vg)
 
     def clear_staging_context(self, session: Session) -> None:
         """Remove staging context files after generation."""
         session_dir = self.root / session.session_id
-        for name in ("staging_evidence_pack.json", "staging_voice_guide.json", "staging_options.json"):
+        for name in ("staging_narrative.json", "staging_voice_guide.json", "staging_options.json",
+                     "staging_evidence_pack.json"):  # clean up legacy files
             path = session_dir / name
             if path.exists():
                 path.unlink()
 
-    # --- Context (EvidencePack + VoiceStyleGuide) --------------------------
+    # --- Context (CandidacyNarrative + VoiceStyleGuide) -------------------
 
     def save_context(self, session: Session, context: DraftingContext) -> None:
-        """Persist the EvidencePack and VoiceStyleGuide for the current version."""
+        """Persist the CandidacyNarrative and VoiceStyleGuide for the current version."""
         version_dir = self.root / session.session_id / f"v{session.current_version}"
         version_dir.mkdir(parents=True, exist_ok=True)
-        (version_dir / "evidence_pack.json").write_text(
-            context.evidence_pack.model_dump_json(indent=2), encoding="utf-8"
+        (version_dir / "narrative.json").write_text(
+            context.narrative.model_dump_json(indent=2), encoding="utf-8"
         )
         (version_dir / "voice_guide.json").write_text(
             context.voice_style_guide.model_dump_json(indent=2), encoding="utf-8"
         )
 
     def load_context(self, session: Session, version: int | None = None) -> DraftingContext | None:
-        """Load persisted EvidencePack and VoiceStyleGuide for a version."""
+        """Load persisted CandidacyNarrative and VoiceStyleGuide for a version."""
         v = version or session.current_version
         version_dir = self.root / session.session_id / f"v{v}"
-        ep = _load_model_opt(version_dir / "evidence_pack.json", EvidencePack)
+        narrative = _load_model_opt(version_dir / "narrative.json", CandidacyNarrative)
         vg = _load_model_opt(version_dir / "voice_guide.json", VoiceStyleGuide)
-        if ep is None or vg is None:
+        if narrative is None or vg is None:
             return None
-        return DraftingContext(evidence_pack=ep, voice_style_guide=vg)
+        return DraftingContext(narrative=narrative, voice_style_guide=vg)
 
     # --- Suppression / exempted phrases ------------------------------------
 
@@ -335,12 +316,8 @@ class SessionStore:
         version_dir = self.root / session.session_id / f"v{session.current_version}"
         pass_dir = version_dir / f"repair_pass_{pass_num}"
         pass_dir.mkdir(parents=True, exist_ok=True)
-        if docs.cover_letter:
-            (pass_dir / "cover_letter.md").write_text(docs.cover_letter, encoding="utf-8")
         if docs.resume:
             (pass_dir / "resume.md").write_text(docs.resume, encoding="utf-8")
-        if docs.interview_guide:
-            (pass_dir / "interview_guide.md").write_text(docs.interview_guide, encoding="utf-8")
         if reviews:
             if reviews.truthfulness:
                 (pass_dir / "truth_review.json").write_text(
@@ -368,9 +345,7 @@ class SessionStore:
         if not pass_dir.exists():
             return None, None
         docs = DocumentSet(
-            cover_letter=_read_opt(pass_dir / "cover_letter.md"),
             resume=_read_opt(pass_dir / "resume.md"),
-            interview_guide=_read_opt(pass_dir / "interview_guide.md"),
         )
         truth = _load_model_opt(pass_dir / "truth_review.json", TruthfulnessResult)
         voice = _load_model_opt(pass_dir / "voice_review.json", VoiceReviewResult)

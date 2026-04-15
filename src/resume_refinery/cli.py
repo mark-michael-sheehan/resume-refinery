@@ -79,10 +79,6 @@ def new(
     output_dir: Annotated[Path, typer.Argument(help="Directory to write generated documents to")],
     company: Optional[str] = typer.Option(None, "--company", help="Company name (overrides auto-extraction from job description)"),
     title: Optional[str] = typer.Option(None, "--title", help="Job title (overrides auto-extraction from job description)"),
-    docs: Annotated[
-        Optional[list[str]],
-        typer.Option("--docs", "-D", help="Documents to generate: cover_letter, resume, interview_guide (repeatable; default: all)"),
-    ] = None,
     skip_review: bool = typer.Option(False, "--skip-review", help="Skip auto-review after generation"),
     allow_unverified: bool = typer.Option(
         False,
@@ -90,20 +86,11 @@ def new(
         help="Allow outputs even if strict truth review still finds unsupported claims",
     ),
 ):
-    """Start a new session: generate selected documents then run truth + quality reviews."""
+    """Start a new session: generate a resume then run truth + quality reviews."""
     validated_dir = _validate_output_dir(output_dir)
     career = load_career_profile(career_profile)
     voice = load_voice_profile(voice_profile)
     job = load_job_description(job_description, company=company, title=title)
-
-    selected_docs = None
-    if docs:
-        valid_keys = {"cover_letter", "resume", "interview_guide"}
-        for d in docs:
-            if d not in valid_keys:
-                console.print(f"[red]Unknown document: {d}. Choose from: {', '.join(sorted(valid_keys))}[/red]")
-                raise typer.Exit(1)
-        selected_docs = docs  # type: ignore[assignment]
 
     result = _get_orchestrator().create_session_run(
         career,
@@ -112,7 +99,6 @@ def new(
         output_dir=validated_dir,
         skip_review=skip_review,
         allow_unverified=allow_unverified,
-        selected_docs=selected_docs,
         progress=_progress,
         stream_callback=_stream_chunk,
     )
@@ -134,28 +120,18 @@ def refine(
     session_id: Annotated[str, typer.Argument(help="Session ID to refine")],
     output_dir: Annotated[Path, typer.Argument(help="Directory to write generated documents to")],
     feedback: Annotated[str, typer.Option("--feedback", "-f", help="Feedback for the agent")],
-    doc: Annotated[
-        Optional[str],
-        typer.Option("--doc", "-d", help="cover_letter | resume | interview_guide (default: all)"),
-    ] = None,
     allow_unverified: bool = typer.Option(
         False,
         "--allow-unverified",
         help="Allow outputs even if strict truth review still finds unsupported claims",
     ),
 ):
-    """Refine one or all documents in a session with user instructions."""
+    """Refine the resume in a session with user instructions."""
     validated_dir = _validate_output_dir(output_dir)
-    if doc:
-        if doc not in ("cover_letter", "resume", "interview_guide"):
-            console.print(f"[red]Unknown document: {doc}[/red]")
-            raise typer.Exit(1)
-    key = doc if doc else None
     try:
         result = _get_orchestrator().refine_session_run(
             session_id,
             feedback,
-            doc=key,  # type: ignore[arg-type]
             output_dir=validated_dir,
             allow_unverified=allow_unverified,
             progress=_progress,
@@ -301,31 +277,22 @@ def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
         r = reviews.voice
         match_color = {"strong": "green", "moderate": "yellow", "weak": "red"}[r.overall_match]
         lines = [f"Overall match: [{match_color}]{r.overall_match.upper()}[/{match_color}]"]
-        for label, match, issues in [
-            ("Cover Letter", r.cover_letter_match, r.cover_letter_issues),
-            ("Resume", r.resume_match, r.resume_issues),
-        ]:
-            mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[match]
-            lines.append(f"\n[bold]{label}[/bold]: [{mc}]{match}[/{mc}]")
-            if issues:
-                for issue in issues:
-                    lines.append(f"  • {issue}")
+        mc = {"strong": "green", "moderate": "yellow", "weak": "red"}[r.resume_match]
+        lines.append(f"\n[bold]Resume[/bold]: [{mc}]{r.resume_match}[/{mc}]")
+        if r.resume_issues:
+            for issue in r.resume_issues:
+                lines.append(f"  • {issue}")
         console.print(Panel("\n".join(lines), title="[bold]Voice Match Review[/bold]"))
 
     if show_quality_reviews and reviews.ai_detection:
         r = reviews.ai_detection
         risk_color = {"low": "green", "medium": "yellow", "high": "red"}[r.risk_level]
         lines = [f"AI-content risk: [{risk_color}]{r.risk_level.upper()}[/{risk_color}]"]
-        for label, flags in [
-            ("Cover Letter", r.cover_letter_flags),
-            ("Resume", r.resume_flags),
-            ("Interview Guide", r.interview_guide_flags),
-        ]:
-            if flags:
-                lines.append(f"\n[bold]{label}[/bold]: {len(flags)} flag(s)")
-                for f in flags:
-                    lines.append(f'  • "{f}"')
-        if not any([r.cover_letter_flags, r.resume_flags, r.interview_guide_flags]):
+        if r.resume_flags:
+            lines.append(f"\n[bold]Resume[/bold]: {len(r.resume_flags)} flag(s)")
+            for f in r.resume_flags:
+                lines.append(f'  • "{f}"')
+        else:
             lines.append("\nNo flags.")
         console.print(Panel("\n".join(lines), title="[bold]AI-Detection Review[/bold]"))
 
@@ -333,24 +300,18 @@ def _print_review_summary(reviews, show_quality_reviews: bool = True) -> None:
 def _print_truth_summary(truth) -> None:
     color = "green" if truth.all_supported else "red"
     lines = [f"All claims supported: [{color}]{str(truth.all_supported).upper()}[/{color}]"]
-    for label, doc in [
-        ("Cover Letter", truth.cover_letter),
-        ("Resume", truth.resume),
-        ("Interview Guide", truth.interview_guide),
-    ]:
-        status = "[green]✓[/green]" if doc.pass_strict else f"[red]✗[/red]"
-        lines.append(f"\n[bold]{label}[/bold]: {status}")
-        if doc.unsupported_claims:
-            for claim in doc.unsupported_claims:
-                lines.append(f"  • {claim}")
+    doc = truth.resume
+    status = "[green]✓[/green]" if doc.pass_strict else "[red]✗[/red]"
+    lines.append(f"\n[bold]Resume[/bold]: {status}")
+    if doc.unsupported_claims:
+        for claim in doc.unsupported_claims:
+            lines.append(f"  • {claim}")
     console.print(Panel("\n".join(lines), title="[bold]Truthfulness Review[/bold]"))
 
 
 def _print_repair_summary(repair_passes) -> None:
     doc_labels = {
-        "cover_letter": "Cover Letter",
         "resume": "Resume",
-        "interview_guide": "Interview Guide",
     }
     for i, repair_pass in enumerate(repair_passes, 1):
         if not repair_pass.edits:

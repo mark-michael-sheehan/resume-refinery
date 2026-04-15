@@ -48,19 +48,16 @@ def test_docx_inline_bold(tmp_path):
 
 def test_export_document_set_writes_docx_files(tmp_path, document_set):
     written = export_document_set(document_set, tmp_path)
-    assert "cover_letter" in written
     assert "resume" in written
-    assert "interview_guide" in written
-    assert written["cover_letter"].suffix == ".docx"
-    assert written["cover_letter"].exists()
+    assert written["resume"].suffix == ".docx"
+    assert written["resume"].exists()
 
 
 def test_export_document_set_partial(tmp_path):
     from resume_refinery.models import DocumentSet
-    docs = DocumentSet(cover_letter="# Cover\n\nText.", resume=None, interview_guide=None)
+    docs = DocumentSet(resume=None)
     written = export_document_set(docs, tmp_path)
-    assert "cover_letter" in written
-    assert "resume" not in written
+    assert len(written) == 0
 
 
 def test_markdown_to_docx_handles_horizontal_rule(tmp_path):
@@ -137,9 +134,7 @@ def test_docx_skips_empty_lines(tmp_path):
 def test_export_document_set_creates_output_dir(tmp_path):
     nested = tmp_path / "deep" / "nested" / "dir"
     from resume_refinery.models import DocumentSet
-    docs = DocumentSet(cover_letter="# Letter\n\nBody.", resume="# Resume", interview_guide=None)
+    docs = DocumentSet(resume="# Resume")
     written = export_document_set(docs, nested)
     assert nested.exists()
-    assert "cover_letter" in written
     assert "resume" in written
-    assert "interview_guide" not in written

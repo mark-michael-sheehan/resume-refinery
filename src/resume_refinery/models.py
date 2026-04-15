@@ -368,24 +368,21 @@ class CareerRepository(BaseModel):
         )
 
 
-class JobRequirement(BaseModel):
-    requirement: str
-    category: Literal["skill", "experience", "leadership", "domain", "other"] = "other"
-    source_excerpt: Optional[str] = None
+class NarrativePillar(BaseModel):
+    """A supporting theme in the candidacy narrative."""
+
+    theme: str = Field(description="Short theme label")
+    argument: str = Field(description="How this theme supports the thesis")
+    career_evidence: list[str] = Field(default_factory=list, description="Specific evidence from the career profile")
 
 
-class EvidenceItem(BaseModel):
-    requirement: str
-    evidence: str
-    source_excerpt: str
-    relevance_score: int = Field(default=3, ge=1, le=5)
+class CandidacyNarrative(BaseModel):
+    """Strategic narrative framing why the candidate is a strong fit for the target role."""
 
-
-class EvidencePack(BaseModel):
-    job_requirements: list[JobRequirement] = Field(default_factory=list)
-    matched_evidence: list[EvidenceItem] = Field(default_factory=list)
-    gaps: list[str] = Field(default_factory=list)
-    source_summary: list[str] = Field(default_factory=list)
+    thesis: str = Field(default="", description="Core 1-2 sentence argument for candidacy")
+    pillars: list[NarrativePillar] = Field(default_factory=list, description="3-5 supporting themes with evidence")
+    gap_framing: list[str] = Field(default_factory=list, description="Honest framing for gaps between candidate and requirements")
+    raw_narrative: str = Field(default="", description="Full generated narrative text for reference")
 
 
 class VoiceStyleGuide(BaseModel):
@@ -397,7 +394,7 @@ class VoiceStyleGuide(BaseModel):
 
 
 class DraftingContext(BaseModel):
-    evidence_pack: EvidencePack
+    narrative: CandidacyNarrative
     voice_style_guide: VoiceStyleGuide
 
 
@@ -406,15 +403,13 @@ class DraftingContext(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-DocumentKey = Literal["cover_letter", "resume", "interview_guide"]
+DocumentKey = Literal["resume"]
 
 
 class DocumentSet(BaseModel):
-    """Markdown source for each generated document."""
+    """Markdown source for the generated resume."""
 
-    cover_letter: Optional[str] = None
     resume: Optional[str] = None
-    interview_guide: Optional[str] = None
 
     def get(self, key: DocumentKey) -> Optional[str]:
         return getattr(self, key, None)
@@ -423,10 +418,7 @@ class DocumentSet(BaseModel):
         setattr(self, key, value)
 
     def all_present(self) -> bool:
-        return all(
-            v is not None
-            for v in (self.cover_letter, self.resume, self.interview_guide)
-        )
+        return self.resume is not None
 
 
 # ---------------------------------------------------------------------------
@@ -436,21 +428,15 @@ class DocumentSet(BaseModel):
 
 class VoiceReviewResult(BaseModel):
     overall_match: Literal["strong", "moderate", "weak"]
-    cover_letter_match: Literal["strong", "moderate", "weak"] = "moderate"
     resume_match: Literal["strong", "moderate", "weak"] = "moderate"
-    cover_letter_assessment: str
-    resume_assessment: str
+    resume_assessment: str = ""
     specific_issues: StrList = Field(default_factory=list)
-    # Per-document issues for targeted repair
-    cover_letter_issues: StrList = Field(default_factory=list)
     resume_issues: StrList = Field(default_factory=list)
 
 
 class AIDetectionResult(BaseModel):
     risk_level: Literal["low", "medium", "high"]
-    cover_letter_flags: StrList = Field(default_factory=list)
     resume_flags: StrList = Field(default_factory=list)
-    interview_guide_flags: StrList = Field(default_factory=list)
 
 
 class DocumentTruthResult(BaseModel):
@@ -461,15 +447,13 @@ class DocumentTruthResult(BaseModel):
 
 class TruthfulnessResult(BaseModel):
     all_supported: bool
-    cover_letter: DocumentTruthResult
     resume: DocumentTruthResult
-    interview_guide: DocumentTruthResult
 
 
 class RelevancePruningIssue(BaseModel):
     """A single content item flagged for potential removal."""
 
-    document: Literal["resume", "cover_letter"]
+    document: Literal["resume"]
     phrase: str = Field(description="Verbatim quote from the document to consider removing")
     reason: str = Field(description="Why this content does not add to the story")
     category: Literal["redundant", "irrelevant", "filler", "low_impact", "space_waste"] = "filler"
@@ -477,17 +461,16 @@ class RelevancePruningIssue(BaseModel):
 
 
 class RelevancePruningResult(BaseModel):
-    """Result of relevance pruning review on the full application package."""
+    """Result of relevance pruning review on the resume."""
 
     overall_density: Literal["lean", "balanced", "bloated"] = "balanced"
-    cover_letter_issues: list[RelevancePruningIssue] = Field(default_factory=list)
     resume_issues: list[RelevancePruningIssue] = Field(default_factory=list)
 
 
 class HiringManagerImprovementItem(BaseModel):
     """A single improvement suggestion from the hiring manager review."""
 
-    area: str = Field(description="Which document or section the suggestion targets")
+    area: str = Field(default="resume", description="Which document or section the suggestion targets")
     suggestion: str = Field(description="Specific actionable improvement")
     impact: Literal["high", "medium", "low"] = "medium"
 
@@ -498,7 +481,7 @@ class HiringManagerIssue(BaseModel):
     Each issue quotes a verbatim phrase from the document so the repair
     agent can produce a surgical find/replace edit."""
 
-    document: Literal["resume", "cover_letter"]
+    document: Literal["resume"]
     phrase: str = Field(description="Verbatim quote from the document to improve")
     issue: str = Field(description="What is weak from a hiring-manager perspective")
     suggestion: str = Field(description="How to improve it")
@@ -506,7 +489,7 @@ class HiringManagerIssue(BaseModel):
 
 
 class HiringManagerReview(BaseModel):
-    """Simulated hiring-manager assessment of the full application package."""
+    """Simulated hiring-manager assessment of the resume."""
 
     advance_likelihood: int = Field(
         ge=0, le=100,
@@ -516,8 +499,6 @@ class HiringManagerReview(BaseModel):
     strengths: StrList = Field(default_factory=list)
     concerns: StrList = Field(default_factory=list)
     improvements: list[HiringManagerImprovementItem] = Field(default_factory=list)
-    # Per-document issue lists with verbatim quotes for repair loop integration
-    cover_letter_issues: list[HiringManagerIssue] = Field(default_factory=list)
     resume_issues: list[HiringManagerIssue] = Field(default_factory=list)
 
 
@@ -539,28 +520,10 @@ class ATSKeywordResult(BaseModel):
     stuffing_keywords: list[ATSKeywordIssue] = Field(default_factory=list)
 
 
-class ConsistencyIssue(BaseModel):
-    """A single cross-document contradiction."""
-
-    field: str = Field(description="What is inconsistent (e.g. 'team size', 'job title', 'date range')")
-    document_a: Literal["resume", "cover_letter", "interview_guide"]
-    quote_a: str = Field(description="Verbatim quote from document_a")
-    document_b: Literal["resume", "cover_letter", "interview_guide"]
-    quote_b: str = Field(description="Verbatim quote from document_b")
-    severity: Literal["high", "medium", "low"] = "medium"
-
-
-class ConsistencyResult(BaseModel):
-    """Result of cross-document consistency review."""
-
-    consistent: bool = True
-    issues: list[ConsistencyIssue] = Field(default_factory=list)
-
-
 class GrammarIssue(BaseModel):
     """A single grammar or mechanics finding."""
 
-    document: Literal["resume", "cover_letter", "interview_guide"]
+    document: Literal["resume"]
     phrase: str = Field(description="Verbatim quote containing the error")
     issue: str = Field(description="Description of the grammatical or mechanical problem")
     suggestion: str = Field(default="", description="Corrected version")
@@ -572,9 +535,7 @@ class GrammarResult(BaseModel):
     """Result of grammar & mechanics review."""
 
     clean: bool = True
-    cover_letter_issues: list[GrammarIssue] = Field(default_factory=list)
     resume_issues: list[GrammarIssue] = Field(default_factory=list)
-    interview_guide_issues: list[GrammarIssue] = Field(default_factory=list)
 
 
 class ReviewBundle(BaseModel):
@@ -584,13 +545,11 @@ class ReviewBundle(BaseModel):
     hiring_manager: Optional[HiringManagerReview] = None
     relevance_pruning: Optional[RelevancePruningResult] = None
     ats_keyword: Optional[ATSKeywordResult] = None
-    consistency: Optional[ConsistencyResult] = None
     grammar: Optional[GrammarResult] = None
 
 
 ReviewerPriority = Literal[
     "truthfulness",
-    "consistency",
     "ats",
     "grammar",
     "voice",
@@ -603,7 +562,6 @@ ReviewerPriority = Literal[
 # by lower-priority style repairs.
 REVIEWER_PRIORITY_RANK: dict[str, int] = {
     "truthfulness": 80,
-    "consistency": 70,
     "ats": 60,
     "grammar": 50,
     "voice": 40,
@@ -676,7 +634,6 @@ class RepairPassResult(BaseModel):
     accepted_hm_issues: StrList = Field(default_factory=list)
     accepted_pruning_issues: StrList = Field(default_factory=list)
     accepted_ats_issues: StrList = Field(default_factory=list)
-    accepted_consistency_issues: StrList = Field(default_factory=list)
     accepted_grammar_issues: StrList = Field(default_factory=list)
     # Edits that failed Phase 1 locate (could not find the ``find`` text in
     # the document).  Keyed by document, each value is a list of EditOp dicts.
@@ -709,10 +666,6 @@ class ExemptedPhrases(BaseModel):
         default_factory=list,
         description="ATS-keyword issues accepted as reviewer false positives",
     )
-    consistency_issues: StrList = Field(
-        default_factory=list,
-        description="Cross-document consistency issues accepted as reviewer false positives",
-    )
     grammar_issues: StrList = Field(
         default_factory=list,
         description="Grammar/mechanics issues accepted as reviewer false positives",
@@ -724,7 +677,7 @@ class OrchestrationResult(BaseModel):
     documents: DocumentSet
     reviews: ReviewBundle = Field(default_factory=ReviewBundle)
     repair_passes: list[RepairPassResult] = Field(default_factory=list)
-    evidence_pack: Optional[EvidencePack] = None
+    narrative: Optional[CandidacyNarrative] = None
     voice_style_guide: Optional[VoiceStyleGuide] = None
     exported_paths: dict[str, str] = Field(default_factory=dict)
     strict_truth_failed: bool = False
@@ -743,7 +696,7 @@ class VersionInfo(BaseModel):
     has_reviews: bool = False
 
 
-ALL_DOC_KEYS: list[DocumentKey] = ["cover_letter", "resume", "interview_guide"]
+ALL_DOC_KEYS: list[DocumentKey] = ["resume"]
 
 
 class Session(BaseModel):

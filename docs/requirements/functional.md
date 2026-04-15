@@ -12,20 +12,20 @@
 
 | ID | Requirement |
 |---|---|
-| FR-2.1 | **Evidence extraction** — The EvidenceAgent analyses the career profile against the job description and produces an `EvidencePack` (matched evidence + gaps). The LLM may paraphrase career content to highlight relevance, but must anchor each item to a verbatim `source_excerpt`. A two-part grounding check verifies: (1) the source excerpt exists in the career profile (≥60% token overlap), and (2) the paraphrased evidence stays relevant to its anchor (≥30% token overlap). Ungrounded evidence is dropped. |
+| FR-2.1 | **Narrative creation** — The NarrativeAgent analyses the career profile against the job description and produces a `CandidacyNarrative` (thesis, argument pillars with career evidence, and gap framing). When the LLM is available, it generates a structured argument for why the candidate is a strong fit. A keyword-overlap fallback produces a basic narrative when the LLM is unavailable. Pillars are capped at 5. |
 | FR-2.2 | **Voice extraction** — The VoiceAgent analyses the voice profile and produces a `VoiceStyleGuide` used to shape document tone. |
-| FR-2.3 | **Drafting** — The DraftingAgent generates documents from the selected set (cover letter, resume, interview guide). By default all three are generated; the user may select a subset via CLI (`--docs`) or web app checkboxes. Each document is a separate LLM call using thinking mode. The selection is persisted in the session and scopes all subsequent review, repair, and refine operations to only the selected documents. |
-| FR-2.4 | **Verification** — The VerificationAgent runs eight independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning, ATS keyword alignment, cross-document consistency, grammar & mechanics) on each document. |
+| FR-2.3 | **Drafting** — The DraftingAgent generates the resume. The document is produced in a single LLM call using thinking mode. |
+| FR-2.4 | **Verification** — The VerificationAgent runs seven independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning, ATS keyword alignment, grammar & mechanics) on the resume. |
 | FR-2.5 | **Repair** — The RepairAgent fixes documents that fail verification using surgical find/replace edits (see [convergence.md](convergence.md)). |
 | FR-2.6 | **Iteration** — Verification and repair repeat up to `MAX_REPAIR_PASSES` times or until all documents pass. |
-| FR-2.7 | **Refinement** — The `refine` operation applies user instructions via the RepairAgent (single pass, no loop), then runs all eight reviewers once on the result. The updated document is saved as a new version with review feedback. |
-| FR-2.8 | **Evidence Curation (web app)** — After evidence extraction and before document generation, the web app presents matched evidence items as a checklist. The user may deselect items to exclude them from the evidence pool. The curated `EvidencePack` is used for all downstream generation and review. A "Generate with All Evidence" option skips curation. The CLI does not include this step. |
+| FR-2.7 | **Refinement** — The `refine` operation applies user instructions via the RepairAgent (single pass, no loop), then runs all seven reviewers once on the result. The updated document is saved as a new version with review feedback. |
+| FR-2.8 | _(Reserved)_ |
 
 ## FR-3 Outputs
 
 | ID | Requirement |
 |---|---|
-| FR-3.1 | Each run produces up to three documents: **cover letter**, **resume**, and **interview guide** in both Markdown and DOCX format. The actual set depends on the user's document selection at session creation time. |
+| FR-3.1 | Each run produces a **resume** in both Markdown and DOCX format. |
 | FR-3.2 | Documents are versioned (v1, v2, …) within a session directory. Each version includes Markdown source, DOCX export, and review JSON. |
 | FR-3.3 | DOCX generation uses python-docx (no external Pandoc dependency). |
 | FR-3.4 | The user must specify an **output directory** for generated DOCX files. In the CLI it is a required positional argument; in the web app it is a required text field. If the path is invalid (not a directory, parent does not exist) the system raises an error before generation begins. DOCX files are always also saved in the session version directory to preserve version history. |
@@ -35,14 +35,14 @@
 | ID | Requirement |
 |---|---|
 | FR-4.1 | Each job application creates a named session under `~/.resume_refinery/sessions/` (overridable via `RESUME_REFINERY_SESSIONS_DIR`). |
-| FR-4.2 | Session context (evidence pack, voice guide, drafting context) can be saved and loaded for resumption. |
+| FR-4.2 | Session context (candidacy narrative, voice guide, drafting context) can be saved and loaded for resumption. |
 | FR-4.3 | Session naming is derived from company + role + date. |
 
 ## FR-5 Delivery
 
 | ID | Requirement |
 |---|---|
-| FR-5.1 | Primary delivery is a local web application (FastAPI + browser). The **generate** and **refine** endpoints stream real-time progress to the browser using `StreamingResponse`. Each orchestrator step (evidence extraction, document generation, review passes, repairs) is reported as it completes, with multi-line detail (review summaries, repair edits, false-positive acceptances) rendered in collapsible `<details>` blocks. On completion the page auto-redirects to the session view. |
+| FR-5.1 | Primary delivery is a local web application (FastAPI + browser). The **generate** and **refine** endpoints stream real-time progress to the browser using `StreamingResponse`. Each orchestrator step (narrative creation, document generation, review passes, repairs) is reported as it completes, with multi-line detail (review summaries, repair edits, false-positive acceptances) rendered in collapsible `<details>` blocks. On completion the page auto-redirects to the session view. |
 | FR-5.2 | A CLI interface is also available for headless/scripted use. |
 | FR-5.3 | The tool is pip-installable (`pip install -e .`). |
 
@@ -67,8 +67,8 @@
 | FR-6.2 | **Voice reviewer** — Documents must match the writing style described in the voice profile. Per-document match strength is rated as "strong", "moderate", or "weak". |
 | FR-6.3 | **AI detection reviewer** — Documents are scanned for phrases that commonly trigger AI-detection tools. Flagged phrases are listed per document. |
 | FR-6.4 | All reviewers use JSON-formatted output, temperature 0, and thinking disabled to maximise determinism. |
-| FR-6.5 | **Hiring-manager reviewer** — After the verification/repair loop completes, a simulated hiring-manager review evaluates the resume and cover letter against the job description. It returns: an `advance_likelihood` percentage (0–100), strengths, concerns, and specific actionable improvement suggestions targeting either the resume or cover letter. The review is displayed on the session detail page in the web app and emitted via the progress callback during generation/refinement. |
-| FR-6.6 | **Relevance-pruning reviewer** — Identifies bullets, sentences, sections, or entire role entries in the resume and cover letter that do not meaningfully strengthen the applicant's case for the target role. Flags content as redundant, irrelevant, filler, low-impact, or space-wasting. Preserves content that demonstrates transferable skills, differentiation, or narrative coherence. Findings feed into the repair loop as advisory deletions (never blocks convergence). |
+| FR-6.5 | **Hiring-manager reviewer** — After the verification/repair loop completes, a simulated hiring-manager review evaluates the resume against the job description. It returns: an `advance_likelihood` percentage (0–100), strengths, concerns, and specific actionable improvement suggestions targeting the resume. The review is displayed on the session detail page in the web app and emitted via the progress callback during generation/refinement. |
+| FR-6.6 | **Relevance-pruning reviewer** — Identifies bullets, sentences, sections, or entire role entries in the resume that do not meaningfully strengthen the applicant's case for the target role. Flags content as redundant, irrelevant, filler, low-impact, or space-wasting. Preserves content that demonstrates transferable skills, differentiation, or narrative coherence. Findings feed into the repair loop as advisory deletions (never blocks convergence). |
 | FR-6.7 | **ATS keyword alignment reviewer** — Reviews the resume against the job description and career profile. Flags missing high-priority keywords the candidate genuinely possesses but that are absent from the resume, phrasing mismatches (synonym vs. exact JD term), and keyword stuffing. Never flags skills the candidate lacks. Returns an `alignment_score` ("strong" / "moderate" / "weak") plus per-keyword issue lists. Gating: "strong" or "moderate" passes. |
-| FR-6.8 | **Cross-document consistency reviewer** — Compares facts across the cover letter, resume, and interview guide in a single LLM call. Flags numeric contradictions, date/timeline mismatches, title/role contradictions, factual conflicts, and metric inconsistencies. Never flags omissions or different detail levels. Returns a `consistent` boolean plus a list of verbatim-quote contradiction pairs. Gating: `consistent=True` passes. |
-| FR-6.9 | **Grammar & mechanics reviewer** — Reviews each document separately for grammar errors, tense inconsistency, punctuation problems, capitalisation issues, and formatting inconsistencies. Never flags intentional fragments, industry jargon, or stylistic preferences. Returns a `clean` boolean plus per-document issue lists. Gating on early passes: `clean=True` required. On late passes (≥ `RELAXED_PASS_START`): ≤ 2 total issues allowed. |
+| FR-6.8 | _(Reserved — cross-document consistency reviewer removed; only one document type exists.)_ |
+| FR-6.9 | **Grammar & mechanics reviewer** — Reviews the resume for grammar errors, tense inconsistency, punctuation problems, capitalisation issues, and formatting inconsistencies. Never flags intentional fragments, industry jargon, or stylistic preferences. Returns a `clean` boolean plus issue lists. Gating on early passes: `clean=True` required. On late passes (≥ `RELAXED_PASS_START`): ≤ 2 total issues allowed. |

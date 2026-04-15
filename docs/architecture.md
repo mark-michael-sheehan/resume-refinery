@@ -18,16 +18,12 @@ voice_profile.md + career_profile.md + job_description.md
             ▼
   ResumeRefineryOrchestrator
   ┌──────────────────────────────────────────────────────────────────────┐
-  │ EvidenceAgent      -> EvidencePack (requirements + matched evidence) │
+  │ NarrativeAgent     -> CandidacyNarrative (thesis + pillars + gaps)   │
   │ VoiceAgent         -> VoiceStyleGuide                                │
   │                                                                      │
-  │ [Web app only] Evidence Curation page                                │
-  │   User reviews matched evidence and deselects unwanted items.        │
-  │   Curated EvidencePack is saved back before generation.              │
-  │                                                                      │
-  │ DraftingAgent      -> DocumentSet                                    │
+  │ DraftingAgent      -> DocumentSet (resume only)                      │
   │ VerificationAgent  -> Unified review + repair loop:                  │
-  │   All 8 reviewers concurrent -> single repair if any gate fails      │
+  │   All 7 reviewers concurrent -> single repair if any gate fails      │
   │ RepairAgent        -> targeted rewrites with prior-edit context       │
   └──────────────────────────────────────────────────────────────────────┘
             │
@@ -37,7 +33,7 @@ voice_profile.md + career_profile.md + job_description.md
             │
             ▼
     Unified review + repair loop (per pass):
-      All 8 reviewers run concurrently (truth, consistency, ATS, grammar,
+      All 7 reviewers run concurrently (truth, ATS, grammar,
         voice, AI detection, HM, pruning)
       Suppressions applied, gates checked, single repair if any fail
       Edit-region tracking (annotated pass-through): each repair records
@@ -69,7 +65,7 @@ voice_profile.md + career_profile.md + job_description.md
 | `models.py` | Domain models + intermediate orchestration artifacts |
 | `parsers.py` | Read markdown files → models |
 | `agent.py` | Low-level Ollama document generation client |
-| `specialist_agents.py` | Evidence, voice, drafting, verification, and repair agents |
+| `specialist_agents.py` | Narrative, voice, drafting, verification, and repair agents |
 | `orchestrator.py` | Deterministic coordinator over specialist agents |
 | `reviewers.py` | LLM review client implementations |
 | `webapp.py` | Local FastAPI browser app with streaming progress feedback |
@@ -168,12 +164,8 @@ Override with `RESUME_REFINERY_SESSIONS_DIR` env var.
     │   ├── voice_profile.md
     │   └── job_description.md
     ├── v1/
-    │   ├── cover_letter.md         ← Markdown source (intermediate)
-    │   ├── cover_letter.docx       ← Final Word document
     │   ├── resume.md
     │   ├── resume.docx
-    │   ├── interview_guide.md
-    │   ├── interview_guide.docx
     │   ├── voice_review.json
     │   ├── ai_review.json
     │   ├── hiring_manager_review.json
@@ -194,19 +186,9 @@ orchestrator and correspond to Pydantic models in `models.py`.
 ```json
 {
   "all_supported": false,
-  "cover_letter": {
-    "pass_strict": true,
-    "unsupported_claims": [],
-    "evidence_examples": ["Reduced infra costs by $180K/year (career profile, Acme Corp)"]
-  },
   "resume": {
     "pass_strict": false,
     "unsupported_claims": ["Led a team of 12 engineers"],
-    "evidence_examples": []
-  },
-  "interview_guide": {
-    "pass_strict": true,
-    "unsupported_claims": [],
     "evidence_examples": []
   }
 }
@@ -217,12 +199,9 @@ orchestrator and correspond to Pydantic models in `models.py`.
 ```json
 {
   "overall_match": "moderate",
-  "cover_letter_match": "strong",
   "resume_match": "moderate",
-  "cover_letter_assessment": "Matches the direct, analytical tone well.",
   "resume_assessment": "Slightly more formal than the voice profile suggests.",
   "specific_issues": ["Resume bullet 3 uses passive voice"],
-  "cover_letter_issues": [],
   "resume_issues": ["Resume bullet 3 uses passive voice"]
 }
 ```
@@ -232,9 +211,7 @@ orchestrator and correspond to Pydantic models in `models.py`.
 ```json
 {
   "risk_level": "medium",
-  "cover_letter_flags": ["results-driven", "passionate about"],
-  "resume_flags": [],
-  "interview_guide_flags": []
+  "resume_flags": ["results-driven", "passionate about"]
 }
 ```
 
@@ -251,18 +228,20 @@ Only written when the repair agent accepted at least one item as a false positiv
 }
 ```
 
-### `evidence_pack.json` — `EvidencePack`
+### `candidacy_narrative.json` — `CandidacyNarrative`
 
 ```json
 {
-  "job_requirements": [
-    {"requirement": "distributed systems", "category": "skill", "source_excerpt": "..."}
+  "thesis": "Strong distributed systems background makes this candidate ideal.",
+  "pillars": [
+    {
+      "theme": "Backend Engineering",
+      "argument": "Led critical infrastructure projects",
+      "career_evidence": ["Cut deploy time 60%", "Migrated monolith to microservices"]
+    }
   ],
-  "matched_evidence": [
-    {"requirement": "distributed systems", "evidence": "Built event-driven pipeline...", "source_excerpt": "...", "relevance_score": 4}
-  ],
-  "gaps": ["No Kubernetes experience mentioned"],
-  "source_summary": ["Reduced infra costs by $180K/year"]
+  "gap_framing": ["No Kubernetes experience — transferable from Docker/ECS background"],
+  "raw_narrative": "Full narrative text for context."
 }
 ```
 
@@ -286,28 +265,21 @@ the global workflow. The orchestrator owns step order, retries, and persistence.
 **Compact career context for drafting:** The DraftingAgent receives a compact career
 summary (identity, role timeline, technologies, anti-claims, education, certifications,
 skills, story titles, and strategic meta) rather than the full career profile. Role
-narratives are omitted since the EvidencePack already captures matched evidence. This
-frees token budget for richer evidence. Reviewers and the RepairAgent still receive the
-full career profile independently for fact-checking.
+narratives are omitted since the CandidacyNarrative already captures the argument for
+candidacy. This frees token budget for richer narrative context. Reviewers and the
+RepairAgent still receive the full career profile independently for fact-checking.
 
-**Evidence extraction limits:** The EvidenceAgent extracts up to 15 job requirements
-(from the LLM or keyword fallback) and matches up to 5 evidence items per requirement.
-The LLM may paraphrase career profile content to succinctly summarise how it addresses
-each requirement, but must provide a verbatim `source_excerpt` from the career profile
-as an anchor.  Each evidence item undergoes a two-part grounding check:
-1. **Anchor check** — the `source_excerpt` must be traceable to the career profile
-   (≥60% non-stopword token overlap with a single line or consecutive line-pair).
-2. **Relevance check** — the paraphrased `evidence` must share ≥30% of its tokens
-   with the anchor, ensuring the summary doesn't introduce facts absent from the source.
-Evidence that fails either check is dropped with a warning, preventing hallucinated or
-embellished claims from entering the evidence pack and downstream document generation.
-All matched evidence, requirements, and gaps are forwarded to the DraftingAgent with no
-further display-level caps.
+**Narrative creation:** The NarrativeAgent reviews the job description against the
+career profile and writes a CandidacyNarrative — a structured argument for why the
+candidate is a strong fit. The narrative includes a thesis statement, themed argument
+pillars with career evidence, and gap framing. When the LLM is unavailable, a keyword
+overlap fallback produces a basic narrative. Pillars are capped at 5 to keep the
+narrative focused.
 
-**Intermediate artifacts for explainability:** `EvidencePack` and `VoiceStyleGuide`
+**Intermediate artifacts for explainability:** `CandidacyNarrative` and `VoiceStyleGuide`
 are explicit artifacts that can be inspected in the UI and reasoned about in reviews.
 
-**Per-document generation:** Each document remains a separate Ollama LLM call, which keeps
+**Per-document generation:** The resume is generated as a single Ollama LLM call, which keeps
 targeted refinement cheap and traceable.
 
 **Adaptive thinking enabled:** All Ollama calls use `think=True`. This

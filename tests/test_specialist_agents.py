@@ -8,13 +8,12 @@ import pytest
 from resume_refinery.models import (
     AIDetectionResult,
     ATSKeywordResult,
-    ConsistencyResult,
+    CandidacyNarrative,
     DocumentSet,
     DocumentTruthResult,
     DraftingContext,
-    EvidencePack,
     GrammarResult,
-    JobRequirement,
+    NarrativePillar,
     RepairPassResult,
     ReviewBundle,
     TruthfulnessResult,
@@ -23,7 +22,7 @@ from resume_refinery.models import (
 )
 from resume_refinery.specialist_agents import (
     DraftingAgent,
-    EvidenceAgent,
+    NarrativeAgent,
     RepairAgent,
     VerificationAgent,
     VoiceAgent,
@@ -31,7 +30,7 @@ from resume_refinery.specialist_agents import (
 
 
 # ---------------------------------------------------------------------------
-# EvidenceAgent
+# NarrativeAgent
 # ---------------------------------------------------------------------------
 
 
@@ -43,200 +42,64 @@ def _make_llm_resp(text: str) -> MagicMock:
     return resp
 
 
-def test_evidence_agent_extracts_requirements_and_matches(career_profile, job_description):
-    req_json = json.dumps([
-        {"requirement": "Python expertise", "category": "skill"},
-        {"requirement": "Distributed systems experience", "category": "skill"},
-    ])
-    ev_json = json.dumps([
-        {"evidence": "Led distributed systems migration, cut deploy time 60%", "relevance_score": 5}
-    ])
+def test_narrative_agent_builds_narrative(career_profile, job_description):
+    """NarrativeAgent should produce a CandidacyNarrative from LLM JSON."""
+    narrative_json = json.dumps({
+        "thesis": "Strong distributed systems background.",
+        "pillars": [
+            {
+                "theme": "Backend",
+                "argument": "Led migrations",
+                "career_evidence": ["Cut deploy time 60%"],
+            }
+        ],
+        "gap_framing": ["No Rust experience"],
+        "raw_narrative": "Full narrative text.",
+    })
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_llm_resp(req_json),
-        _make_llm_resp(ev_json),
-        _make_llm_resp(ev_json),
-    ]
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career_profile, job_description)
+    mock_client.chat.return_value = _make_llm_resp(narrative_json)
 
-    assert pack.job_requirements
-    assert any("python" in item.requirement.lower() or "distributed" in item.requirement.lower() for item in pack.job_requirements)
-    assert pack.matched_evidence
-    assert any("distributed" in item.evidence.lower() or "engineer" in item.evidence.lower() for item in pack.matched_evidence)
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job_description)
+
+    assert narrative.thesis == "Strong distributed systems background."
+    assert len(narrative.pillars) == 1
+    assert narrative.pillars[0].theme == "Backend"
+    assert narrative.gap_framing == ["No Rust experience"]
+    assert narrative.raw_narrative == "Full narrative text."
 
 
-def test_evidence_agent_identifies_gaps(career_profile):
-    """When the job requires something not in the career profile, it should appear in gaps."""
-    from resume_refinery.models import JobDescription
-    job = JobDescription(
-        raw_content="Required: Rust experience, quantum computing, blockchain architecture.",
-        title="Quantum Engineer",
-        company="QuantumCo",
-    )
-    req_json = json.dumps([
-        {"requirement": "Rust experience", "category": "skill"},
-        {"requirement": "Quantum computing", "category": "skill"},
-    ])
-    mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_llm_resp(req_json),
-        _make_llm_resp(json.dumps([])),  # no evidence for Rust
-        _make_llm_resp(json.dumps([])),  # no evidence for Quantum
-    ]
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career_profile, job)
-
-    assert len(pack.gaps) > 0
-
-
-def test_evidence_agent_fallback_requirements():
-    """When the LLM fails, keyword/line fallback should still produce requirements."""
-    from resume_refinery.models import CareerProfile, JobDescription
-    job = JobDescription(
-        raw_content="# Data Scientist\nCompany: BigCo\n\nBuild models.\nImprove metrics.",
-        title="Data Scientist",
-        company="BigCo",
-    )
-    career = CareerProfile(raw_content="# Someone\nDoes stuff.")
+def test_narrative_agent_fallback_on_failure(career_profile, job_description):
+    """When LLM fails, keyword fallback should still produce a narrative."""
     mock_client = MagicMock()
     mock_client.chat.side_effect = Exception("Connection refused")
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career, job)
 
-    assert pack.job_requirements
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job_description)
+
+    assert isinstance(narrative, CandidacyNarrative)
+    assert narrative.thesis  # Should have a default thesis
 
 
-def test_evidence_agent_source_summary(career_profile, job_description):
-    """source_summary is derived from career profile lines — no LLM needed."""
-    req_json = json.dumps([{"requirement": "Python", "category": "skill"}])
-    mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_llm_resp(req_json),
-        _make_llm_resp(json.dumps([])),
+def test_narrative_agent_limits_pillars(career_profile, job_description):
+    """NarrativeAgent should cap pillars at 5."""
+    pillars = [
+        {"theme": f"Skill {i}", "argument": f"Arg {i}", "career_evidence": [f"ev{i}"]}
+        for i in range(10)
     ]
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career_profile, job_description)
-
-    assert pack.source_summary  # Non-empty
-
-
-def test_evidence_agent_limits_requirements():
-    """LLM extraction caps at 15 via [:15] slice."""
-    from resume_refinery.models import CareerProfile, JobDescription
-    lines = "\n".join(f"- Required: skill_{i} experience" for i in range(25))
-    job = JobDescription(raw_content=f"# Job\n{lines}", title="Job", company="Co")
-    career = CareerProfile(raw_content="# Name\nDoes things.")
-    # Return 20 requirements from LLM — slice should cap at 15
-    big_reqs = json.dumps([{"requirement": f"skill_{i}", "category": "skill"} for i in range(20)])
+    narrative_json = json.dumps({
+        "thesis": "Strong",
+        "pillars": pillars,
+        "gap_framing": [],
+        "raw_narrative": "",
+    })
     mock_client = MagicMock()
-    # First call = extraction; subsequent calls = evidence matching (15 calls for 15 reqs)
-    mock_client.chat.side_effect = [_make_llm_resp(big_reqs)] + [
-        _make_llm_resp(json.dumps([])) for _ in range(15)
-    ]
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career, job)
+    mock_client.chat.return_value = _make_llm_resp(narrative_json)
 
-    assert len(pack.job_requirements) <= 15
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job_description)
 
-
-def test_evidence_grounding_accepts_verbatim_quote(career_profile):
-    """Evidence that is a verbatim quote with matching source_excerpt should be accepted."""
-    agent = EvidenceAgent(client=MagicMock())
-    source = "Led backend migration, cut deploy time 60%"
-    grounded, reason = agent._is_grounded(
-        evidence=source,
-        source_excerpt=source,
-        career_content=career_profile.raw_content,
-    )
-    assert grounded, reason
-
-
-def test_evidence_grounding_accepts_paraphrase_of_real_source(career_profile):
-    """A succinct paraphrase anchored to a real source excerpt should be accepted."""
-    agent = EvidenceAgent(client=MagicMock())
-    grounded, reason = agent._is_grounded(
-        evidence="Achieved 60% faster deploys through backend migration",
-        source_excerpt="Led backend migration, cut deploy time 60%",
-        career_content=career_profile.raw_content,
-    )
-    assert grounded, reason
-
-
-def test_evidence_grounding_rejects_fabricated_evidence(career_profile):
-    """Evidence containing fabricated facts not in the profile should be rejected."""
-    agent = EvidenceAgent(client=MagicMock())
-    grounded, _ = agent._is_grounded(
-        evidence="Architected a real-time streaming pipeline processing 50 billion events",
-        source_excerpt="Built a Kafka pipeline processing 50B events daily",
-        career_content=career_profile.raw_content,
-    )
-    assert not grounded
-
-
-def test_evidence_grounding_rejects_fabricated_source_excerpt(career_profile):
-    """A source_excerpt not present in the career profile should be rejected."""
-    agent = EvidenceAgent(client=MagicMock())
-    grounded, reason = agent._is_grounded(
-        evidence="Managed a team of 15 engineers",
-        source_excerpt="Managed a cross-functional team of 15 engineers across 3 offices",
-        career_content=career_profile.raw_content,
-    )
-    assert not grounded
-    assert "source_excerpt not found" in reason
-
-
-def test_evidence_grounding_rejects_divergent_paraphrase(career_profile):
-    """Evidence that diverges significantly from its source_excerpt should be rejected."""
-    agent = EvidenceAgent(client=MagicMock())
-    # Source excerpt is real, but the evidence adds completely unrelated claims
-    grounded, reason = agent._is_grounded(
-        evidence="Architected a microservices platform serving 100M requests using Kubernetes and Istio",
-        source_excerpt="Led backend migration, cut deploy time 60%",
-        career_content=career_profile.raw_content,
-    )
-    assert not grounded
-    assert "diverges from source_excerpt" in reason
-
-
-def test_evidence_grounding_drops_hallucinated_llm_evidence(career_profile, job_description):
-    """Hallucinated LLM evidence should be dropped from the evidence pack."""
-    req_json = json.dumps([
-        {"requirement": "Python expertise", "category": "skill"},
-    ])
-    # LLM returns one grounded item (with valid source_excerpt) and one fabricated
-    ev_json = json.dumps([
-        {
-            "evidence": "Achieved 60% faster deploys via backend migration",
-            "source_excerpt": "Led backend migration, cut deploy time 60%",
-            "relevance_score": 5,
-        },
-        {
-            "evidence": "Built a Python framework serving 100M requests per day",
-            "source_excerpt": "Designed a high-throughput Python web framework",
-            "relevance_score": 4,
-        },
-    ])
-    mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_llm_resp(req_json),
-        _make_llm_resp(ev_json),
-    ]
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career_profile, job_description)
-
-    # Only the grounded evidence should survive
-    assert len(pack.matched_evidence) == 1
-    assert "deploy" in pack.matched_evidence[0].evidence.lower()
-
-
-def test_evidence_grounding_empty_tokens():
-    """Evidence with no meaningful tokens should not be grounded."""
-    agent = EvidenceAgent(client=MagicMock())
-    grounded, _ = agent._is_grounded("", "", "Some career content here.")
-    assert not grounded
-    grounded, _ = agent._is_grounded("a", "", "Some career content here.")
-    assert not grounded
+    assert len(narrative.pillars) <= 5
 
 
 # ---------------------------------------------------------------------------
@@ -300,11 +163,11 @@ def test_voice_agent_empty_profile():
 
 def _make_context():
     return DraftingContext(
-        evidence_pack=EvidencePack(
-            job_requirements=[JobRequirement(requirement="Python")],
-            matched_evidence=[],
-            gaps=["Rust"],
-            source_summary=["Built things"],
+        narrative=CandidacyNarrative(
+            thesis="Strong fit for the role.",
+            pillars=[NarrativePillar(theme="Backend", argument="Led migrations", career_evidence=["Reduced costs"])],
+            gap_framing=["Rust"],
+            raw_narrative="Full narrative text.",
         ),
         voice_style_guide=VoiceStyleGuide(
             core_adjectives=["direct"],
@@ -320,10 +183,8 @@ def test_drafting_agent_generate_all(career_profile, voice_profile, job_descript
     agent = DraftingAgent(generator=mock_generator)
     docs = agent.generate_all(career_profile, voice_profile, job_description, _make_context())
 
-    assert docs.cover_letter == "Generated."
     assert docs.resume == "Generated."
-    assert docs.interview_guide == "Generated."
-    assert mock_generator.generate_document.call_count == 3
+    assert mock_generator.generate_document.call_count == 1
 
 
 def test_drafting_agent_generate_document_with_feedback(career_profile, voice_profile, job_description):
@@ -332,7 +193,7 @@ def test_drafting_agent_generate_document_with_feedback(career_profile, voice_pr
 
     agent = DraftingAgent(generator=mock_generator)
     result = agent.generate_document(
-        "cover_letter", career_profile, voice_profile, job_description, _make_context(),
+        "resume", career_profile, voice_profile, job_description, _make_context(),
         feedback="Shorten it", previous_version="Old draft",
     )
 
@@ -359,10 +220,10 @@ def test_drafting_agent_career_context_includes_evidence(career_profile, voice_p
     agent = DraftingAgent(generator=mock_generator)
     agent.generate_document("resume", career_profile, voice_profile, job_description, _make_context())
 
-    # The career profile passed to the generator should include evidence pack info
+    # The career profile passed to the generator should include narrative info
     enriched_career = mock_generator.generate_document.call_args.args[1]
-    assert "Evidence Pack" in enriched_career.raw_content
-    assert "Python" in enriched_career.raw_content
+    assert "Candidacy Narrative" in enriched_career.raw_content
+    assert "Backend" in enriched_career.raw_content
 
 
 def test_drafting_agent_voice_context_includes_guide(career_profile, voice_profile, job_description):
@@ -387,13 +248,12 @@ class FakeReviewer:
         doc = DocumentTruthResult(pass_strict=True)
         return TruthfulnessResult(
             all_supported=True,
-            cover_letter=doc, resume=doc, interview_guide=doc,
+            resume=doc,
         )
 
     def review_voice(self, docs, voice, *, exemptions=None):
         return VoiceReviewResult(
             overall_match="strong",
-            cover_letter_assessment="Good",
             resume_assessment="Good",
         )
 
@@ -402,9 +262,6 @@ class FakeReviewer:
 
     def review_ats_keyword(self, docs, job, career, *, exemptions=None):
         return ATSKeywordResult(alignment_score="strong")
-
-    def review_consistency(self, docs, *, exemptions=None):
-        return ConsistencyResult(consistent=True)
 
     def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
@@ -444,12 +301,6 @@ def test_verification_agent_review_ats_keyword(document_set, career_profile, job
     assert result.alignment_score == "strong"
 
 
-def test_verification_agent_review_consistency(document_set):
-    agent = VerificationAgent(reviewer=FakeReviewer())
-    result = agent.review_consistency(document_set)
-    assert result.consistent is True
-
-
 def test_verification_agent_review_grammar(document_set):
     agent = VerificationAgent(reviewer=FakeReviewer())
     result = agent.review_grammar(document_set)
@@ -457,7 +308,7 @@ def test_verification_agent_review_grammar(document_set):
 
 
 # ---------------------------------------------------------------------------
-# LLM-powered EvidenceAgent tests
+# LLM-powered NarrativeAgent tests
 # ---------------------------------------------------------------------------
 
 
@@ -470,92 +321,63 @@ def _make_llm_response(response_text: str):
     return mock_response
 
 
-def test_evidence_agent_llm_requirement_extraction(career_profile, job_description):
-    """When LLM is available, requirements should come from the LLM."""
-    llm_response = json.dumps([
-        {"requirement": "Python expertise", "category": "skill"},
-        {"requirement": "Distributed systems experience", "category": "skill"},
-        {"requirement": "Technical leadership", "category": "leadership"},
-    ])
+def test_narrative_agent_llm_builds_narrative(career_profile, job_description):
+    """When LLM is available, narrative should come from the LLM."""
+    narrative_json = json.dumps({
+        "thesis": "Strong distributed systems background makes this candidate ideal.",
+        "pillars": [
+            {"theme": "Backend Engineering", "argument": "Led critical infrastructure projects", "career_evidence": ["Cut deploy time 60%"]},
+            {"theme": "Technical Leadership", "argument": "Mentored junior engineers", "career_evidence": ["Led team of 5"]},
+        ],
+        "gap_framing": ["No explicit Rust experience — transferable from Go/Python"],
+        "raw_narrative": "Full narrative for context.",
+    })
     mock_client = MagicMock()
-    # First call = requirement extraction, subsequent calls = evidence matching (one per requirement)
-    evidence_response = json.dumps([
-        {"evidence": "Led backend migration, cut deploy time 60%", "relevance_score": 5}
-    ])
-    mock_client.chat.side_effect = [
-        _make_llm_response(llm_response),
-        _make_llm_response(evidence_response),
-        _make_llm_response(evidence_response),
-        _make_llm_response(evidence_response),
-    ]
+    mock_client.chat.return_value = _make_llm_response(narrative_json)
 
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career_profile, job_description)
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job_description)
 
-    assert len(pack.job_requirements) == 3
-    assert pack.job_requirements[0].requirement == "Python expertise"
-    assert pack.job_requirements[0].category == "skill"
-    assert pack.matched_evidence  # Should have evidence from LLM
+    assert narrative.thesis == "Strong distributed systems background makes this candidate ideal."
+    assert len(narrative.pillars) == 2
+    assert narrative.pillars[0].theme == "Backend Engineering"
+    assert narrative.gap_framing == ["No explicit Rust experience — transferable from Go/Python"]
+    assert narrative.raw_narrative == "Full narrative for context."
 
 
-def test_evidence_agent_llm_evidence_matching(career_profile, job_description):
-    """LLM evidence matching should return EvidenceItems with relevance scores."""
-    req_response = json.dumps([{"requirement": "Python", "category": "skill"}])
-    evidence_response = json.dumps([
-        {
-            "evidence": "Led backend migration, cut deploy time 60%",
-            "source_excerpt": "Led backend migration, cut deploy time 60%",
-            "relevance_score": 5,
-        },
-        {
-            "evidence": "Reduced infra costs by $180K/year",
-            "source_excerpt": "Reduced infra costs by $180K/year",
-            "relevance_score": 3,
-        },
-    ])
-    mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_llm_response(req_response),
-        _make_llm_response(evidence_response),
-    ]
-
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career_profile, job_description)
-
-    assert len(pack.matched_evidence) == 2
-    assert pack.matched_evidence[0].relevance_score == 5
-
-
-def test_evidence_agent_llm_returns_gaps_for_unmatched(career_profile):
-    """When LLM finds no evidence, the requirement should appear as a gap."""
+def test_narrative_agent_llm_gap_detection(career_profile):
+    """When career profile lacks required skills, gap_framing should capture that."""
     from resume_refinery.models import JobDescription
     job = JobDescription(raw_content="Required: Quantum computing", title="QC", company="QCo")
 
-    req_response = json.dumps([{"requirement": "Quantum computing", "category": "skill"}])
-    empty_evidence = json.dumps([])
+    narrative_json = json.dumps({
+        "thesis": "Partial fit.",
+        "pillars": [],
+        "gap_framing": ["Quantum computing — no direct experience, but strong physics background"],
+        "raw_narrative": "",
+    })
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_llm_response(req_response),
-        _make_llm_response(empty_evidence),
-    ]
+    mock_client.chat.return_value = _make_llm_response(narrative_json)
 
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career_profile, job)
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job)
 
-    assert "Quantum computing" in pack.gaps
+    assert len(narrative.gap_framing) > 0
+    assert "Quantum" in narrative.gap_framing[0]
 
 
-def test_evidence_agent_falls_back_on_llm_failure(career_profile, job_description):
-    """When LLM calls fail, keyword fallback should still produce results."""
+def test_narrative_agent_falls_back_on_llm_failure(career_profile, job_description):
+    """When LLM calls fail, keyword fallback should still produce a narrative."""
     mock_client = MagicMock()
     mock_client.chat.side_effect = Exception("Connection refused")
 
-    agent = EvidenceAgent(client=mock_client)
-    pack = agent.build_evidence_pack(career_profile, job_description)
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job_description)
 
-    # Should still get results from keyword fallback
-    assert pack.job_requirements
-    assert pack.matched_evidence or pack.gaps  # Either found evidence or identified gaps
+    assert isinstance(narrative, CandidacyNarrative)
+    assert narrative.thesis  # Should have a default thesis
+    # Fallback should identify some overlapping keywords as pillars
+    assert narrative.pillars or narrative.gap_framing
 
 
 # ---------------------------------------------------------------------------
@@ -568,20 +390,15 @@ def test_repair_unified_applies_surgical_edits(career_profile, voice_profile, jo
     agent = RepairAgent()
 
     docs = DocumentSet(
-        cover_letter="I am a passionate innovator with quantum AI expertise.",
-        resume="old resume",
-        interview_guide="old ig",
+        resume="I am a passionate innovator with quantum AI expertise.",
     )
     doc_fail = DocumentTruthResult(
         pass_strict=False,
         unsupported_claims=["quantum AI expertise"],
     )
-    doc_pass = DocumentTruthResult(pass_strict=True)
     truth = TruthfulnessResult(
         all_supported=False,
-        cover_letter=doc_fail,
-        resume=doc_pass,
-        interview_guide=doc_pass,
+        resume=doc_fail,
     )
     context = _make_context()
 
@@ -596,13 +413,10 @@ def test_repair_unified_applies_surgical_edits(career_profile, voice_profile, jo
         career_profile, voice_profile, job_description, context,
     )
 
-    # Only cover_letter was repaired
-    assert "backend migration experience" in docs.cover_letter
-    assert "quantum AI expertise" not in docs.cover_letter
-    # Other docs unchanged
-    assert docs.resume == "old resume"
-    assert docs.interview_guide == "old ig"
-    # _plan_edits called exactly once (only cover_letter had issues)
+    # Resume was repaired
+    assert "backend migration experience" in docs.resume
+    assert "quantum AI expertise" not in docs.resume
+    # _plan_edits called exactly once (resume had issues)
     assert agent._plan_edits.call_count == 1
 
 
@@ -611,20 +425,15 @@ def test_repair_unified_returns_repair_pass_result(career_profile, voice_profile
     agent = RepairAgent()
 
     docs = DocumentSet(
-        cover_letter="I am a passionate innovator.",
-        resume="old resume",
-        interview_guide="old ig",
+        resume="I am a passionate innovator.",
     )
     doc_fail = DocumentTruthResult(
         pass_strict=False,
         unsupported_claims=["passionate innovator"],
     )
-    doc_pass = DocumentTruthResult(pass_strict=True)
     truth = TruthfulnessResult(
         all_supported=False,
-        cover_letter=doc_fail,
-        resume=doc_pass,
-        interview_guide=doc_pass,
+        resume=doc_fail,
     )
     context = _make_context()
 
@@ -639,11 +448,11 @@ def test_repair_unified_returns_repair_pass_result(career_profile, voice_profile
     )
 
     assert isinstance(result, RepairPassResult)
-    assert "cover_letter" in result.edits
-    assert len(result.edits["cover_letter"]) == 1
-    assert result.edits["cover_letter"][0].find == "passionate innovator"
-    assert result.edits["cover_letter"][0].replace == "experienced engineer"
-    assert result.edits["cover_letter"][0].reason == "truthfulness"
+    assert "resume" in result.edits
+    assert len(result.edits["resume"]) == 1
+    assert result.edits["resume"][0].find == "passionate innovator"
+    assert result.edits["resume"][0].replace == "experienced engineer"
+    assert result.edits["resume"][0].reason == "truthfulness"
 
 
 def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_description):
@@ -651,7 +460,7 @@ def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_de
     agent = RepairAgent()
     agent._plan_edits = MagicMock(return_value=([], {}))
 
-    docs = DocumentSet(cover_letter="cl", resume="r", interview_guide="ig")
+    docs = DocumentSet(resume="r")
     context = _make_context()
 
     agent.repair_unified(
@@ -663,13 +472,11 @@ def test_repair_unified_skips_passing_docs(career_profile, voice_profile, job_de
 
 
 def test_repair_unified_combines_all_findings(career_profile, voice_profile, job_description):
-    """Review findings from all three reviewers should be combined in the repair call."""
+    """Review findings from all reviewers should be combined in the repair call."""
     agent = RepairAgent()
 
     docs = DocumentSet(
-        cover_letter="I am a passionate innovator with quantum AI.",
-        resume="r",
-        interview_guide="ig",
+        resume="I am a passionate innovator with quantum AI.",
     )
     doc_fail = DocumentTruthResult(
         pass_strict=False,
@@ -677,23 +484,17 @@ def test_repair_unified_combines_all_findings(career_profile, voice_profile, job
     )
     truth = TruthfulnessResult(
         all_supported=False,
-        cover_letter=doc_fail,
-        resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
+        resume=doc_fail,
     )
     voice_review = VoiceReviewResult(
         overall_match="weak",
-        cover_letter_match="weak",
-        resume_match="strong",
-        cover_letter_assessment="Off-voice",
-        resume_assessment="Good",
-        cover_letter_issues=["opener too formal"],
+        resume_match="weak",
+        resume_assessment="Off-voice",
+        resume_issues=["opener too formal"],
     )
     ai_review = AIDetectionResult(
         risk_level="high",
-        cover_letter_flags=["passionate innovator"],
-        resume_flags=[],
-        interview_guide_flags=[],
+        resume_flags=["passionate innovator"],
     )
     context = _make_context()
 
@@ -723,15 +524,11 @@ def test_repair_unified_populates_accepted_phrases(career_profile, voice_profile
     agent = RepairAgent()
 
     docs = DocumentSet(
-        cover_letter="I am a Senior Software Engineer with Python experience.",
-        resume="r",
-        interview_guide="ig",
+        resume="I am a Senior Software Engineer with Python experience.",
     )
     ai_review = AIDetectionResult(
         risk_level="medium",
-        cover_letter_flags=["I am a Senior Software Engineer"],
-        resume_flags=[],
-        interview_guide_flags=[],
+        resume_flags=["I am a Senior Software Engineer"],
     )
     context = _make_context()
 
@@ -751,7 +548,7 @@ def test_repair_unified_populates_accepted_phrases(career_profile, voice_profile
     assert result.accepted_claims == []
     assert result.accepted_voice_issues == []
     # No edits applied — doc unchanged
-    assert "I am a Senior Software Engineer" in docs.cover_letter
+    assert "I am a Senior Software Engineer" in docs.resume
 
 
 def test_repair_plan_edits_parses_json_object():
@@ -812,7 +609,7 @@ def test_repair_plan_edits_handles_empty_response():
     edits, acceptances = agent._plan_edits("system", "user")
 
     assert edits == []
-    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_consistency_issues": [], "accepted_grammar_issues": []}
+    assert acceptances == {"accepted_claims": [], "accepted_ai_phrases": [], "accepted_voice_issues": [], "accepted_hm_issues": [], "accepted_pruning_issues": [], "accepted_ats_issues": [], "accepted_grammar_issues": []}
 
 
 def test_repair_build_review_findings_truthfulness():
@@ -825,12 +622,10 @@ def test_repair_build_review_findings_truthfulness():
     )
     truth = TruthfulnessResult(
         all_supported=False,
-        cover_letter=doc_fail,
-        resume=DocumentTruthResult(pass_strict=True),
-        interview_guide=DocumentTruthResult(pass_strict=True),
+        resume=doc_fail,
     )
 
-    findings = agent._build_review_findings("cover_letter", truth, None, None, None)
+    findings = agent._build_review_findings("resume", truth, None, None, None)
 
     assert "quantum AI expertise" in findings
     assert "Led backend migration" in findings
@@ -843,17 +638,15 @@ def test_repair_build_review_findings_empty_when_passing():
     doc_pass = DocumentTruthResult(pass_strict=True)
     truth = TruthfulnessResult(
         all_supported=True,
-        cover_letter=doc_pass, resume=doc_pass, interview_guide=doc_pass,
+        resume=doc_pass,
     )
     voice_review = VoiceReviewResult(
         overall_match="strong",
-        cover_letter_match="strong",
         resume_match="strong",
-        cover_letter_assessment="Good",
         resume_assessment="Good",
     )
     ai_review = AIDetectionResult(risk_level="low")
 
-    findings = agent._build_review_findings("cover_letter", truth, voice_review, ai_review, None)
+    findings = agent._build_review_findings("resume", truth, voice_review, ai_review, None)
 
     assert findings == ""

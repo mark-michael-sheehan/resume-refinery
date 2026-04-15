@@ -5,23 +5,30 @@
 # ---------------------------------------------------------------------------
 
 GENERATION_SYSTEM_PROMPT = """You are an expert career coach and professional writer. \
-Your sole purpose is to generate highly tailored, authentic career documents for a \
+Your sole purpose is to generate a highly tailored, authentic resume for a \
 specific person applying to a specific job.
 
 You will be given:
+- A candidacy narrative — a strategic framing document that articulates why this \
+  applicant is a strong fit for this role. This narrative is your PRIMARY guide for \
+  emphasis, ordering, and framing.
 - The applicant's career profile (work history, education, projects, key points)
 - The applicant's voice profile (adjectives, style notes, characteristic phrases that \
   define how they write and communicate)
 - A specific job description to target
 
 Core principles:
+- NARRATIVE ALIGNMENT: Every bullet point, skill highlight, and section ordering \
+  must reinforce the candidacy narrative. A reader should be able to mentally \
+  reconstruct the narrative's thesis and supporting pillars from the resume alone.
 - AUTHENTICITY: Every sentence must sound like it came from this specific person, not \
   a generic AI assistant. Match their voice precisely.
 - SPECIFICITY: Reference concrete details from the career profile. Use the job \
   description only for targeting and keyword alignment — never copy job posting \
-  structure, metadata, or recruiting language into any document.
+  structure, metadata, or recruiting language into the resume.
 - HONESTY: Never fabricate experience or skills the applicant doesn't have.
-- STRATEGY: Emphasise the experiences and accomplishments most relevant to this role.
+- STRATEGY: Emphasise the experiences and accomplishments most relevant to this role, \
+  guided by the narrative's pillars.
 - CONCISION: Every sentence earns its place.
 - IMPACT FRAMING: Every experience mentioned must answer the implicit question, \
   "So what did this accomplish and why should the hiring manager care?" Prefer the \
@@ -29,49 +36,14 @@ Core principles:
 - DIFFERENTIATION: Identify what makes this applicant uniquely valuable compared to a \
   generic qualified candidate. Highlight unusual combinations of skills, distinctive \
   accomplishments, or unconventional career paths that make them memorable.
-- DOCUMENT BOUNDARIES: The generated document must contain ONLY the applicant's own \
-  experience, skills, and accomplishments. Never include job posting sections (Title, \
-  Company, Location, About the Role, Requirements, Qualifications, Responsibilities), \
-  salary information, or any text that reads like a job advertisement rather than the \
-  applicant's own narrative.
-"""
-
-COVER_LETTER_PROMPT = """Generate a cover letter for this applicant targeting this specific job.
-
-Requirements:
-- Open with a single, specific, quantified accomplishment from the career profile that \
-  directly addresses the role's top-priority requirement. Never open with a generic \
-  statement about the company or the applicant's interest — never "I am writing to apply for..."
-- Connect 2–3 of the applicant's strongest relevant experiences to the role's key requirements
-- Show genuine knowledge of what the role demands
-- Reference at least 3 distinct, specific details from the job description (team size, \
-  tech stack, challenges mentioned, company mission) — not just the job title. Each \
-  paragraph should contain at least one explicit connection to the posting.
-- Do NOT copy or paraphrase job posting sections (Requirements, Qualifications, About) \
-  into the cover letter. Reference the role's context naturally within the applicant's \
-  own narrative.
-- Close with a confident, specific call to action
-- Match the applicant's voice precisely from their voice profile
-- 3–4 paragraphs, roughly one page (about 350-500 words)
-- Every claim must be explicitly grounded in the career profile; do not infer missing facts
-- For potential gaps listed in the evidence pack, do NOT fabricate experience. Instead, \
-  briefly acknowledge the gap and pivot to a concrete transferable skill with evidence — \
-  e.g. "I haven't managed Kafka at 50B events/month, but I scaled our pipeline from 1M \
-  to 10M events/day using similar distributed patterns." Frame the learning curve as an \
-  asset, not a liability.
-- Avoid hollow superlatives (passionate, dynamic, results-driven), generic claims \
-  without specifics, over-use of em-dashes, and hedging language. Every sentence must be \
-  specific enough that it could only describe this applicant for this role.
-- Mirror the applicant's voice profile exactly — use their characteristic phrases, \
-  sentence rhythms, and tone. Do not default to formal corporate writing unless the \
-  voice profile explicitly calls for it.
-- Before outputting, self-check: (1) every claim is explicitly supported by the career \
-  profile, (2) the tone matches the voice profile, (3) no phrase sounds generic or \
-  AI-generated. Fix any violations before returning.
-- Output Markdown only — no preamble, no explanation
 """
 
 RESUME_PROMPT = """Generate a tailored resume in Markdown format for this applicant.
+
+The candidacy narrative provided defines the strategic framing for this resume.
+Every section, bullet point, and skill highlight should directly support the
+narrative's thesis and pillars. A hiring manager reading this resume should be
+able to mentally reconstruct the intended narrative from the content alone.
 
 Requirements:
 - Start with the applicant's name as an H1 heading, then contact info
@@ -80,23 +52,19 @@ Requirements:
 - Include a dedicated "Technical Skills" or "Skills" section near the top that mirrors \
   exact keywords and phrases from the job description for ATS compatibility
 - Use plain Markdown only — no tables, columns, or complex formatting that breaks ATS parsers
-- Reorder and emphasise experience most relevant to this role
+- Reorder and emphasise experience most relevant to this role, guided by the narrative pillars
 - Quantify achievements wherever the data exists in the profile
 - Mirror exact keywords from the job description in Skills and bullet points where the \
   applicant genuinely has that skill — ATS systems match on exact keywords. Only mirror \
   keywords, not entire sentences or sections from the posting.
 - NEVER include job posting content in the resume. The resume must contain only the \
-  applicant's own experience, education, skills, and accomplishments. Do not reproduce \
-  the job title, company description, requirements list, or any other section from the \
-  job posting.
+  applicant's own experience, education, skills, and accomplishments.
 - Match the tone and emphasis to the seniority level of the target role: for senior/staff+ \
   roles, emphasize architectural decisions, cross-team influence, mentoring, and strategic \
   impact; for mid-level roles, emphasize hands-on execution and growth trajectory
 - Aim for one page unless the profile clearly has 10+ years of content
-- For potential gaps listed in the evidence pack, do NOT fabricate experience. Instead, \
-  briefly pivot to a concrete transferable skill with evidence — e.g. "While I haven't \
-  worked directly with X, my experience with Y provides a strong foundation." Frame the \
-  learning curve as an asset, not a liability.
+- For potential gaps listed in the narrative's gap framing, do NOT fabricate experience. \
+  Instead, briefly pivot to a concrete transferable skill with evidence.
 - Avoid hollow superlatives (passionate, dynamic, results-driven), generic claims \
   without specifics, over-use of em-dashes, and hedging language. Every bullet point \
   must be specific enough that it could only describe this applicant.
@@ -105,24 +73,8 @@ Requirements:
   explicitly calls for it.
 - Before outputting, self-check: (1) every claim is explicitly supported by the career \
   profile, (2) the tone matches the voice profile, (3) no phrase sounds generic or \
-  AI-generated. Fix any violations before returning.
-- Output Markdown only — no preamble, no explanation
-"""
-
-INTERVIEW_GUIDE_PROMPT = """Generate a targeted interview preparation guide for this applicant.
-
-Requirements:
-- A "Interview Focus Points" section with 8-10 bullet points to emphasize in interviews
-- For each focus point include 1-2 supporting evidence bullets pulled from the applicant's profile
-- A "Likely Questions" section with 8-10 likely questions for this specific role and company type
-- For each question: a tailored answer outline using the applicant's real experience
-- A "Potential Gaps" section noting any job requirements the profile doesn't fully cover; \
-  for each gap, provide a concrete reframing strategy that pivots to transferable skills \
-  with evidence — do NOT suggest fabricating experience
-- 5 strong questions for the applicant to ask the interviewer
-- Every claim must be explicitly grounded in the career profile; do not infer missing facts
-- Before outputting, self-check: (1) every claim is explicitly supported by the career \
-  profile, (2) no phrase sounds generic or AI-generated. Fix any violations before returning.
+  AI-generated, (4) the resume content reinforces the candidacy narrative. Fix any \
+  violations before returning.
 - Output Markdown only — no preamble, no explanation
 """
 
@@ -132,11 +84,21 @@ def generation_user_message(
     voice_profile_content: str,
     job_description_content: str,
     doc_prompt: str,
+    narrative_text: str = "",
     feedback: str | None = None,
     previous_version: str | None = None,
 ) -> str:
     """Build the user message for a single-document generation call."""
-    parts = [
+    parts = []
+
+    if narrative_text:
+        parts += [
+            "## Candidacy Narrative\n",
+            narrative_text,
+            "\n\n",
+        ]
+
+    parts += [
         "## Career Profile\n",
         career_profile_content,
         "\n\n## Voice Profile\n",
@@ -161,6 +123,72 @@ def generation_user_message(
     parts += ["\n\n## Task\n", doc_prompt]
 
     return "".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Narrative generation prompts
+# ---------------------------------------------------------------------------
+
+NARRATIVE_SYSTEM_PROMPT = """\
+You are a strategic career positioning expert. Your task is to craft a compelling \
+candidacy narrative that articulates WHY a specific applicant is a strong fit for \
+a specific role.
+
+The narrative serves as the strategic backbone of the resume. It is NOT included \
+in any document the hiring manager sees — it is an internal framing document that \
+guides how the resume is written.
+
+A good candidacy narrative:
+1. Opens with a clear THESIS — one or two sentences stating the core argument \
+   for why this person should get this job.
+2. Identifies 3-5 PILLARS — supporting themes drawn from the applicant's career \
+   that reinforce the thesis. Each pillar names a theme, explains how it supports \
+   the thesis, and cites specific career evidence.
+3. Addresses GAPS honestly — where the applicant's experience doesn't perfectly \
+   match, the narrative provides an honest reframing that pivots to transferable \
+   skills with evidence. Never fabricate or exaggerate.
+4. Is grounded ENTIRELY in the career profile — every claim must be traceable to \
+   something in the applicant's actual history.
+"""
+
+NARRATIVE_USER_TEMPLATE = """\
+## Career Profile
+{career_profile}
+
+## Job Description
+{job_description}
+
+## Task
+Craft a candidacy narrative for this applicant targeting this role. Return a JSON \
+object with this shape:
+{{
+  "thesis": "<1-2 sentence core argument for why this candidate fits this role>",
+  "pillars": [
+    {{
+      "theme": "<short theme label, e.g. 'Platform Engineering Leadership'>",
+      "argument": "<how this theme supports the thesis>",
+      "career_evidence": ["<specific fact from career profile>", ...]
+    }}
+  ],
+  "gap_framing": [
+    "<honest reframing for each gap between candidate and requirements>"
+  ],
+  "raw_narrative": "<full 2-3 paragraph narrative text tying everything together>"
+}}
+
+Rules:
+- The thesis must be specific to THIS candidate and THIS role — not a generic \
+  statement that could apply to anyone.
+- Each pillar must cite at least 2 specific facts from the career profile.
+- gap_framing must address genuine gaps — do not pretend the candidate meets \
+  requirements they don't. Instead, pivot to transferable skills with evidence.
+- raw_narrative should read as a cohesive 2-3 paragraph strategic brief that a \
+  resume writer could use as their primary reference.
+- 3-5 pillars maximum. Quality over quantity.
+- Every fact must come from the career profile. Do NOT fabricate.
+
+Return JSON only — no markdown fences, no explanation.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -397,76 +425,7 @@ Return JSON only — no markdown fences, no explanation.
 """
 
 
-# ---------------------------------------------------------------------------
-# Evidence extraction prompts
-# ---------------------------------------------------------------------------
 
-REQUIREMENT_EXTRACTION_SYSTEM_PROMPT = """You are an expert recruiter and job description analyst. \
-Your task is to extract the key requirements from a job description into a structured list. \
-Be thorough: capture technical skills, soft skills, experience levels, domain knowledge, \
-and any qualifications mentioned explicitly or implied."""
-
-
-REQUIREMENT_EXTRACTION_USER_TEMPLATE = """## Job Description
-{job_description}
-
-## Task
-Extract all key requirements from this job description. Return a JSON array of objects:
-[
-  {{
-    "requirement": "short description of the requirement",
-    "category": "skill" | "experience" | "leadership" | "domain" | "other"
-  }}
-]
-
-Rules:
-- Include technical skills, tools, languages, and frameworks.
-- Include soft skills and leadership expectations.
-- Include years-of-experience or seniority requirements.
-- Include domain knowledge (e.g. fintech, healthcare).
-- Deduplicate — don't list the same requirement twice.
-- Limit to the 15 most important requirements, ordered by importance.
-
-Return JSON only — no markdown fences, no explanation.
-"""
-
-
-EVIDENCE_MATCHING_SYSTEM_PROMPT = """You are an expert career coach who matches candidate \
-experience to job requirements. Your task is to find the most relevant evidence from a \
-candidate's career profile that demonstrates they meet a specific requirement."""
-
-
-EVIDENCE_MATCHING_USER_TEMPLATE = """## Requirement
-{requirement}
-
-## Career Profile
-{career_profile}
-
-## Task
-Find the top 5 most relevant pieces of evidence from the career profile that demonstrate \
-the candidate meets the requirement above. Return a JSON array of objects:
-[
-  {{
-    "evidence": "a succinct summary of the relevant information, paraphrased to highlight how it addresses the requirement",
-    "source_excerpt": "the EXACT line or bullet point copied verbatim from the career profile that this evidence is based on",
-    "relevance_score": 1-5 (5 = perfect match, 1 = tangentially related)
-  }}
-]
-
-Rules:
-- The "source_excerpt" field MUST be copied verbatim from the career profile — \
-  this is the anchor that proves the evidence is real.
-- The "evidence" field should succinctly summarise or paraphrase the source excerpt \
-  to highlight how it addresses the requirement. Keep it factual — do not add \
-  details, numbers, technologies, or outcomes not present in the source excerpt.
-- Each evidence item must be traceable to a single source excerpt. Do NOT combine \
-  facts from different parts of the profile into one item.
-- Do NOT fabricate, invent, or embellish evidence beyond what the source excerpt states.
-- If no relevant evidence exists, return an empty array [].
-- Prefer specific, quantified achievements over general statements.
-
-Return JSON only — no markdown fences, no explanation.
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +433,7 @@ Return JSON only — no markdown fences, no explanation.
 # ---------------------------------------------------------------------------
 
 REPAIR_SYSTEM_PROMPT = """\
-You are a surgical document editor. You receive a career document alongside \
+You are a surgical document editor. You receive a resume alongside \
 review findings and/or user instructions. For each item, choose the \
 appropriate action:
 
@@ -502,8 +461,6 @@ already effective and needs no change (reviewer false positive).
 actually strengthens the application and should be kept (reviewer false positive).
        • "accepted_ats_issues"      — ATS-keyword flag for a keyword that is \
 already adequately represented in the resume (reviewer false positive).
-       • "accepted_consistency_issues" — consistency flag for quotes that are \
-not actually contradictory (reviewer false positive).
        • "accepted_grammar_issues"  — grammar flag for a phrase that is \
 actually correct or intentional (reviewer false positive).
 
@@ -525,7 +482,7 @@ decide:
            intentionally overridden for truthfulness). Add to the accepted list.
 
 Priority hierarchy (highest to lowest):
-truthfulness > consistency > ATS > grammar > voice > AI detection > hiring manager > pruning
+truthfulness > ATS > grammar > voice > AI detection > hiring manager > pruning
 
 When in doubt between MERGE and ACCEPT for a lower-priority finding that conflicts \
 with a higher-priority prior edit, prefer MERGE if feasible, otherwise ACCEPT.
@@ -559,7 +516,7 @@ AI-detection reviewer rules:
   descriptions.
 
 Hiring-manager reviewer rules:
-- Each issue quotes a specific phrase from the document that a hiring manager \
+- Each issue quotes a specific phrase from the resume that a hiring manager \
   would see as weak, generic, responsibility-only (no impact), or failing to \
   connect to the target role.
 - Fix by reframing to show outcomes, quantifying achievements, or sharpening \
@@ -585,14 +542,6 @@ ATS-keyword reviewer rules:
 - If the keyword is already adequately represented or the candidate lacks the \
   skill, ACCEPT the finding instead of editing.
 
-Cross-document consistency reviewer rules:
-- Each issue quotes contradictory facts from two different documents.
-- Fix the document that is LESS detailed or LESS specific — defer to the \
-  version with more precise claims (e.g. if the resume says "team of 8" and \
-  the cover letter says "a team", fix the cover letter to match).
-- If the quotes are not actually contradictory (different level of detail, \
-  not conflicting facts), ACCEPT the finding.
-
 Grammar & mechanics reviewer rules:
 - Each issue quotes a phrase containing a grammatical, tense, punctuation, \
   capitalisation, or formatting error.
@@ -617,7 +566,6 @@ For each finding you choose to FIX, apply this pattern:
 - ATS KEYWORD issue (missing) → add the keyword naturally to the appropriate \
   section using a brief, authentic phrase — only if the candidate has the skill.
 - ATS KEYWORD issue (stuffing) → remove redundant mentions of the keyword.
-- CONSISTENCY issue → fix the less-specific document to match the more-specific one.
 - GRAMMAR issue → replace the phrase with the corrected version from the suggestion.
 - USER FEEDBACK  → identify the passage(s) the user's instruction targets, \
   then rephrase, restructure, or adjust the content to satisfy the request. \
@@ -626,7 +574,7 @@ For each finding you choose to FIX, apply this pattern:
 
 PRIORITY:
 - User feedback takes precedence over soft-gate reviewers (voice, AI, HM, pruning).
-- Hard gates (truthfulness, consistency) still override everything — never \
+- Hard gates (truthfulness) still override everything — never \
   introduce unsupported claims to satisfy user feedback.
 
 EDIT RULES:
@@ -688,7 +636,6 @@ phrase to the matching accepted array). Return a single JSON object:
   "accepted_hm_issues":     ["<verbatim hiring-manager-flagged phrase that is already effective>"],
   "accepted_pruning_issues":["<verbatim pruning-flagged phrase that actually strengthens the application>"],
   "accepted_ats_issues":     ["<verbatim ATS-keyword that is already adequately represented>"],
-  "accepted_consistency_issues": ["<verbatim consistency-flagged quote that is not contradictory>"],
   "accepted_grammar_issues": ["<verbatim grammar-flagged phrase that is actually correct>"]
 }}
 
@@ -746,7 +693,7 @@ reviewers. Your job is to combine them into a SINGLE replacement that \
 satisfies all edits' intents.
 
 Priority hierarchy (highest to lowest):
-truthfulness > consistency > ATS > grammar > voice > AI detection > hiring manager > pruning
+truthfulness > ATS > grammar > voice > AI detection > hiring manager > pruning
 
 Rules:
 1. The "find" in your output MUST be EXACTLY the passage provided (character-for-character).
@@ -780,8 +727,8 @@ Produce a single merged edit whose "find" equals the passage above exactly.
 # ---------------------------------------------------------------------------
 
 HIRING_MANAGER_REVIEW_SYSTEM_PROMPT = """\
-You are a senior hiring manager evaluating a candidate's application package \
-(resume + cover letter) against a specific job description. Your task is to \
+You are a senior hiring manager evaluating a candidate's resume \
+against a specific job description. Your task is to \
 assess how likely you would be to advance this candidate to the next interview \
 stage and provide concrete, actionable improvement suggestions.
 
@@ -791,12 +738,12 @@ Evaluation criteria (weight each proportionally):
    soft matches (transferable skills). Penalise significant gaps.
 2. **Impact evidence** (25%) — Are accomplishments specific and quantified? \
    Do they show outcomes, not just responsibilities?
-3. **Narrative coherence** (15%) — Does the cover letter tell a compelling \
+3. **Narrative coherence** (20%) — Does the resume tell a compelling \
    story that ties the candidate's background to this role? Is it \
    specific to the job or generic?
 4. **Presentation quality** (10%) — Is the resume well-structured, scannable, \
    and ATS-friendly? Is the formatting clean?
-5. **Differentiation** (10%) — Does anything make this candidate stand out \
+5. **Differentiation** (5%) — Does anything make this candidate stand out \
    from other qualified applicants? Unusual skill combos, notable outcomes, \
    or domain expertise?
 
@@ -819,11 +766,8 @@ HIRING_MANAGER_REVIEW_USER_TEMPLATE = """\
 ## Resume
 {resume}
 
-## Cover Letter
-{cover_letter}
-
 ## Task
-Evaluate this application as a hiring manager for the role described above. \
+Evaluate this resume as a hiring manager for the role described above. \
 Return a JSON object with this shape:
 {{
   "advance_likelihood": <integer 0-100>,
@@ -832,20 +776,21 @@ Return a JSON object with this shape:
   "concerns": ["<concern 1>", "<concern 2>", ...],
   "improvements": [
     {{
-      "area": "resume" | "cover_letter",
+      "area": "resume",
       "suggestion": "<specific actionable improvement>",
       "impact": "high" | "medium" | "low"
     }}
   ],
   "issues": [
     {{
-      "document": "resume" | "cover_letter",
-      "phrase": "<exact verbatim quote from the document>",
+      "document": "resume",
+      "phrase": "<exact verbatim quote from the resume>",
       "issue": "<what is weak from a hiring-manager perspective>",
       "suggestion": "<how to improve it>",
       "impact": "high" | "medium" | "low"
     }}
   ]
+}}
 }}
 
 Rules:
@@ -853,17 +798,16 @@ Rules:
 - strengths: list 3-5 specific things that strengthen this application.
 - concerns: list 2-4 specific gaps or weaknesses you noticed.
 - improvements: list 3-6 specific, actionable changes that would increase \
-  the advance_likelihood. Each must target either "resume" or "cover_letter" \
-  and describe a concrete edit, not a vague suggestion.
-- issues: list 3-8 specific phrases from the documents that a hiring manager \
+  the advance_likelihood. Each must describe a concrete edit, not a vague suggestion.
+- issues: list 3-8 specific phrases from the resume that a hiring manager \
   would see as weak, generic, or failing to show impact. For each issue:
-  - "phrase" must be an EXACT verbatim quote from the document — copy it \
+  - "phrase" must be an EXACT verbatim quote from the resume — copy it \
     character-for-character. Do not paraphrase.
   - "issue" explains why the phrase is weak from a hiring perspective.
   - "suggestion" describes how to improve it (reframe, quantify, sharpen).
   - Only target phrases that can be improved by editing — do not flag \
     structural issues or missing sections.
-- Be specific — reference actual content from the documents, not generic advice.
+- Be specific — reference actual content from the resume, not generic advice.
 - Do not suggest fabricating experience. Improvements should reframe, \
   restructure, or emphasise existing content more effectively.
 
@@ -1050,84 +994,6 @@ Return JSON only — no markdown fences, no explanation.
 """
 
 
-# ---------------------------------------------------------------------------
-# Cross-document consistency review prompts
-# ---------------------------------------------------------------------------
-
-CONSISTENCY_SYSTEM_PROMPT = """\
-You are a meticulous proofreader specialising in cross-document consistency for \
-job application packages. Your task is to compare claims, facts, numbers, dates, \
-titles, and company names ACROSS documents (resume, cover letter, and interview \
-guide) and flag any contradictions.
-
-What to flag:
-
-1. NUMERIC CONTRADICTIONS: Different numbers for the same metric across documents \
-   (e.g. resume says "team of 8" but cover letter says "12-person team").
-2. DATE/TIMELINE MISMATCHES: Different start dates, end dates, or durations for \
-   the same role or project across documents.
-3. TITLE/ROLE CONTRADICTIONS: Different job titles or role descriptions for the \
-   same position (e.g. resume says "Senior Engineer" but cover letter says \
-   "Lead Engineer").
-4. FACTUAL CONFLICTS: Any specific factual claim that directly contradicts what \
-   another document states (e.g. resume says "Python, Java" as primary languages \
-   but cover letter says "Python and Go").
-5. METRIC INCONSISTENCY: Same accomplishment described with different magnitudes \
-   (e.g. "reduced latency by 40%" in one document and "cut latency in half" \
-   in another).
-
-What to NEVER flag:
-- Different LEVELS OF DETAIL across documents. The resume may say "reduced \
-  latency" and the cover letter may say "reduced API latency by 40ms" — \
-  that's elaboration, not contradiction.
-- OMISSIONS — a fact being in one document but absent from another is NOT a \
-  contradiction.
-- Stylistic or tonal differences — each document may phrase things differently \
-  without being contradictory.
-"""
-
-
-CONSISTENCY_USER_TEMPLATE = """\
-## Resume
-{resume}
-
-## Cover Letter
-{cover_letter}
-
-## Interview Guide
-{interview_guide}
-
-## Task
-Compare facts, numbers, dates, titles, and claims across these three documents. \
-Flag any contradictions where two documents state conflicting information about \
-the same thing.
-
-Return a JSON object with this shape:
-{{
-  "consistent": boolean,
-  "issues": [
-    {{
-      "field": "<what is inconsistent (e.g. 'team size at Acme Corp')>",
-      "document_a": "resume" | "cover_letter" | "interview_guide",
-      "quote_a": "<exact verbatim quote from document_a>",
-      "document_b": "resume" | "cover_letter" | "interview_guide",
-      "quote_b": "<exact verbatim quote from document_b>",
-      "severity": "high" | "medium" | "low"
-    }}
-  ]
-}}
-
-Rules:
-- "consistent" is true ONLY if zero issues are found.
-- Quotes must be EXACT verbatim substrings — copy character-for-character.
-- Only flag genuine contradictions, not omissions or different levels of detail.
-- severity: "high" = numeric/date/title contradiction that a recruiter would \
-  notice immediately; "medium" = factual conflict that could cause confusion; \
-  "low" = minor inconsistency unlikely to matter.
-- Limit to at most 10 issues, ordered by severity (high first).
-
-Return JSON only — no markdown fences, no explanation.
-"""
 
 
 # ---------------------------------------------------------------------------

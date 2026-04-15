@@ -59,9 +59,7 @@ def job_description() -> JobDescription:
 @pytest.fixture
 def document_set() -> DocumentSet:
     return DocumentSet(
-        cover_letter="Dear Hiring Manager,\n\nI've spent five years building...",
         resume="# Jordan Lee\n\njordan@example.com\n\n## Experience\n\n### Senior Engineer",
-        interview_guide="## Interview Guide\n\n### Key Talking Points\n\n- Distributed systems",
     )
 
 
@@ -69,7 +67,6 @@ def document_set() -> DocumentSet:
 def voice_review() -> VoiceReviewResult:
     return VoiceReviewResult(
         overall_match="moderate",
-        cover_letter_assessment="Mostly on-voice but opener feels generic.",
         resume_assessment="Quantified well; matches direct tone.",
         specific_issues=["'results-driven' opener feels off-voice"],
     )
@@ -79,9 +76,7 @@ def voice_review() -> VoiceReviewResult:
 def ai_detection() -> AIDetectionResult:
     return AIDetectionResult(
         risk_level="medium",
-        cover_letter_flags=["'passionate about innovation'"],
         resume_flags=[],
-        interview_guide_flags=["'demonstrated track record'"],
     )
 
 
@@ -101,7 +96,7 @@ def sample_session(job_description) -> Session:
             VersionInfo(
                 version=1,
                 created_at="2026-03-20T10:00:00+00:00",
-                docs_regenerated=["cover_letter", "resume", "interview_guide"],
+                docs_regenerated=["resume"],
                 has_reviews=False,
             )
         ],

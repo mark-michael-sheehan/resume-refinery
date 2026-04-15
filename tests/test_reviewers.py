@@ -8,7 +8,6 @@ import pytest
 from resume_refinery.models import (
     AIDetectionResult,
     ATSKeywordResult,
-    ConsistencyResult,
     DocumentSet,
     GrammarResult,
     HiringManagerReview,
@@ -30,7 +29,6 @@ def _make_mock_response(response_text: str):
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_voice_returns_result(mock_client_cls, document_set, voice_profile):
-    # Per-doc schema: one call per document (cover_letter, resume, interview_guide)
     payload = json.dumps({
         "overall_match": "strong",
         "assessment": "Great voice match.",
@@ -44,14 +42,12 @@ def test_review_voice_returns_result(mock_client_cls, document_set, voice_profil
     result = reviewer.review_voice(document_set, voice_profile)
 
     assert isinstance(result, VoiceReviewResult)
-    # All three per-doc calls return "strong" → overall is "strong"
     assert result.overall_match == "strong"
-    assert result.cover_letter_assessment == "Great voice match."
+    assert result.resume_assessment == "Great voice match."
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_ai_detection_returns_result(mock_client_cls, document_set):
-    # Per-doc schema: one call per document
     payload = json.dumps({
         "risk_level": "low",
         "flags": [],
@@ -69,7 +65,6 @@ def test_review_ai_detection_returns_result(mock_client_cls, document_set):
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_reviewer_strips_json_fences(mock_client_cls, document_set):
-    # Per-doc schema wrapped in markdown fences
     payload = json.dumps({
         "risk_level": "medium",
         "flags": ["test flag"],
@@ -81,10 +76,8 @@ def test_reviewer_strips_json_fences(mock_client_cls, document_set):
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_ai_detection(document_set)
-    # All three docs return risk_level "medium" → max = "medium"
     assert result.risk_level == "medium"
-    # cover_letter is the first doc reviewed → its flags land in cover_letter_flags
-    assert "test flag" in result.cover_letter_flags
+    assert "test flag" in result.resume_flags
 
 
 # ---------------------------------------------------------------------------
@@ -108,40 +101,26 @@ def test_review_truthfulness_all_pass(mock_client_cls, document_set, career_prof
 
     assert isinstance(result, TruthfulnessResult)
     assert result.all_supported is True
-    assert result.cover_letter.pass_strict is True
     assert result.resume.pass_strict is True
-    assert result.interview_guide.pass_strict is True
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_truthfulness_one_fails(mock_client_cls, document_set, career_profile, job_description):
-    pass_payload = json.dumps({
-        "pass_strict": True,
-        "unsupported_claims": [],
-        "evidence_examples": [],
-    })
     fail_payload = json.dumps({
         "pass_strict": False,
         "unsupported_claims": ["Led a team of 50"],
         "evidence_examples": [],
     })
     mock_client = MagicMock()
-    # First call (cover letter) passes, second (resume) fails, third (interview guide) passes
-    mock_client.chat.side_effect = [
-        _make_mock_response(pass_payload),
-        _make_mock_response(fail_payload),
-        _make_mock_response(pass_payload),
-    ]
+    mock_client.chat.return_value = _make_mock_response(fail_payload)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_truthfulness(document_set, career_profile, job_description)
 
     assert result.all_supported is False
-    assert result.cover_letter.pass_strict is True
     assert result.resume.pass_strict is False
     assert "Led a team of 50" in result.resume.unsupported_claims
-    assert result.interview_guide.pass_strict is True
 
 
 # ---------------------------------------------------------------------------
@@ -218,16 +197,11 @@ def test_call_strips_think_blocks(mock_client_cls):
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
-def test_voice_review_worst_of_aggregation(mock_client_cls, document_set, voice_profile):
-    """Overall match should be the worst (minimum) across cover letter & resume."""
-    strong = json.dumps({"overall_match": "strong", "assessment": "Good", "issues": []})
+def test_voice_review_returns_match_for_single_doc(mock_client_cls, document_set, voice_profile):
+    """Voice review should return the match level for the resume."""
     weak = json.dumps({"overall_match": "weak", "assessment": "Poor", "issues": ["too formal"]})
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_mock_response(strong),   # cover letter
-        _make_mock_response(weak),     # resume
-        # interview guide is skipped — not reviewed for voice
-    ]
+    mock_client.chat.return_value = _make_mock_response(weak)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
@@ -243,15 +217,11 @@ def test_voice_review_worst_of_aggregation(mock_client_cls, document_set, voice_
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
-def test_ai_detection_worst_of_risk(mock_client_cls, document_set):
-    """Overall risk should be the worst (maximum) across cover letter & resume."""
-    low = json.dumps({"risk_level": "low", "flags": []})
+def test_ai_detection_returns_flags(mock_client_cls, document_set):
+    """AI detection should return flags from the resume."""
     high = json.dumps({"risk_level": "high", "flags": ["passionate about innovation"]})
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_mock_response(low),    # cover letter
-        _make_mock_response(high),   # resume
-    ]
+    mock_client.chat.return_value = _make_mock_response(high)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
@@ -259,8 +229,6 @@ def test_ai_detection_worst_of_risk(mock_client_cls, document_set):
 
     assert result.risk_level == "high"
     assert "passionate about innovation" in result.resume_flags
-    # Interview guide is skipped for AI detection
-    assert result.interview_guide_flags == []
 
 
 # ---------------------------------------------------------------------------
@@ -270,63 +238,44 @@ def test_ai_detection_worst_of_risk(mock_client_cls, document_set):
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_voice_skips_missing_docs(mock_client_cls, voice_profile):
-    docs = DocumentSet(cover_letter="Some content.", resume=None, interview_guide=None)
-    payload = json.dumps({
-        "overall_match": "moderate",
-        "assessment": "Okay match",
-        "issues": [],
-    })
+    docs = DocumentSet(resume=None)
     mock_client = MagicMock()
-    mock_client.chat.return_value = _make_mock_response(payload)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_voice(docs, voice_profile)
 
-    assert result.overall_match == "moderate"
-    # Only 1 API call for the single present doc
-    assert mock_client.chat.call_count == 1
+    # No API call when resume is missing
+    assert mock_client.chat.call_count == 0
     assert result.resume_assessment == "(not generated)"
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_truthfulness_skips_missing_docs(mock_client_cls, career_profile, job_description):
-    docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide=None)
-    payload = json.dumps({
-        "pass_strict": True,
-        "unsupported_claims": [],
-        "evidence_examples": [],
-    })
+    docs = DocumentSet(resume=None)
     mock_client = MagicMock()
-    mock_client.chat.return_value = _make_mock_response(payload)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_truthfulness(docs, career_profile, job_description)
 
     assert result.all_supported is True
-    assert mock_client.chat.call_count == 1  # Only resume reviewed
-    assert result.cover_letter.pass_strict is True  # Default for missing
-    assert result.interview_guide.pass_strict is True  # Default for missing
+    assert mock_client.chat.call_count == 0  # No docs to review
+    assert result.resume.pass_strict is True  # Default for missing
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_ai_detection_skips_missing_docs(mock_client_cls):
-    docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide="guide content")
-    payload = json.dumps({"risk_level": "medium", "flags": ["generic phrase"]})
+    docs = DocumentSet(resume=None)
     mock_client = MagicMock()
-    mock_client.chat.return_value = _make_mock_response(payload)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_ai_detection(docs)
 
-    assert result.risk_level == "medium"
-    assert mock_client.chat.call_count == 1  # Only resume reviewed (CL=None, IG=skipped)
-    assert result.cover_letter_flags == []
-    assert "generic phrase" in result.resume_flags
-    # Interview guide is always skipped for AI detection
-    assert result.interview_guide_flags == []
+    assert result.risk_level == "low"
+    assert mock_client.chat.call_count == 0
+    assert result.resume_flags == []
 
 
 # ---------------------------------------------------------------------------
@@ -336,23 +285,17 @@ def test_review_ai_detection_skips_missing_docs(mock_client_cls):
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_voice_review_stores_per_doc_match(mock_client_cls, document_set, voice_profile):
-    """Per-doc overall_match values from the LLM are stored in the result."""
-    strong = json.dumps({"overall_match": "strong", "assessment": "On-voice", "issues": []})
+    """Per-doc overall_match value from the LLM is stored in the result."""
     weak = json.dumps({"overall_match": "weak", "assessment": "Off-voice", "issues": []})
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_mock_response(strong),    # cover letter
-        _make_mock_response(weak),      # resume
-        # interview guide is skipped — not reviewed for voice
-    ]
+    mock_client.chat.return_value = _make_mock_response(weak)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_voice(document_set, voice_profile)
 
-    assert result.cover_letter_match == "strong"
     assert result.resume_match == "weak"
-    assert result.overall_match == "weak"  # worst-of aggregation (CL + Resume only)
+    assert result.overall_match == "weak"
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +366,7 @@ def test_review_hiring_manager_returns_result(mock_client_cls, document_set, job
                 "impact": "high",
             },
             {
-                "area": "cover_letter",
+                "area": "resume",
                 "suggestion": "Open with the deploy-time reduction metric.",
                 "impact": "medium",
             },
@@ -444,7 +387,7 @@ def test_review_hiring_manager_returns_result(mock_client_cls, document_set, job
     assert len(result.improvements) == 2
     assert result.improvements[0].area == "resume"
     assert result.improvements[0].impact == "high"
-    assert result.improvements[1].area == "cover_letter"
+    assert result.improvements[1].area == "resume"
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
@@ -476,7 +419,7 @@ def test_review_hiring_manager_invalid_area_defaults(mock_client_cls, document_s
         "strengths": ["Good skills"],
         "concerns": [],
         "improvements": [
-            {"area": "interview_guide", "suggestion": "Fix something", "impact": "low"},
+            {"area": "cover_letter", "suggestion": "Fix something", "impact": "low"},
         ],
     })
     mock_client = MagicMock()
@@ -497,31 +440,21 @@ def test_review_hiring_manager_invalid_area_defaults(mock_client_cls, document_s
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_voice_review_stores_per_doc_issues(mock_client_cls, document_set, voice_profile):
     """Per-doc issues from the LLM are stored in the result."""
-    cl = json.dumps({
+    resume_resp = json.dumps({
         "overall_match": "weak",
         "assessment": "Off-voice",
         "issues": ["opener too formal"],
     })
-    resume = json.dumps({
-        "overall_match": "strong",
-        "assessment": "Good",
-        "issues": [],
-    })
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_mock_response(cl),
-        _make_mock_response(resume),
-        # interview guide is skipped — not reviewed for voice
-    ]
+    mock_client.chat.return_value = _make_mock_response(resume_resp)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_voice(document_set, voice_profile)
 
     # Per-doc fields
-    assert result.cover_letter_issues == ["opener too formal"]
-    assert result.resume_issues == []
-    # Aggregated fields contain only CL + Resume items
+    assert result.resume_issues == ["opener too formal"]
+    # Aggregated fields
     assert "opener too formal" in result.specific_issues
 
 
@@ -532,17 +465,6 @@ def test_voice_review_stores_per_doc_issues(mock_client_cls, document_set, voice
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_relevance_pruning_returns_result(mock_client_cls, document_set, job_description):
-    cl_payload = json.dumps({
-        "overall_density": "balanced",
-        "removal_candidates": [
-            {
-                "phrase": "I've spent five years building",
-                "reason": "Filler opening with no concrete info",
-                "category": "filler",
-                "severity": "medium",
-            },
-        ],
-    })
     resume_payload = json.dumps({
         "overall_density": "bloated",
         "removal_candidates": [
@@ -561,51 +483,36 @@ def test_review_relevance_pruning_returns_result(mock_client_cls, document_set, 
         ],
     })
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_mock_response(cl_payload),
-        _make_mock_response(resume_payload),
-    ]
+    mock_client.chat.return_value = _make_mock_response(resume_payload)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_relevance_pruning(document_set, job_description)
 
     assert isinstance(result, RelevancePruningResult)
-    # Worst-of density: bloated > balanced
     assert result.overall_density == "bloated"
-    assert len(result.cover_letter_issues) == 1
-    assert result.cover_letter_issues[0].phrase == "I've spent five years building"
-    assert result.cover_letter_issues[0].category == "filler"
-    assert result.cover_letter_issues[0].document == "cover_letter"
     assert len(result.resume_issues) == 2
+    assert result.resume_issues[0].phrase == "Senior Engineer"
     assert result.resume_issues[0].severity == "high"
     assert result.resume_issues[1].category == "redundant"
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_relevance_pruning_skips_missing_docs(mock_client_cls, job_description):
-    docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide=None)
-    payload = json.dumps({
-        "overall_density": "lean",
-        "removal_candidates": [],
-    })
+    docs = DocumentSet(resume=None)
     mock_client = MagicMock()
-    mock_client.chat.return_value = _make_mock_response(payload)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_relevance_pruning(docs, job_description)
 
-    assert result.overall_density == "lean"
-    assert mock_client.chat.call_count == 1  # Only resume reviewed
-    assert result.cover_letter_issues == []
+    assert mock_client.chat.call_count == 0
     assert result.resume_issues == []
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
-def test_review_relevance_pruning_worst_of_density(mock_client_cls, document_set, job_description):
-    """Overall density should be the worst (maximum) across docs."""
-    lean = json.dumps({"overall_density": "lean", "removal_candidates": []})
+def test_review_relevance_pruning_density(mock_client_cls, document_set, job_description):
+    """Density should reflect the resume review result."""
     bloated = json.dumps({
         "overall_density": "bloated",
         "removal_candidates": [
@@ -613,10 +520,7 @@ def test_review_relevance_pruning_worst_of_density(mock_client_cls, document_set
         ],
     })
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_mock_response(lean),       # cover letter
-        _make_mock_response(bloated),    # resume
-    ]
+    mock_client.chat.return_value = _make_mock_response(bloated)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
@@ -647,8 +551,8 @@ def test_review_relevance_pruning_invalid_values_default(mock_client_cls, docume
     result = reviewer.review_relevance_pruning(document_set, job_description)
 
     assert result.overall_density == "balanced"  # unknown → default
-    assert result.cover_letter_issues[0].category == "filler"  # nonexistent → default
-    assert result.cover_letter_issues[0].severity == "medium"  # critical → default
+    assert result.resume_issues[0].category == "filler"  # nonexistent → default
+    assert result.resume_issues[0].severity == "medium"  # critical → default
 
 
 # ---------------------------------------------------------------------------
@@ -697,7 +601,7 @@ def test_review_ats_keyword_returns_result(mock_client_cls, document_set, job_de
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_ats_keyword_skips_missing_resume(mock_client_cls, job_description, career_profile):
-    docs = DocumentSet(cover_letter="Some content.", resume=None, interview_guide=None)
+    docs = DocumentSet(resume=None)
     mock_client = MagicMock()
     mock_client_cls.return_value = mock_client
 
@@ -732,120 +636,13 @@ def test_review_ats_keyword_invalid_values_default(mock_client_cls, document_set
 
 
 # ---------------------------------------------------------------------------
-# review_consistency
-# ---------------------------------------------------------------------------
-
-
-@patch("resume_refinery.reviewers.ollama.Client")
-def test_review_consistency_returns_result(mock_client_cls, document_set):
-    payload = json.dumps({
-        "consistent": False,
-        "issues": [
-            {
-                "field": "team size",
-                "document_a": "resume",
-                "quote_a": "Led a team of 5",
-                "document_b": "cover_letter",
-                "quote_b": "Managed a team of 12",
-                "severity": "high",
-            },
-        ],
-    })
-    mock_client = MagicMock()
-    mock_client.chat.return_value = _make_mock_response(payload)
-    mock_client_cls.return_value = mock_client
-
-    reviewer = DocumentReviewer(api_key="test-key")
-    result = reviewer.review_consistency(document_set)
-
-    assert isinstance(result, ConsistencyResult)
-    assert result.consistent is False
-    assert len(result.issues) == 1
-    assert result.issues[0].field == "team size"
-    assert result.issues[0].document_a == "resume"
-    assert result.issues[0].quote_a == "Led a team of 5"
-    assert result.issues[0].document_b == "cover_letter"
-    assert result.issues[0].quote_b == "Managed a team of 12"
-    assert result.issues[0].severity == "high"
-
-
-@patch("resume_refinery.reviewers.ollama.Client")
-def test_review_consistency_skips_single_doc(mock_client_cls):
-    docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide=None)
-    mock_client = MagicMock()
-    mock_client_cls.return_value = mock_client
-
-    reviewer = DocumentReviewer(api_key="test-key")
-    result = reviewer.review_consistency(docs)
-
-    assert result.consistent is True
-    assert result.issues == []
-    assert mock_client.chat.call_count == 0
-
-
-@patch("resume_refinery.reviewers.ollama.Client")
-def test_review_consistency_forces_inconsistent_when_issues_exist(mock_client_cls, document_set):
-    """Even if the LLM says consistent=True but returns issues, result should be inconsistent."""
-    payload = json.dumps({
-        "consistent": True,
-        "issues": [
-            {
-                "field": "date",
-                "document_a": "resume",
-                "quote_a": "2020-2023",
-                "document_b": "cover_letter",
-                "quote_b": "2019-2023",
-                "severity": "medium",
-            },
-        ],
-    })
-    mock_client = MagicMock()
-    mock_client.chat.return_value = _make_mock_response(payload)
-    mock_client_cls.return_value = mock_client
-
-    reviewer = DocumentReviewer(api_key="test-key")
-    result = reviewer.review_consistency(document_set)
-
-    assert result.consistent is False
-    assert len(result.issues) == 1
-
-
-@patch("resume_refinery.reviewers.ollama.Client")
-def test_review_consistency_invalid_doc_names_default(mock_client_cls, document_set):
-    """Invalid document names default to safe values."""
-    payload = json.dumps({
-        "consistent": False,
-        "issues": [
-            {
-                "field": "title",
-                "document_a": "cv",
-                "quote_a": "Senior",
-                "document_b": "summary",
-                "quote_b": "Staff",
-                "severity": "extreme",
-            },
-        ],
-    })
-    mock_client = MagicMock()
-    mock_client.chat.return_value = _make_mock_response(payload)
-    mock_client_cls.return_value = mock_client
-
-    reviewer = DocumentReviewer(api_key="test-key")
-    result = reviewer.review_consistency(document_set)
-
-    assert result.issues[0].document_a == "resume"  # cv → default
-    assert result.issues[0].document_b == "cover_letter"  # summary → default
-    assert result.issues[0].severity == "medium"  # extreme → default
-
-
-# ---------------------------------------------------------------------------
 # review_grammar
 # ---------------------------------------------------------------------------
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_grammar_returns_result(mock_client_cls, document_set):
-    cl_payload = json.dumps({
+    resume_payload = json.dumps({
         "clean": False,
         "issues": [
             {
@@ -857,20 +654,8 @@ def test_review_grammar_returns_result(mock_client_cls, document_set):
             },
         ],
     })
-    resume_payload = json.dumps({
-        "clean": True,
-        "issues": [],
-    })
-    ig_payload = json.dumps({
-        "clean": True,
-        "issues": [],
-    })
     mock_client = MagicMock()
-    mock_client.chat.side_effect = [
-        _make_mock_response(cl_payload),
-        _make_mock_response(resume_payload),
-        _make_mock_response(ig_payload),
-    ]
+    mock_client.chat.return_value = _make_mock_response(resume_payload)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
@@ -878,33 +663,24 @@ def test_review_grammar_returns_result(mock_client_cls, document_set):
 
     assert isinstance(result, GrammarResult)
     assert result.clean is False
-    assert len(result.cover_letter_issues) == 1
-    assert result.cover_letter_issues[0].phrase == "I've spent five years building"
-    assert result.cover_letter_issues[0].document == "cover_letter"
-    assert result.cover_letter_issues[0].category == "grammar"
-    assert result.resume_issues == []
-    assert result.interview_guide_issues == []
+    assert len(result.resume_issues) == 1
+    assert result.resume_issues[0].phrase == "I've spent five years building"
+    assert result.resume_issues[0].document == "resume"
+    assert result.resume_issues[0].category == "grammar"
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
 def test_review_grammar_skips_missing_docs(mock_client_cls):
-    docs = DocumentSet(cover_letter=None, resume="# Resume content", interview_guide=None)
-    payload = json.dumps({
-        "clean": True,
-        "issues": [],
-    })
+    docs = DocumentSet(resume=None)
     mock_client = MagicMock()
-    mock_client.chat.return_value = _make_mock_response(payload)
     mock_client_cls.return_value = mock_client
 
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_grammar(docs)
 
     assert result.clean is True
-    assert mock_client.chat.call_count == 1  # Only resume reviewed
-    assert result.cover_letter_issues == []
+    assert mock_client.chat.call_count == 0
     assert result.resume_issues == []
-    assert result.interview_guide_issues == []
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
@@ -928,13 +704,13 @@ def test_review_grammar_invalid_values_default(mock_client_cls, document_set):
     reviewer = DocumentReviewer(api_key="test-key")
     result = reviewer.review_grammar(document_set)
 
-    assert result.cover_letter_issues[0].category == "grammar"  # syntax → default
-    assert result.cover_letter_issues[0].severity == "medium"  # critical → default
+    assert result.resume_issues[0].category == "grammar"  # syntax → default
+    assert result.resume_issues[0].severity == "medium"  # critical → default
 
 
 @patch("resume_refinery.reviewers.ollama.Client")
-def test_review_grammar_multiple_docs_all_clean(mock_client_cls, document_set):
-    """When all docs are clean, result should be clean."""
+def test_review_grammar_all_clean(mock_client_cls, document_set):
+    """When resume is clean, result should be clean."""
     payload = json.dumps({"clean": True, "issues": []})
     mock_client = MagicMock()
     mock_client.chat.return_value = _make_mock_response(payload)
@@ -944,9 +720,6 @@ def test_review_grammar_multiple_docs_all_clean(mock_client_cls, document_set):
     result = reviewer.review_grammar(document_set)
 
     assert result.clean is True
-    assert result.cover_letter_issues == []
     assert result.resume_issues == []
-    assert result.interview_guide_issues == []
-    # 3 docs = 3 API calls
-    assert mock_client.chat.call_count == 3
+    assert mock_client.chat.call_count == 1
 

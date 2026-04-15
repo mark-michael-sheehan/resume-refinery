@@ -1,4 +1,4 @@
-"""Tests for workflow orchestration over specialist agents."""
+﻿"""Tests for workflow orchestration over specialist agents."""
 
 from __future__ import annotations
 
@@ -9,13 +9,12 @@ import pytest
 from resume_refinery.models import (
     AIDetectionResult,
     ATSKeywordResult,
-    ConsistencyResult,
+    CandidacyNarrative,
     DocumentSet,
     DocumentTruthResult,
-    EvidencePack,
     GrammarResult,
     HiringManagerReview,
-    JobRequirement,
+    NarrativePillar,
     RepairPassResult,
     ReviewBundle,
     TruthfulnessResult,
@@ -26,13 +25,13 @@ from resume_refinery.orchestrator import ResumeRefineryOrchestrator
 from resume_refinery.session import SessionStore
 
 
-class FakeEvidenceAgent:
-    def build_evidence_pack(self, career, job):
-        return EvidencePack(
-            job_requirements=[JobRequirement(requirement="distributed systems")],
-            matched_evidence=[],
-            gaps=[],
-            source_summary=["Reduced infra costs by $180K/year"],
+class FakeNarrativeAgent:
+    def build_narrative(self, career, job):
+        return CandidacyNarrative(
+            thesis="Strong distributed systems background.",
+            pillars=[NarrativePillar(theme="Backend", argument="Led migrations", career_evidence=["Reduced infra costs by $180K/year"])],
+            gap_framing=[],
+            raw_narrative="Narrative text.",
         )
 
 
@@ -64,9 +63,7 @@ class FakeVerificationAgent:
         truth_doc = DocumentTruthResult(pass_strict=passed, unsupported_claims=[] if passed else ["unsupported claim"], evidence_examples=[])
         return TruthfulnessResult(
             all_supported=passed,
-            cover_letter=truth_doc,
             resume=truth_doc,
-            interview_guide=truth_doc,
         )
 
     def review_voice(self, docs, voice, *, exemptions=None):
@@ -74,7 +71,6 @@ class FakeVerificationAgent:
         match = "strong" if self.voice_calls > 1 else "moderate"
         return VoiceReviewResult(
             overall_match=match,
-            cover_letter_assessment="Mostly on-voice.",
             resume_assessment="Consistent.",
             specific_issues=[] if match == "strong" else ["opener feels generic"],
         )
@@ -84,9 +80,7 @@ class FakeVerificationAgent:
         risk = "low" if self.ai_calls > 1 else "medium"
         return AIDetectionResult(
             risk_level=risk,
-            cover_letter_flags=[] if risk == "low" else ["results-driven"],
-            resume_flags=[],
-            interview_guide_flags=[],
+            resume_flags=[] if risk == "low" else ["results-driven"],
         )
 
     def review_all(self, docs, career, voice, job):
@@ -94,21 +88,16 @@ class FakeVerificationAgent:
         return ReviewBundle(
             truthfulness=TruthfulnessResult(
                 all_supported=True,
-                cover_letter=truth_doc,
                 resume=truth_doc,
-                interview_guide=truth_doc,
             ),
             voice=VoiceReviewResult(
                 overall_match="strong",
-                cover_letter_assessment="Good",
                 resume_assessment="Good",
                 specific_issues=[],
             ),
             ai_detection=AIDetectionResult(
                 risk_level="low",
-                cover_letter_flags=[],
                 resume_flags=[],
-                interview_guide_flags=[],
             ),
         )
 
@@ -122,15 +111,11 @@ class FakeVerificationAgent:
         from resume_refinery.models import RelevancePruningResult
         return RelevancePruningResult(
             overall_density="lean",
-            cover_letter_issues=[],
             resume_issues=[],
         )
 
     def review_ats_keyword(self, docs, job, career, *, exemptions=None):
         return ATSKeywordResult(alignment_score="strong")
-
-    def review_consistency(self, docs, *, exemptions=None):
-        return ConsistencyResult(consistent=True)
 
     def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
@@ -140,11 +125,9 @@ class FakeRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
         self.unified_calls += 1
-        docs.cover_letter = "cover_letter repaired"
         docs.resume = "resume repaired"
-        docs.interview_guide = "interview_guide repaired"
         return RepairPassResult()
 
 
@@ -155,7 +138,7 @@ def test_orchestrator_create_exports_to_custom_output_dir(tmp_path, monkeypatch,
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
@@ -177,8 +160,8 @@ def test_orchestrator_create_exports_to_custom_output_dir(tmp_path, monkeypatch,
     # Session version directory also has DOCX copies for versioning
     version_dir = store.session_dir(result.session.session_id) / f"v{result.session.current_version}"
     assert (version_dir / "resume.docx").exists()
-    assert (version_dir / "cover_letter.docx").exists()
-    assert (version_dir / "interview_guide.docx").exists()
+    # cover_letter.docx no longer generated
+    # interview_guide.docx no longer generated
 
 
 def test_orchestrator_refine_exports_to_custom_output_dir(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -187,7 +170,7 @@ def test_orchestrator_refine_exports_to_custom_output_dir(tmp_path, monkeypatch,
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
@@ -213,8 +196,8 @@ def test_orchestrator_refine_exports_to_custom_output_dir(tmp_path, monkeypatch,
     # Session version directory also has DOCX copies for versioning
     version_dir = store.session_dir(second.session.session_id) / f"v{second.session.current_version}"
     assert (version_dir / "resume.docx").exists()
-    assert (version_dir / "cover_letter.docx").exists()
-    assert (version_dir / "interview_guide.docx").exists()
+    # cover_letter.docx no longer generated
+    # interview_guide.docx no longer generated
 
 
 def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -224,7 +207,7 @@ def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, 
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -234,7 +217,7 @@ def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
     assert result.session.current_version == 1
-    assert result.evidence_pack is not None
+    assert result.narrative is not None
     assert result.voice_style_guide is not None
     assert result.exported_paths
     # Single unified repair in first pass
@@ -249,7 +232,7 @@ def test_orchestrator_create_verifies_all_three_loops(tmp_path, monkeypatch, car
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -258,8 +241,8 @@ def test_orchestrator_create_verifies_all_three_loops(tmp_path, monkeypatch, car
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    # Pass 1: truth + AI fail → single unified repair.
-    # Pass 2: all pass → exit.
+    # Pass 1: truth + AI fail â†’ single unified repair.
+    # Pass 2: all pass â†’ exit.
     assert repair.unified_calls == 1
     assert verification.truth_calls == 2
     assert verification.voice_calls == 2
@@ -280,7 +263,7 @@ def test_orchestrator_refine_session_run_updates_selected_doc(tmp_path, monkeypa
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -288,12 +271,10 @@ def test_orchestrator_refine_session_run_updates_selected_doc(tmp_path, monkeypa
     )
 
     first = orchestrator.create_session_run(career_profile, voice_profile, job_description, skip_review=True)
-    second = orchestrator.refine_session_run(first.session.session_id, "Tighten the opener", doc="cover_letter")
+    second = orchestrator.refine_session_run(first.session.session_id, "Tighten the opener", doc="resume")
 
     assert second.session.current_version == 2
-    assert second.documents.cover_letter is not None
     assert second.documents.resume is not None
-    assert second.documents.interview_guide is not None
 
 
 def test_orchestrator_refine_uses_repair_agent_and_runs_reviews_once(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -304,7 +285,7 @@ def test_orchestrator_refine_uses_repair_agent_and_runs_reviews_once(tmp_path, m
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -319,16 +300,15 @@ def test_orchestrator_refine_uses_repair_agent_and_runs_reviews_once(tmp_path, m
     # Repair agent called exactly once (single pass, no loop).
     assert repair.unified_calls == initial_repair_calls + 1
     # Documents were modified by repair agent.
-    assert second.documents.cover_letter == "cover_letter repaired"
     assert second.documents.resume == "resume repaired"
-    assert second.documents.interview_guide == "interview_guide repaired"
-    # Reviews are present in the result (all eight reviewers).
+    assert second.documents.resume == "resume repaired"
+    
+    # Reviews are present in the result (all seven reviewers).
     assert second.reviews.truthfulness is not None
     assert second.reviews.voice is not None
     assert second.reviews.ai_detection is not None
     assert second.reviews.hiring_manager is not None
     assert second.reviews.ats_keyword is not None
-    assert second.reviews.consistency is not None
     assert second.reviews.grammar is not None
     # Version was bumped.
     assert second.session.current_version == 2
@@ -340,7 +320,7 @@ def test_orchestrator_refine_with_doc_only_modifies_targeted_doc(tmp_path, monke
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
@@ -348,15 +328,12 @@ def test_orchestrator_refine_with_doc_only_modifies_targeted_doc(tmp_path, monke
     )
 
     first = orchestrator.create_session_run(career_profile, voice_profile, job_description, skip_review=True)
-    original_docs = store.load_documents(first.session)
 
-    second = orchestrator.refine_session_run(first.session.session_id, "Fix the opener", doc="cover_letter")
+    second = orchestrator.refine_session_run(first.session.session_id, "Fix the opener", doc="resume")
 
-    # Only cover letter was changed by repair.
-    assert second.documents.cover_letter == "cover_letter repaired"
-    # Resume and interview guide are preserved from the original.
-    assert second.documents.resume == original_docs.resume
-    assert second.documents.interview_guide == original_docs.interview_guide
+    # Resume was modified by repair.
+    assert second.documents.resume == "resume repaired"
+    
 
 
 # ---------------------------------------------------------------------------
@@ -371,15 +348,12 @@ class AlwaysPassVerificationAgent:
         passed_doc = DocumentTruthResult(pass_strict=True, unsupported_claims=[], evidence_examples=[])
         return TruthfulnessResult(
             all_supported=True,
-            cover_letter=passed_doc,
             resume=passed_doc,
-            interview_guide=passed_doc,
         )
 
     def review_voice(self, docs, voice, *, exemptions=None):
         return VoiceReviewResult(
             overall_match="strong",
-            cover_letter_assessment="Good",
             resume_assessment="Good",
         )
 
@@ -394,14 +368,10 @@ class AlwaysPassVerificationAgent:
 
     def review_relevance_pruning(self, docs, job, *, exemptions=None):
         from resume_refinery.models import RelevancePruningResult
-        return RelevancePruningResult(overall_density="lean", cover_letter_issues=[], resume_issues=[])
+        return RelevancePruningResult(overall_density="lean", resume_issues=[])
 
     def review_ats_keyword(self, docs, job, career, *, exemptions=None):
         return ATSKeywordResult(alignment_score="strong")
-
-    def review_consistency(self, docs, *, exemptions=None):
-        return ConsistencyResult(consistent=True)
-
     def review_grammar(self, docs, *, exemptions=None):
         return GrammarResult(clean=True)
 
@@ -418,7 +388,7 @@ def test_no_repair_when_all_reviews_pass(tmp_path, monkeypatch, career_profile, 
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -434,7 +404,7 @@ def test_no_repair_when_all_reviews_pass(tmp_path, monkeypatch, career_profile, 
 
 
 # ---------------------------------------------------------------------------
-# Exception handling: reviewer raises → graceful skip, other loops continue
+# Exception handling: reviewer raises â†’ graceful skip, other loops continue
 # ---------------------------------------------------------------------------
 
 
@@ -457,7 +427,7 @@ def _build_orchestrator(tmp_path, monkeypatch, verification):
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     return ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -503,9 +473,7 @@ class AlwaysFlagsAIPhraseVerification(AlwaysPassVerificationAgent):
     def review_ai_detection(self, docs, *, exemptions=None):
         return AIDetectionResult(
             risk_level="medium",
-            cover_letter_flags=["accepted-phrase"],
-            resume_flags=[],
-            interview_guide_flags=[],
+            resume_flags=["accepted-phrase"],
         )
 
 
@@ -515,7 +483,7 @@ class AcceptsAIPhraseRepairAgent:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
 
@@ -528,7 +496,7 @@ def test_suppression_prevents_reflagged_phrase_from_blocking_convergence(
     repair = AcceptsAIPhraseRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysFlagsAIPhraseVerification(),
@@ -537,12 +505,12 @@ def test_suppression_prevents_reflagged_phrase_from_blocking_convergence(
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    # Pass 1: AI flag found → repair called → phrase accepted.
-    # Pass 2: same AI flag found but suppressed → gate passes → loop exits early.
+    # Pass 1: AI flag found â†’ repair called â†’ phrase accepted.
+    # Pass 2: same AI flag found but suppressed â†’ gate passes â†’ loop exits early.
     assert repair.unified_calls == 1
     # The final review reflects the suppressed (filtered) state
     assert result.reviews.ai_detection is not None
-    assert result.reviews.ai_detection.cover_letter_flags == []
+    assert result.reviews.ai_detection.resume_flags == []
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +519,7 @@ def test_suppression_prevents_reflagged_phrase_from_blocking_convergence(
 
 
 class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
-    """Reviews always fail — used to verify loop capping behaviour."""
+    """Reviews always fail â€” used to verify loop capping behaviour."""
 
     def __init__(self):
         self.truth_calls = 0
@@ -563,14 +531,13 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
         doc = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
         return TruthfulnessResult(
             all_supported=False,
-            cover_letter=doc, resume=doc, interview_guide=doc,
+            resume=doc,
         )
 
     def review_voice(self, docs, voice, *, exemptions=None):
         self.voice_calls += 1
         return VoiceReviewResult(
             overall_match="weak",
-            cover_letter_assessment="Off-voice",
             resume_assessment="Off-voice",
             specific_issues=["too formal"],
         )
@@ -579,9 +546,7 @@ class NeverPassVerificationAgent(AlwaysPassVerificationAgent):
         self.ai_calls += 1
         return AIDetectionResult(
             risk_level="high",
-            cover_letter_flags=["results-driven"],
             resume_flags=["proven track record"],
-            interview_guide_flags=[],
         )
 
 
@@ -591,7 +556,7 @@ def test_max_passes_zero_skips_all_reviews(tmp_path, monkeypatch, career_profile
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -599,7 +564,7 @@ def test_max_passes_zero_skips_all_reviews(tmp_path, monkeypatch, career_profile
     )
 
     result, _, _exempted = orchestrator._verify_and_repair(
-        DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
+        DocumentSet(resume="r"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
         max_passes=0,
@@ -615,13 +580,13 @@ def test_max_passes_zero_skips_all_reviews(tmp_path, monkeypatch, career_profile
 
 
 def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """With 1 pass the review runs once; fails → one unified repair → loop exhausted."""
+    """With 1 pass the review runs once; fails â†’ one unified repair â†’ loop exhausted."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     verification = NeverPassVerificationAgent()
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -629,7 +594,7 @@ def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_p
     )
 
     result, _, _exempted = orchestrator._verify_and_repair(
-        DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
+        DocumentSet(resume="r"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
         max_passes=1,
@@ -654,7 +619,7 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -662,17 +627,17 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
     )
 
     result, _, _exempted = orchestrator._verify_and_repair(
-        DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
+        DocumentSet(resume="r"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
         max_passes=4,
     )
 
-    # 4 passes × 1 call each = 4 calls per reviewer
+    # 4 passes Ã— 1 call each = 4 calls per reviewer
     assert verification.truth_calls == 4
     assert verification.voice_calls == 4
     assert verification.ai_calls == 4
-    # 4 passes × 1 unified repair = 4
+    # 4 passes Ã— 1 unified repair = 4
     assert repair.unified_calls == 4
     assert result.truthfulness.all_supported is False
     assert result.voice.overall_match == "weak"
@@ -691,7 +656,7 @@ class TruthFailsVerificationAgent(AlwaysPassVerificationAgent):
         doc = DocumentTruthResult(pass_strict=False, unsupported_claims=["claim"])
         return TruthfulnessResult(
             all_supported=False,
-            cover_letter=doc, resume=doc, interview_guide=doc,
+            resume=doc,
         )
 
 
@@ -699,7 +664,7 @@ def test_strict_truth_failed_when_truth_fails(tmp_path, monkeypatch, career_prof
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=TruthFailsVerificationAgent(),
@@ -714,7 +679,7 @@ def test_allow_unverified_suppresses_strict_truth_flag(tmp_path, monkeypatch, ca
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=TruthFailsVerificationAgent(),
@@ -736,7 +701,7 @@ def test_skip_review_persists_only_truthfulness(tmp_path, monkeypatch, career_pr
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
@@ -763,7 +728,7 @@ def test_review_session_run_returns_full_review(tmp_path, monkeypatch, career_pr
     verification = FakeVerificationAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -795,7 +760,7 @@ def test_stream_callback_receives_chunks(tmp_path, monkeypatch, career_profile, 
     chunks_received: list[str] = []
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -808,10 +773,8 @@ def test_stream_callback_receives_chunks(tmp_path, monkeypatch, career_profile, 
     )
 
     # FakeDraftingAgent yields one chunk per doc + newline delimiter
-    assert len(chunks_received) >= 3
-    assert any("cover_letter" in c for c in chunks_received)
+    assert len(chunks_received) >= 1
     assert any("resume" in c for c in chunks_received)
-    assert any("interview_guide" in c for c in chunks_received)
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +787,7 @@ def test_progress_callback_receives_messages(tmp_path, monkeypatch, career_profi
     messages: list[str] = []
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -837,7 +800,7 @@ def test_progress_callback_receives_messages(tmp_path, monkeypatch, career_profi
     )
 
     assert len(messages) > 0
-    assert any("evidence" in m.lower() for m in messages)
+    assert any("narrative" in m.lower() for m in messages)
     assert any("voice" in m.lower() for m in messages)
 
 
@@ -856,9 +819,7 @@ class MediumRiskNoFlagsVerificationAgent(AlwaysPassVerificationAgent):
         self.ai_calls += 1
         return AIDetectionResult(
             risk_level="medium",
-            cover_letter_flags=[],
             resume_flags=[],
-            interview_guide_flags=[],
         )
 
 
@@ -869,7 +830,7 @@ def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, car
     repair = FakeRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -877,13 +838,13 @@ def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, car
     )
 
     result, _, _exempted = orchestrator._verify_and_repair(
-        DocumentSet(cover_letter="cl", resume="r", interview_guide="ig"),
+        DocumentSet(resume="r"),
         career_profile, voice_profile, job_description.model_copy(),
         orchestrator._build_context(career_profile, voice_profile, job_description),
         max_passes=3,
     )
 
-    # All reviews pass (truth+voice from AlwaysPass, AI has no flags) → no repair
+    # All reviews pass (truth+voice from AlwaysPass, AI has no flags) â†’ no repair
     assert verification.ai_calls == 1
     assert repair.unified_calls == 0
     assert result.ai_detection.risk_level == "medium"  # preserved as-is
@@ -900,7 +861,7 @@ def test_progress_includes_review_summaries(tmp_path, monkeypatch, career_profil
     messages: list[str] = []
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
@@ -917,7 +878,7 @@ def test_progress_includes_review_summaries(tmp_path, monkeypatch, career_profil
     assert "UNSUPPORTED CLAIMS" in combined or "ALL SUPPORTED" in combined
     # Voice summary: shows per-doc match levels
     assert "Voice match:" in combined
-    assert "Cover Letter:" in combined
+    # Cover Letter summary removed (resume-only mode)
     # AI summary: shows risk level
     assert "AI-detection risk:" in combined
 
@@ -934,7 +895,7 @@ def test_progress_includes_pass_headers(tmp_path, monkeypatch, career_profile, v
     verification = FakeVerificationAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -978,13 +939,13 @@ def test_docs_saved_before_review_loop(tmp_path, monkeypatch, career_profile, vo
                 assert len(sessions) == 1
                 session = sessions[0]
                 loaded = store.load_documents(session)
-                saved_during_review["cover_letter"] = loaded.cover_letter is not None
+                saved_during_review["resume"] = loaded.resume is not None
                 saved_during_review["context"] = store.load_context(session) is not None
             return super().review_truthfulness(docs, career, job)
 
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=CheckingVerificationAgent(),
@@ -993,7 +954,7 @@ def test_docs_saved_before_review_loop(tmp_path, monkeypatch, career_profile, vo
 
     orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    assert saved_during_review.get("cover_letter") is True
+    assert saved_during_review.get("resume") is True
     assert saved_during_review.get("context") is True
 
 
@@ -1012,7 +973,6 @@ class ExemptionTrackingVerification(AlwaysPassVerificationAgent):
         self.hm_exemptions: list = []
         self.pruning_exemptions: list = []
         self.ats_exemptions: list = []
-        self.consistency_exemptions: list = []
         self.grammar_exemptions: list = []
 
     def review_ai_detection(self, docs, *, exemptions=None):
@@ -1021,9 +981,7 @@ class ExemptionTrackingVerification(AlwaysPassVerificationAgent):
         if len(self.ai_exemptions) == 1:
             return AIDetectionResult(
                 risk_level="medium",
-                cover_letter_flags=["flagged-phrase"],
-                resume_flags=[],
-                interview_guide_flags=[],
+                resume_flags=["flagged-phrase"],
             )
         return super().review_ai_detection(docs, exemptions=exemptions)
 
@@ -1036,7 +994,7 @@ class AcceptsAIPhraseAndTrackRepair:
     def __init__(self):
         self.unified_calls = 0
 
-    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, consistency_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
+    def repair_unified(self, docs, truth, voice_review, ai_review, career, voice, job, context, feedback=None, hm_review=None, pruning_review=None, ats_review=None, grammar_review=None, preserve_instructions=None, phase="a", pass_num=0, prior_edits=None):
         self.unified_calls += 1
         return RepairPassResult(accepted_ai_phrases=["flagged-phrase"])
 
@@ -1050,7 +1008,7 @@ def test_exemptions_passed_to_reviewers_in_repair_loop(
     repair = AcceptsAIPhraseAndTrackRepair()
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
@@ -1059,9 +1017,9 @@ def test_exemptions_passed_to_reviewers_in_repair_loop(
 
     orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    # Pass 1: no exemptions → AI fails → repair accepts the phrase
+    # Pass 1: no exemptions â†’ AI fails â†’ repair accepts the phrase
     assert verification.ai_exemptions[0] is None
-    # Pass 2: exemptions include the accepted phrase → AI passes
+    # Pass 2: exemptions include the accepted phrase â†’ AI passes
     assert verification.ai_exemptions[1] == ["flagged-phrase"]
     # Repair only called once (pass 2 converges)
     assert repair.unified_calls == 1
@@ -1073,7 +1031,7 @@ def test_exemptions_passed_to_reviewers_in_repair_loop(
 
 
 class AlwaysFlagsAIForRefine(AlwaysPassVerificationAgent):
-    """AI detection always flags a specific phrase — used to verify suppression in refine."""
+    """AI detection always flags a specific phrase â€” used to verify suppression in refine."""
 
     def __init__(self):
         self.ai_exemptions_received: list = []
@@ -1082,9 +1040,7 @@ class AlwaysFlagsAIForRefine(AlwaysPassVerificationAgent):
         self.ai_exemptions_received.append(exemptions)
         return AIDetectionResult(
             risk_level="medium",
-            cover_letter_flags=["previously-accepted"],
-            resume_flags=[],
-            interview_guide_flags=[],
+            resume_flags=["previously-accepted"],
         )
 
 
@@ -1102,7 +1058,7 @@ def test_refine_loads_exemptions_and_suppresses_review_findings(
     create_verification = AlwaysPassVerificationAgent()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=create_verification,
@@ -1121,7 +1077,7 @@ def test_refine_loads_exemptions_and_suppresses_review_findings(
     refine_verification = AlwaysFlagsAIForRefine()
     orchestrator2 = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=refine_verification,
@@ -1135,7 +1091,7 @@ def test_refine_loads_exemptions_and_suppresses_review_findings(
     assert refine_verification.ai_exemptions_received[0] == ["previously-accepted"]
     # Post-filter suppression removed the flag from the final review
     assert result.reviews.ai_detection is not None
-    assert result.reviews.ai_detection.cover_letter_flags == []
+    assert result.reviews.ai_detection.resume_flags == []
     # Exemptions were persisted with the new version
     loaded = store.load_suppressions(result.session)
     assert loaded is not None
@@ -1159,7 +1115,7 @@ def test_load_suppressions_returns_most_recent(
     # Create a session and save exemptions in v1
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1178,7 +1134,7 @@ def test_load_suppressions_returns_most_recent(
     )
 
     # load_suppressions should still find the v1 exemptions via backwards scan
-    # (in practice refine now saves them too, so v2 will have them —
+    # (in practice refine now saves them too, so v2 will have them â€”
     # but verify the scanning logic works for the case where v2 has them)
     loaded = store.load_suppressions(refined.session)
     assert loaded is not None
@@ -1191,10 +1147,10 @@ def test_docs_updated_after_each_repair_pass(tmp_path, monkeypatch, career_profi
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
-        verification_agent=FakeVerificationAgent(),  # pass 1 fails, pass 2 passes → 1 repair
+        verification_agent=FakeVerificationAgent(),  # pass 1 fails, pass 2 passes â†’ 1 repair
         repair_agent=FakeRepairAgent(),
     )
 
@@ -1202,7 +1158,7 @@ def test_docs_updated_after_each_repair_pass(tmp_path, monkeypatch, career_profi
 
     # Repair happened and docs on disk should reflect repaired content
     loaded = store.load_documents(result.session)
-    assert loaded.cover_letter == "cover_letter repaired"
+    assert loaded.resume == "resume repaired"
     assert loaded.resume == "resume repaired"
 
     # Repair pass snapshot should also exist
@@ -1227,23 +1183,20 @@ def test_build_prior_edits_formats_edit_summary():
 
     rp = RepairPassResult(
         edits={
-            "cover_letter": [
+            "resume": [
                 RepairEdit(find="old text", replace="new text", reason="truthfulness fix", reviewer="truthfulness"),
                 RepairEdit(find="remove me", replace="", reason="pruning", reviewer="pruning"),
-            ],
-            "resume": [
                 RepairEdit(find="foo", replace="bar", reason="voice fix", reviewer="voice"),
             ],
         },
     )
     result = ResumeRefineryOrchestrator._build_prior_edits([rp])
 
-    assert "cover_letter" in result
     assert "resume" in result
-    assert "[truthfulness]" in result["cover_letter"]
-    assert "old text" in result["cover_letter"]
-    assert "new text" in result["cover_letter"]
-    assert "DELETED" in result["cover_letter"]
+    assert "[truthfulness]" in result["resume"]
+    assert "old text" in result["resume"]
+    assert "new text" in result["resume"]
+    assert "DELETED" in result["resume"]
     assert "[voice]" in result["resume"]
     assert "foo" in result["resume"]
     assert "bar" in result["resume"]
@@ -1290,38 +1243,13 @@ def test_build_prior_edits_insert_after_summary():
 # ---------------------------------------------------------------------------
 
 
-def test_selected_docs_generates_only_chosen(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """When selected_docs is specified, only those documents are generated."""
+def test_selected_docs_generates_resume(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """selected_docs defaults to resume only."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
-        voice_agent=FakeVoiceAgent(),
-        drafting_agent=FakeDraftingAgent(),
-        verification_agent=AlwaysPassVerificationAgent(),
-        repair_agent=FakeRepairAgent(),
-    )
-
-    result = orchestrator.create_session_run(
-        career_profile, voice_profile, job_description,
-        skip_review=True,
-        selected_docs=["resume", "cover_letter"],
-    )
-
-    assert result.documents.resume is not None
-    assert result.documents.cover_letter is not None
-    assert result.documents.interview_guide is None
-    assert result.session.selected_docs == ["resume", "cover_letter"]
-
-
-def test_selected_docs_single_doc(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """Selecting a single document generates only that one."""
-    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
-    store = SessionStore()
-    orchestrator = ResumeRefineryOrchestrator(
-        store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1335,8 +1263,7 @@ def test_selected_docs_single_doc(tmp_path, monkeypatch, career_profile, voice_p
     )
 
     assert result.documents.resume is not None
-    assert result.documents.cover_letter is None
-    assert result.documents.interview_guide is None
+    assert result.session.selected_docs == ["resume"]
 
 
 def test_selected_docs_persisted_in_session(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -1345,7 +1272,7 @@ def test_selected_docs_persisted_in_session(tmp_path, monkeypatch, career_profil
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1363,11 +1290,11 @@ def test_selected_docs_persisted_in_session(tmp_path, monkeypatch, career_profil
 
 
 def test_selected_docs_default_all(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """Without selected_docs, all three documents are generated (backward compat)."""
+    """Without selected_docs, the resume is generated by default."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1380,18 +1307,16 @@ def test_selected_docs_default_all(tmp_path, monkeypatch, career_profile, voice_
     )
 
     assert result.documents.resume is not None
-    assert result.documents.cover_letter is not None
-    assert result.documents.interview_guide is not None
-    assert set(result.session.selected_docs) == {"resume", "cover_letter", "interview_guide"}
+    assert set(result.session.selected_docs) == {"resume"}
 
 
-def test_selected_docs_refine_scoped_to_session_selection(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """Refine should only operate on the session's selected_docs."""
+def test_selected_docs_refine(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Refine should operate on the session's selected_docs (resume only)."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1401,17 +1326,13 @@ def test_selected_docs_refine_scoped_to_session_selection(tmp_path, monkeypatch,
     created = orchestrator.create_session_run(
         career_profile, voice_profile, job_description,
         skip_review=True,
-        selected_docs=["resume", "cover_letter"],
     )
 
     refined = orchestrator.refine_session_run(
         created.session.session_id, "Make it shorter",
     )
 
-    # interview_guide was never generated, so it stays None after refine
-    assert refined.documents.interview_guide is None
     assert refined.documents.resume is not None
-    assert refined.documents.cover_letter is not None
 
 
 def test_selected_docs_stream_callback_only_selected(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -1420,7 +1341,7 @@ def test_selected_docs_stream_callback_only_selected(tmp_path, monkeypatch, care
     chunks: list[str] = []
     orchestrator = ResumeRefineryOrchestrator(
         store=SessionStore(),
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1435,8 +1356,6 @@ def test_selected_docs_stream_callback_only_selected(tmp_path, monkeypatch, care
 
     # Only resume chunks + newlines should be present
     assert any("resume" in c for c in chunks)
-    assert not any("cover_letter" in c for c in chunks)
-    assert not any("interview_guide" in c for c in chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -1450,7 +1369,7 @@ def test_extract_context_creates_session_and_stages_context(tmp_path, monkeypatc
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1459,16 +1378,15 @@ def test_extract_context_creates_session_and_stages_context(tmp_path, monkeypatc
 
     session, context = orchestrator.extract_context(
         career_profile, voice_profile, job_description,
-        selected_docs=["resume", "cover_letter"],
     )
 
     assert session.current_version == 0
-    assert context.evidence_pack is not None
+    assert context.narrative is not None
     assert context.voice_style_guide is not None
     # Staging context should be on disk
     loaded = store.load_staging_context(session)
     assert loaded is not None
-    assert loaded.evidence_pack.job_requirements == context.evidence_pack.job_requirements
+    assert loaded.narrative.thesis == context.narrative.thesis
 
 
 def test_generate_session_run_uses_staged_context(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -1477,7 +1395,7 @@ def test_generate_session_run_uses_staged_context(tmp_path, monkeypatch, career_
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1494,8 +1412,6 @@ def test_generate_session_run_uses_staged_context(tmp_path, monkeypatch, career_
 
     assert result.session.current_version == 1
     assert result.documents.resume is not None
-    assert result.documents.cover_letter is not None
-    assert result.documents.interview_guide is not None
     # Staging context should be cleaned up
     assert store.load_staging_context(result.session) is None
 
@@ -1506,7 +1422,7 @@ def test_generate_session_run_with_filtered_evidence(tmp_path, monkeypatch, care
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
@@ -1517,14 +1433,14 @@ def test_generate_session_run_with_filtered_evidence(tmp_path, monkeypatch, care
         career_profile, voice_profile, job_description,
     )
 
-    # Pass a modified context directly (simulating curation)
-    from resume_refinery.models import DraftingContext, EvidencePack
+    # Pass the context directly (simulating curation review)
+    from resume_refinery.models import DraftingContext, CandidacyNarrative as CN
     curated_context = DraftingContext(
-        evidence_pack=EvidencePack(
-            job_requirements=context.evidence_pack.job_requirements,
-            matched_evidence=[],  # all evidence removed
-            gaps=context.evidence_pack.gaps,
-            source_summary=context.evidence_pack.source_summary,
+        narrative=CN(
+            thesis=context.narrative.thesis,
+            pillars=[],  # all pillars removed
+            gap_framing=context.narrative.gap_framing,
+            raw_narrative=context.narrative.raw_narrative,
         ),
         voice_style_guide=context.voice_style_guide,
     )
@@ -1536,7 +1452,6 @@ def test_generate_session_run_with_filtered_evidence(tmp_path, monkeypatch, care
     )
 
     assert result.session.current_version == 1
-    assert result.evidence_pack.matched_evidence == []
     assert result.documents.resume is not None
 
 
@@ -1546,7 +1461,7 @@ def test_generate_session_run_fails_without_staged_context(tmp_path, monkeypatch
     store = SessionStore()
     orchestrator = ResumeRefineryOrchestrator(
         store=store,
-        evidence_agent=FakeEvidenceAgent(),
+        narrative_agent=FakeNarrativeAgent(),
         voice_agent=FakeVoiceAgent(),
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),

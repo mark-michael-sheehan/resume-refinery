@@ -94,26 +94,14 @@ The home page includes links to **Browse Sessions** and **Career Builder**.
 Use the Career Builder (`/career`) to create a structured career repository through
 guided questions before generating documents.
 
-The session creation form includes checkboxes to select which documents to generate
-(Resume, Cover Letter, Interview Guide). All three are checked by default. Uncheck
-any document you don't need — the selection carries through the review/repair loop
-and limits the refine dropdown to only the selected documents.
+The session creation form allows selecting a saved career repository instead of
+uploading files.
 
-#### Evidence Curation
+#### Narrative Creation
 
-After submitting the new-session form, the system extracts an evidence pack
-(job requirements matched against your career profile) and redirects you to
-an **Evidence Curation** page (`/sessions/<id>/curate`). This page displays
-all matched evidence items as a checklist (all checked by default). You can:
-
-- **Uncheck** any evidence item to exclude it from document generation
-- Use **Select All** / **Deselect All** buttons for bulk control
-- Click **Generate with Selected Evidence** to proceed with only the checked items
-- Click **Generate with All Evidence** to skip curation entirely
-
-Gaps (job requirements with no evidence found) are displayed read-only for context.
-The CLI does not include this curation step — it runs extraction and generation
-in a single pass.
+After submitting the new-session form, the system creates a candidacy narrative
+(a structured argument for why you’re a strong fit for the role, based on your
+career profile and the job description) and proceeds directly to resume generation.
 
 ### `new` — Start a new session
 
@@ -129,21 +117,6 @@ resume-refinery new career_profile.md voice_profile.md job_description.md ./outp
   --company "Acme Corp" --title "Staff Engineer"
 ```
 
-Use `--docs` / `-D` to generate only specific documents (repeatable):
-
-```bash
-# Generate only a resume and cover letter (skip interview guide)
-resume-refinery new career_profile.md voice_profile.md job_description.md ./output \
-  -D resume -D cover_letter
-
-# Generate only an interview guide
-resume-refinery new career_profile.md voice_profile.md job_description.md ./output \
-  -D interview_guide
-```
-
-Valid values are `resume`, `cover_letter`, and `interview_guide`. When omitted, all
-three documents are generated.
-
 The fourth argument is the **output directory** where generated DOCX files will be
 written. If the directory does not exist it will be created. If the path is invalid
 (e.g. a parent directory does not exist or the path points to a file), the command
@@ -151,11 +124,11 @@ will exit with an error message.
 
 This will:
 1. Create a new session with a unique ID (e.g. `acme-cloud_staff-engineer_2026-03-20`)
-2. Generate the selected documents (streaming to terminal as they're written)
+2. Generate the resume (streaming to terminal as it’s written)
 3. Export DOCX files to the specified output directory
 4. Run strict truthfulness verification and targeted repair passes
 5. Run voice-match and AI-detection reviews automatically
-6. Print per-document issues from each reviewer and find/replace edits applied per repair pass
+6. Print issues from each reviewer and find/replace edits applied per repair pass
 
 Pass `--skip-review` to skip voice/AI style reviews and the repair loop entirely.
 Only the truthfulness review runs; voice and AI-detection are not executed and no
@@ -169,20 +142,15 @@ claims, pass `--allow-unverified`.
 ### `refine` — Apply user instructions and review
 
 ```bash
-# Refine a specific document
+# Refine the resume
 resume-refinery refine acme-cloud_staff-engineer_2026-03-20 ./output \
-  --doc cover_letter \
   --feedback "The opener is too generic. Lead with the Redis cost-saving story instead."
-
-# Refine all documents at once
-resume-refinery refine acme-cloud_staff-engineer_2026-03-20 ./output \
-  --feedback "Focus more on technical leadership and architectural decisions, less on day-to-day tasks."
 ```
 
 The second positional argument is the **output directory** (same rules as `new`).
 
-The repair agent applies the user's instructions as surgical edits to the existing documents.
-All eight reviewers then run once on the result (no repair loop). A new version (`v2`, `v3`,
+The repair agent applies the user's instructions as surgical edits to the resume.
+All seven reviewers then run once on the result (no repair loop). A new version (`v2`, `v3`,
 etc.) is created automatically and review results are saved with the version.
 
 ---
@@ -233,27 +201,23 @@ paths point to your chosen output directory.
 
 | File | Description |
 |---|---|
-| `cover_letter.docx` | Cover letter as a Word document |
 | `resume.docx` | Resume as a Word document |
-| `interview_guide.docx` | Interview prep guide as a Word document |
-| `cover_letter.md` | Markdown source (for diffing between versions) |
-| `resume.md` | Markdown source |
-| `interview_guide.md` | Markdown source |
+| `resume.md` | Markdown source (for diffing between versions) |
 
 ### Context artifacts
 
 | File | Description |
 |---|---|
-| `evidence_pack.json` | Extracted job requirements matched to career evidence, plus identified gaps. Used by the drafting and truthfulness agents. |
+| `candidacy_narrative.json` | Candidacy narrative — thesis, argument pillars with career evidence, and gap framing. Used by the drafting and repair agents. |
 | `voice_guide.json` | Distilled voice style guide (adjectives, rules, preferred phrases, phrases to avoid, writing samples). Used by the drafting and voice-review agents. |
 
 ### Review results
 
 | File | Description |
 |---|---|
-| `truth_review.json` | Per-document truthfulness verification — whether every claim is supported by the career profile. Contains `all_supported`, and per-document `pass_strict`, `unsupported_claims`, and `evidence_examples`. |
-| `voice_review.json` | Voice-match review — `overall_match` (`strong`/`moderate`/`weak`), per-document match level, assessment, and specific issues. |
-| `ai_review.json` | AI-detection review — `risk_level` (`low`/`medium`/`high`) and per-document flagged phrases that sound AI-generated. |
+| `truth_review.json` | Truthfulness verification — whether every claim is supported by the career profile. Contains `all_supported`, and `pass_strict`, `unsupported_claims`, and `evidence_examples` for the resume. |
+| `voice_review.json` | Voice-match review — `overall_match` (`strong`/`moderate`/`weak`), match level, assessment, and specific issues for the resume. |
+| `ai_review.json` | AI-detection review — `risk_level` (`low`/`medium`/`high`) and flagged phrases that sound AI-generated. |
 | `exempted_phrases.json` | Cumulative list of phrases/claims the repair agent accepted as false positives during the repair loop. Only written when exemptions occurred. Contains `claims` (truthfulness), `ai_phrases` (AI-detection), and `voice_issues` (voice). |
 
 ### Repair pass snapshots
@@ -262,9 +226,7 @@ Each repair pass creates a `repair_pass_<N>/` subdirectory containing the docume
 
 | File | Description |
 |---|---|
-| `repair_pass_<N>/cover_letter.md` | Document state after repair pass N |
 | `repair_pass_<N>/resume.md` | Document state after repair pass N |
-| `repair_pass_<N>/interview_guide.md` | Document state after repair pass N |
 | `repair_pass_<N>/truth_review.json` | Truthfulness result that preceded repair pass N |
 | `repair_pass_<N>/voice_review.json` | Voice-match result that preceded repair pass N |
 | `repair_pass_<N>/ai_review.json` | AI-detection result that preceded repair pass N |
@@ -287,7 +249,7 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 
 | Variable | Default | Description |
 |---|---|---|
-| `RESUME_REFINERY_MODEL` | `qwen3.5:9b` | Model used to write the cover letter, resume, and interview guide. Any model pulled in Ollama works; `qwen3.5:4b` is faster and lighter. |
+| `RESUME_REFINERY_MODEL` | `qwen3.5:9b` | Model used to write the resume. Any model pulled in Ollama works; `qwen3.5:4b` is faster and lighter. |
 | `RESUME_REFINERY_MAX_TOKENS` | `8192` | Maximum new tokens the generation model may produce per document. Raise if output is cut off mid-section. |
 
 ### Review / verification
@@ -313,9 +275,9 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 
 | Variable | Default | Description |
 |---|---|---|
-| `RESUME_REFINERY_MAX_REPAIR_PASSES` | `3` | Max unified review+repair passes per run. Each pass runs all three reviewers (truthfulness, voice, AI-detection), checks convergence, and — if any reviewer still fails — runs the repair agent before the next pass. Set to `1` to review once with no repair. |
-| `RESUME_REFINERY_RELAXED_PASS_START` | `1` | 0-based pass index at which voice and AI-detection thresholds relax. Before this pass, AI-detection requires zero flags on cover letter + resume. From this pass onward, total flags ≤ `AI_FLAG_TOLERANCE`. Voice accepts "moderate" on all passes. Truthfulness never relaxes. |
-| `RESUME_REFINERY_AI_FLAG_TOLERANCE` | `2` | Maximum AI-detection flags (cover letter + resume combined) allowed on relaxed passes (pass ≥ `RELAXED_PASS_START`). |
+| `RESUME_REFINERY_MAX_REPAIR_PASSES` | `3` | Max unified review+repair passes per run. Each pass runs all reviewers (truthfulness, voice, AI-detection, etc.), checks convergence, and — if any reviewer still fails — runs the repair agent before the next pass. Set to `1` to review once with no repair. |
+| `RESUME_REFINERY_RELAXED_PASS_START` | `1` | 0-based pass index at which voice and AI-detection thresholds relax. Before this pass, AI-detection requires zero flags on the resume. From this pass onward, total flags ≤ `AI_FLAG_TOLERANCE`. Voice accepts "moderate" on all passes. Truthfulness never relaxes. |
+| `RESUME_REFINERY_AI_FLAG_TOLERANCE` | `2` | Maximum AI-detection flags allowed on relaxed passes (pass ≥ `RELAXED_PASS_START`). |
 | `RESUME_REFINERY_EDIT_FAIL_THRESHOLD` | `3` | Max surgical edits that may fail to match their target text in a single repair call before an `EditApplicationError` is raised. |
 
 ### Storage
@@ -340,12 +302,8 @@ job = load_job_description("job_description.md")
 
 orchestrator = ResumeRefineryOrchestrator(store=SessionStore())
 
-# Generate all three documents (default)
+# Generate resume
 result = orchestrator.create_session_run(career, voice, job)
-
-# Or generate only specific documents
-result = orchestrator.create_session_run(career, voice, job,
-                                         selected_docs=["resume", "cover_letter"])
 
 print(result.session.session_id)
 print(result.reviews.truthfulness.all_supported)

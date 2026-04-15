@@ -95,9 +95,7 @@ def export_document_set(
     written: dict[str, Path] = {}
 
     mapping = {
-        "cover_letter": "cover_letter.docx",
         "resume": "resume.docx",
-        "interview_guide": "interview_guide.docx",
     }
     for key, filename in mapping.items():
         content = docs.get(key)
