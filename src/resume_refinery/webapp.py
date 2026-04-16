@@ -883,7 +883,7 @@ def list_sessions() -> HTMLResponse:
 
 @app.get("/sessions/{session_id}/curate", response_class=HTMLResponse)
 def review_narrative(session_id: str) -> HTMLResponse:
-    """Render the narrative review page where users can review the candidacy narrative before generation."""
+    """Render the narrative editing page where users can revise the candidacy narrative before generation."""
     session = store.get(session_id)
     context = store.load_staging_context(session)
     if context is None:
@@ -891,66 +891,135 @@ def review_narrative(session_id: str) -> HTMLResponse:
         return RedirectResponse(f"/sessions/{session_id}", status_code=303)
 
     narrative = context.narrative
+    esc = html.escape
 
-    # Build narrative display
-    thesis_html = f"<p>{html.escape(narrative.thesis)}</p>" if narrative.thesis else "<p class='muted'>No thesis generated.</p>"
-
+    # Build editable pillar cards
     pillars_html = ""
-    if narrative.pillars:
-        for pillar in narrative.pillars:
-            evidence_items = "".join(
-                f"<li>{html.escape(ev.evidence)}"
-                f"{' — <em>' + html.escape(ev.justification) + '</em>' if ev.justification else ''}"
-                f"</li>"
-                for ev in pillar.career_evidence
-            )
-            pillars_html += (
-                f"<div style='margin-bottom:.8rem'>"
-                f"<h3>{html.escape(pillar.theme)}</h3>"
-                f"<p>{html.escape(pillar.argument)}</p>"
-                f"{'<ul>' + evidence_items + '</ul>' if evidence_items else ''}"
+    for i, pillar in enumerate(narrative.pillars):
+        evidence_rows = ""
+        for j, ev in enumerate(pillar.career_evidence):
+            evidence_rows += (
+                f"<div class='evidence-row' style='margin-bottom:.5rem;padding:.4rem .5rem;"
+                f"border:1px solid var(--line);border-radius:6px;background:#faf9f4'>"
+                f"<label style='font-size:.85em'>Evidence</label>"
+                f"<textarea name='p{i}_ev{j}_text' rows='2' style='font-size:.92em'>{esc(ev.evidence)}</textarea>"
+                f"<label style='font-size:.85em'>Justification</label>"
+                f"<textarea name='p{i}_ev{j}_just' rows='1' style='font-size:.92em'>{esc(ev.justification)}</textarea>"
+                f"<button type='button' class='remove-btn' onclick='this.closest(\".evidence-row\").remove()'"
+                f" style='background:#b00020;margin-top:.3rem;padding:.3rem .6rem;font-size:.82em'>Remove</button>"
                 f"</div>"
             )
-    else:
-        pillars_html = "<p class='muted'>No pillars generated.</p>"
+        pillars_html += (
+            f"<div class='pillar-card' style='margin-bottom:1rem;padding:.8rem;border:1px solid var(--line);"
+            f"border-radius:10px;background:#fdfcf7'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+            f"<strong>Pillar {i + 1}</strong>"
+            f"<button type='button' class='remove-btn' onclick='this.closest(\".pillar-card\").remove()'"
+            f" style='background:#b00020;padding:.3rem .6rem;font-size:.82em'>Remove Pillar</button>"
+            f"</div>"
+            f"<label>Theme</label>"
+            f"<input type='text' name='p{i}_theme' value='{esc(pillar.theme)}' />"
+            f"<label>Argument</label>"
+            f"<textarea name='p{i}_argument' rows='3'>{esc(pillar.argument)}</textarea>"
+            f"<label>Evidence</label>"
+            f"<div class='evidence-list'>{evidence_rows}</div>"
+            f"</div>"
+        )
 
-    gap_items = ""
-    if narrative.gap_framing:
-        for gap in narrative.gap_framing:
-            gap_items += f"<li>{html.escape(gap)}</li>"
+    gap_rows = ""
+    for k, gap in enumerate(narrative.gap_framing):
+        gap_rows += (
+            f"<div class='gap-row' style='display:flex;gap:.4rem;margin-bottom:.4rem'>"
+            f"<textarea name='gap_{k}' rows='2' style='flex:1'>{esc(gap)}</textarea>"
+            f"<button type='button' class='remove-btn' onclick='this.closest(\".gap-row\").remove()'"
+            f" style='background:#b00020;padding:.3rem .6rem;font-size:.82em;align-self:start'>Remove</button>"
+            f"</div>"
+        )
 
     body = f"""
 <div class="card">
-  <h1>Review Narrative</h1>
-  <p class="muted">{html.escape(session.job_description.title or '—')} @ {html.escape(session.job_description.company or '—')}</p>
-  <p>Review the candidacy narrative below. This narrative will guide how your resume is framed.</p>
+  <h1>Edit Narrative</h1>
+  <p class="muted">{esc(session.job_description.title or '—')} @ {esc(session.job_description.company or '—')}</p>
+  <p>Edit the candidacy narrative below. This narrative will guide how your resume is framed.
+     Changes are sent when you click <strong>Generate Resume</strong>.</p>
 </div>
+<form id="narrativeForm" method="post" action="/sessions/{esc(session_id)}/generate">
+<input type="hidden" name="narrative_json" id="narrativeJson" />
 <div class="card">
   <h2>Thesis</h2>
-  {thesis_html}
+  <textarea name="thesis" rows="3" id="thesisField">{esc(narrative.thesis)}</textarea>
 </div>
 <div class="card">
   <h2>Pillars ({len(narrative.pillars)})</h2>
-  {pillars_html}
+  <div id="pillarsList">
+    {pillars_html}
+  </div>
 </div>
-{"<div class='card'><h2>Gap Framing</h2><ul>" + gap_items + "</ul></div>" if gap_items else ""}
-<form method="post" action="/sessions/{html.escape(session_id)}/generate">
+{"<div class='card'><h2>Gap Framing</h2><div id='gapList'>" + gap_rows + "</div></div>" if narrative.gap_framing else "<div class='card'><h2>Gap Framing</h2><div id='gapList'><p class='muted'>No gap framing generated.</p></div></div>"}
 <div class="card" style="display:flex;gap:.8rem;justify-content:flex-end">
   <a href="/" style="padding:.65rem 1rem;color:var(--muted);text-decoration:none;font-weight:600">Cancel</a>
   <button type="submit">Generate Resume</button>
 </div>
 </form>
+<script>
+document.getElementById('narrativeForm').addEventListener('submit', function(e) {{
+  // Collect all editable fields into a JSON object
+  var thesis = document.getElementById('thesisField').value;
+  var pillars = [];
+  document.querySelectorAll('.pillar-card').forEach(function(card) {{
+    var inputs = card.querySelectorAll('input[type=text], textarea');
+    var theme = '', argument = '';
+    var evidence = [];
+    inputs.forEach(function(el) {{
+      var n = el.name;
+      if (n.endsWith('_theme')) theme = el.value;
+      else if (n.endsWith('_argument')) argument = el.value;
+      else if (n.includes('_ev') && n.endsWith('_text')) {{
+        var idx = evidence.length;
+        evidence.push({{evidence: el.value, justification: ''}});
+      }}
+      else if (n.includes('_ev') && n.endsWith('_just')) {{
+        var idx = evidence.length - 1;
+        if (idx >= 0) evidence[idx].justification = el.value;
+      }}
+    }});
+    pillars.push({{theme: theme, argument: argument, career_evidence: evidence}});
+  }});
+  var gaps = [];
+  document.querySelectorAll('#gapList textarea').forEach(function(ta) {{
+    var v = ta.value.trim();
+    if (v) gaps.push(v);
+  }});
+  document.getElementById('narrativeJson').value = JSON.stringify({{
+    thesis: thesis,
+    pillars: pillars,
+    gap_framing: gaps
+  }});
+}});
+</script>
 """
-    return _page("Review Narrative", body)
+    return _page("Edit Narrative", body)
 
 
 @app.post("/sessions/{session_id}/generate")
-def generate_session(session_id: str):
+def generate_session(session_id: str, narrative_json: Optional[str] = Form(None)):
     """Run document generation using the staged narrative context."""
     session = store.get(session_id)
     context = store.load_staging_context(session)
     if context is None:
         raise HTTPException(status_code=400, detail="No staged context — session may already be generated.")
+
+    # Apply user edits to the narrative if provided.
+    if narrative_json:
+        try:
+            edits = _json.loads(narrative_json)
+        except _json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid narrative JSON: {exc}")
+        context = DraftingContext(
+            narrative=CandidacyNarrative(**edits),
+            voice_style_guide=context.voice_style_guide,
+        )
+        store.save_staging_context(session, context)
 
     # Load generation options saved during extraction.
     opts_path = store.session_dir(session_id) / "staging_options.json"

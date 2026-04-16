@@ -21,6 +21,8 @@ voice_profile.md + career_profile.md + job_description.md
   │ NarrativeAgent     -> CandidacyNarrative (thesis + pillars + gaps)   │
   │ VoiceAgent         -> VoiceStyleGuide                                │
   │                                                                      │
+  │   ── User edits narrative via /curate page (optional) ──             │
+  │                                                                      │
   │ DraftingAgent      -> DocumentSet (resume only)                      │
   │ NarrativeCoverageAgent -> NarrativeCoverageResult (advisory)         │
   │   Compares pillars vs resume, enriches with career-evidenced gaps    │

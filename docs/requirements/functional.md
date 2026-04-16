@@ -46,6 +46,7 @@
 | FR-5.1 | Primary delivery is a local web application (FastAPI + browser). The **generate** and **refine** endpoints stream real-time progress to the browser using `StreamingResponse`. Each orchestrator step (narrative creation, document generation, review passes, repairs) is reported as it completes, with multi-line detail (review summaries, repair edits, false-positive acceptances) rendered in collapsible `<details>` blocks. On completion the page auto-redirects to the session view. |
 | FR-5.2 | A CLI interface is also available for headless/scripted use. |
 | FR-5.3 | The tool is pip-installable (`pip install -e .`). |
+| FR-5.4 | After narrative extraction, the web app presents an editable **curate** page (`/sessions/{id}/curate`) where the user can revise the thesis, pillars (theme, argument, evidence), and gap framing before document generation begins. Edits are serialised as JSON and saved to the staging context so the drafting agent uses the user-revised narrative. |
 
 ## FR-7 Career Repository
 
