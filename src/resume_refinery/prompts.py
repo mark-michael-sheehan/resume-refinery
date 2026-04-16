@@ -49,8 +49,10 @@ Requirements:
 - Start with the applicant's name as an H1 heading, then contact info
 - Use H2 for section headers (Experience, Education, Projects, Skills)
 - Use H3 for job titles / project names
-- Include a dedicated "Technical Skills" or "Skills" section near the top that mirrors \
-  exact keywords and phrases from the job description for ATS compatibility
+- Include a dedicated "Technical Skills" or "Skills" section near the top that uses \
+  exact keywords from the job description — but ONLY for skills the applicant \
+  explicitly lists or has directly used hands-on in a role described in the career \
+  profile. Never add a skill just because the JD mentions it
 - Use plain Markdown only — no tables, columns, or complex formatting that breaks ATS parsers
 - Reorder and emphasise experience most relevant to this role, guided by the narrative pillars
 - Quantify achievements wherever the data exists in the profile
@@ -1093,9 +1095,11 @@ What to flag:
 
 1. MISSING HIGH-PRIORITY KEYWORDS: Skills, technologies, tools, certifications, or \
    domain terms that appear in the job description's requirements/qualifications \
-   sections but are ABSENT from the resume — and that the candidate genuinely \
-   possesses (based on the career profile provided). Do NOT flag keywords for skills \
-   the candidate does not have.
+   sections but are ABSENT from the resume — and that the candidate explicitly lists \
+   as a skill or has directly used hands-on in a role described in the career profile. \
+   Do NOT flag keywords the candidate lacks. Do NOT infer proficiency from adjacent, \
+   tangential, or loosely related experience (e.g. knowing Python does not imply \
+   knowing Django; managing AWS EC2 does not imply expertise in AWS Lambda).
 
 2. MISSING EXACT PHRASING: Cases where the resume uses a synonym or abbreviation \
    but the JD uses a different form (e.g. resume says "k8s" but JD says \
