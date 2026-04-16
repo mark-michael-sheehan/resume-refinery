@@ -247,7 +247,16 @@ Only written when the repair agent accepted at least one item as a false positiv
     {
       "theme": "Backend Engineering",
       "argument": "Led critical infrastructure projects",
-      "career_evidence": ["Cut deploy time 60%", "Migrated monolith to microservices"]
+      "career_evidence": [
+        {
+          "evidence": "Cut deploy time 60%",
+          "justification": "Directly demonstrates infrastructure optimization skill required by the role"
+        },
+        {
+          "evidence": "Migrated monolith to microservices",
+          "justification": "Shows hands-on distributed systems experience at scale"
+        }
+      ]
     }
   ],
   "gap_framing": ["No Kubernetes experience — transferable from Docker/ECS background"],
@@ -282,9 +291,12 @@ RepairAgent still receive the full career profile independently for fact-checkin
 **Narrative creation:** The NarrativeAgent reviews the job description against the
 career profile and writes a CandidacyNarrative — a structured argument for why the
 candidate is a strong fit. The narrative includes a thesis statement, themed argument
-pillars with career evidence, and gap framing. When the LLM is unavailable, a keyword
-overlap fallback produces a basic narrative. Pillars are capped at 5 to keep the
-narrative focused.
+pillars with career evidence, and gap framing. Each pillar gathers ALL solid
+supporting examples from the career profile (not capped), ordered from strongest to
+weakest. Each piece of evidence includes a justification explaining why it supports
+the pillar theme. Evidence may overlap across pillars when it genuinely supports
+multiple themes. When the LLM is unavailable, a keyword overlap fallback produces a
+basic narrative. Pillars are capped at 5 to keep the narrative focused.
 
 **Intermediate artifacts for explainability:** `CandidacyNarrative` and `VoiceStyleGuide`
 are explicit artifacts that can be inspected in the UI and reasoned about in reviews.

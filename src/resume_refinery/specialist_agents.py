@@ -32,6 +32,7 @@ from .models import (
     RepairEdit,
     RepairPassResult,
     ReviewBundle,
+    SupportingEvidence,
     TruthfulnessResult,
     VoiceProfile,
     VoiceReviewResult,
@@ -110,11 +111,21 @@ class NarrativeAgent:
         pillars: list[NarrativePillar] = []
         for p in data.get("pillars", [])[:5]:
             if isinstance(p, dict) and "theme" in p:
+                raw_evidence = p.get("career_evidence", [])
+                evidence: list[SupportingEvidence] = []
+                for item in raw_evidence:
+                    if isinstance(item, dict):
+                        evidence.append(SupportingEvidence(
+                            evidence=item.get("evidence", ""),
+                            justification=item.get("justification", ""),
+                        ))
+                    elif isinstance(item, str):
+                        evidence.append(SupportingEvidence(evidence=item))
                 pillars.append(
                     NarrativePillar(
                         theme=p["theme"],
                         argument=p.get("argument", ""),
-                        career_evidence=p.get("career_evidence", []),
+                        career_evidence=evidence,
                     )
                 )
 
@@ -139,7 +150,10 @@ class NarrativeAgent:
                 NarrativePillar(
                     theme=kw.title(),
                     argument=f"Candidate has demonstrated experience with {kw}.",
-                    career_evidence=[kw],
+                    career_evidence=[SupportingEvidence(
+                        evidence=kw,
+                        justification=f"Keyword '{kw}' appears in both career profile and job description.",
+                    )],
                 )
             )
 
@@ -268,7 +282,7 @@ class NarrativeCoverageAgent:
         from .prompts import NARRATIVE_COVERAGE_SYSTEM_PROMPT, NARRATIVE_COVERAGE_USER_TEMPLATE
 
         pillars_text = "\n".join(
-            f"- **{p.theme}**: {p.argument} (evidence: {', '.join(p.career_evidence)})"
+            f"- **{p.theme}**: {p.argument} (evidence: {', '.join(ev.evidence for ev in p.career_evidence)})"
             for p in narrative.pillars
         )
         gap_text = "\n".join(f"- {g}" for g in narrative.gap_framing) or "None"
@@ -323,7 +337,7 @@ class NarrativeCoverageAgent:
                 gaps.append(
                     CoverageGap(
                         pillar_theme=pillar.theme,
-                        career_evidence=pillar.career_evidence[:3],
+                        career_evidence=[ev.evidence for ev in pillar.career_evidence[:3]],
                         suggested_content=f"Consider adding evidence related to: {pillar.theme}",
                         anchor_section="Experience",
                         confidence="low",
@@ -460,7 +474,10 @@ class DraftingAgent:
         for pillar in narrative.pillars:
             summary_lines.append(f"**{pillar.theme}**: {pillar.argument}")
             for ev in pillar.career_evidence:
-                summary_lines.append(f"  - {ev}")
+                line = f"  - {ev.evidence}"
+                if ev.justification:
+                    line += f" — {ev.justification}"
+                summary_lines.append(line)
         if narrative.gap_framing:
             summary_lines.append("\n### Gap Framing")
             for gap in narrative.gap_framing:

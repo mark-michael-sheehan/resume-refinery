@@ -368,12 +368,39 @@ class CareerRepository(BaseModel):
         )
 
 
+class SupportingEvidence(BaseModel):
+    """A career example that supports a narrative pillar, with justification."""
+
+    evidence: str = Field(description="Specific fact or example from the career profile")
+    justification: str = Field(default="", description="Why this evidence supports the pillar theme and should be included")
+
+
+def _coerce_evidence_list(value: object) -> list[SupportingEvidence]:
+    """Coerce plain strings into SupportingEvidence for backward compatibility."""
+    if not isinstance(value, list):
+        return []
+    result: list[SupportingEvidence] = []
+    for item in value:
+        if isinstance(item, SupportingEvidence):
+            result.append(item)
+        elif isinstance(item, dict):
+            result.append(SupportingEvidence(**item))
+        elif isinstance(item, str):
+            result.append(SupportingEvidence(evidence=item))
+        else:
+            result.append(SupportingEvidence(evidence=str(item)))
+    return result
+
+
+EvidenceList = Annotated[list[SupportingEvidence], BeforeValidator(_coerce_evidence_list)]
+
+
 class NarrativePillar(BaseModel):
     """A supporting theme in the candidacy narrative."""
 
     theme: str = Field(description="Short theme label")
     argument: str = Field(description="How this theme supports the thesis")
-    career_evidence: list[str] = Field(default_factory=list, description="Specific evidence from the career profile")
+    career_evidence: EvidenceList = Field(default_factory=list, description="Supporting examples from the career profile, ordered by importance (strongest first)")
 
 
 class CandidacyNarrative(BaseModel):

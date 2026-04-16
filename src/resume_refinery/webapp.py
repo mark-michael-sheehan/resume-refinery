@@ -519,7 +519,8 @@ def _narrative_summary(narrative: CandidacyNarrative | None) -> str:
             if pillar.career_evidence:
                 parts.append("<ul>")
                 for ev in pillar.career_evidence:
-                    parts.append(f"<li>{html.escape(ev)}</li>")
+                    justification = f" — <em>{html.escape(ev.justification)}</em>" if ev.justification else ""
+                    parts.append(f"<li>{html.escape(ev.evidence)}{justification}</li>")
                 parts.append("</ul>")
 
     # Gap framing
@@ -897,7 +898,12 @@ def review_narrative(session_id: str) -> HTMLResponse:
     pillars_html = ""
     if narrative.pillars:
         for pillar in narrative.pillars:
-            evidence_items = "".join(f"<li>{html.escape(ev)}</li>" for ev in pillar.career_evidence)
+            evidence_items = "".join(
+                f"<li>{html.escape(ev.evidence)}"
+                f"{' — <em>' + html.escape(ev.justification) + '</em>' if ev.justification else ''}"
+                f"</li>"
+                for ev in pillar.career_evidence
+            )
             pillars_html += (
                 f"<div style='margin-bottom:.8rem'>"
                 f"<h3>{html.escape(pillar.theme)}</h3>"

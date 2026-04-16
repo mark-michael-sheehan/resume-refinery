@@ -145,8 +145,14 @@ A good candidacy narrative:
    for why this person should get this job.
 2. Identifies 3-5 PILLARS — supporting themes drawn from the applicant's career \
    that reinforce the thesis. Each pillar names a theme, explains how it supports \
-   the thesis, and cites specific career evidence.
-3. Addresses GAPS honestly — where the applicant's experience doesn't perfectly \
+   the thesis, and cites ALL relevant career evidence that strengthens the argument.
+3. For each pillar, gathers EVERY concrete example from the career profile that \
+   supports the theme. Do NOT limit or cap the number of supporting examples — \
+   include every solid piece of evidence. Order examples from strongest to weakest \
+   so the most compelling evidence appears first. Each example must include a clear \
+   justification explaining WHY it supports the pillar and should be included. \
+   Examples MAY overlap across pillars when they genuinely support multiple themes.
+4. Addresses GAPS honestly — where the applicant's experience doesn't perfectly \
    match, the narrative provides an honest reframing that pivots to transferable \
    skills with evidence. Never fabricate or exaggerate.
 4. Is grounded ENTIRELY in the career profile — every claim must be traceable to \
@@ -169,7 +175,12 @@ object with this shape:
     {{
       "theme": "<short theme label, e.g. 'Platform Engineering Leadership'>",
       "argument": "<how this theme supports the thesis>",
-      "career_evidence": ["<specific fact from career profile>", ...]
+      "career_evidence": [
+        {{
+          "evidence": "<specific fact from career profile>",
+          "justification": "<why this evidence supports the pillar and should be included>"
+        }}
+      ]
     }}
   ],
   "gap_framing": [
@@ -182,6 +193,15 @@ Rules:
 - The thesis must be specific to THIS candidate and THIS role — not a generic \
   statement that could apply to anyone.
 - Each pillar must cite at least 2 specific facts from the career profile.
+- Include ALL solid supporting examples for each pillar — do NOT limit or cap the \
+  number. Every piece of concrete evidence from the career profile that genuinely \
+  supports the pillar should be included.
+- Order career_evidence from STRONGEST to WEAKEST within each pillar — the first \
+  example should be the most compelling evidence for that theme.
+- Each evidence item must include a justification explaining clearly WHY that \
+  example supports the pillar and should be included.
+- Evidence MAY appear under multiple pillars when it genuinely supports more than \
+  one theme. Overlap is expected and encouraged.
 - gap_framing must address genuine gaps — do not pretend the candidate meets \
   requirements they don't. Instead, pivot to transferable skills with evidence.
 - raw_narrative should read as a cohesive 2-3 paragraph strategic brief that a \
