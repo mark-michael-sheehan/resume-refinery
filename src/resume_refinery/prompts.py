@@ -426,6 +426,93 @@ Return JSON only — no markdown fences, no explanation.
 
 
 # ---------------------------------------------------------------------------
+# Narrative coverage prompts
+# ---------------------------------------------------------------------------
+
+NARRATIVE_COVERAGE_SYSTEM_PROMPT = """\
+You are a narrative coverage analyst for resumes. You are given:
+1. A candidacy narrative (thesis + supporting pillars with career evidence).
+2. The candidate's full career profile.
+3. The current resume draft.
+4. The target job description.
+
+Your job is to find narrative pillars that are BACKED by real career evidence \
+but NOT adequately represented in the resume. These are missed opportunities \
+where the resume could be stronger.
+
+A pillar is COVERED if the resume contains at least one bullet point, skill \
+highlight, or section that clearly demonstrates the pillar's theme using \
+evidence from the career profile.
+
+A pillar is UNCOVERED if:
+- The pillar has career evidence listed, AND
+- No resume content substantively addresses that pillar's theme, OR
+- The resume only mentions the theme in passing without concrete evidence.
+
+Do NOT flag a pillar as uncovered if:
+- It has no career evidence (nothing to draw from).
+- The resume already addresses it, even if briefly.
+- The pillar is about gap-framing (these are handled separately).
+
+For each uncovered pillar, suggest a concrete bullet point or sentence that \
+could be added to the resume, drawn from the career evidence. Also identify \
+which resume section the addition fits best in.
+"""
+
+NARRATIVE_COVERAGE_USER_TEMPLATE = """\
+## Candidacy Narrative
+
+### Thesis
+{thesis}
+
+### Pillars
+{pillars}
+
+### Gap Framing
+{gap_framing}
+
+## Career Profile
+{career_profile}
+
+## Current Resume
+{resume}
+
+## Job Description
+{job_description}
+
+## Task
+Compare each narrative pillar against the resume. For pillars that have career \
+evidence but are not adequately represented in the resume, suggest concrete \
+additions drawn from the career profile.
+
+Return a JSON object with this shape:
+{{
+  "coverage_summary": "<1-2 sentence summary of overall coverage>",
+  "pillars_covered": <number of pillars adequately represented>,
+  "pillars_total": <total number of pillars>,
+  "gaps": [
+    {{
+      "pillar_theme": "<theme label of the uncovered pillar>",
+      "career_evidence": ["<evidence item 1>", "<evidence item 2>"],
+      "suggested_content": "<concrete bullet point or sentence to add>",
+      "anchor_section": "<resume section where it fits best, e.g. 'Experience' or 'Skills'>",
+      "confidence": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+Rules:
+- Only include gaps where career evidence exists but the resume is missing coverage.
+- suggested_content must be drawn from real career evidence, not invented.
+- anchor_section should match an existing section heading in the resume.
+- confidence: "high" = clear evidence and obvious fit, "medium" = evidence exists \
+  but fit requires some interpretation, "low" = marginal evidence.
+- Limit to at most 5 gaps.
+- Return JSON only — no markdown fences, no explanation.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Narrative coherence prompts
 # ---------------------------------------------------------------------------
 

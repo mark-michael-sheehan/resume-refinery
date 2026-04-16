@@ -18,6 +18,7 @@ from .models import (
     ATSKeywordResult,
     CandidacyNarrative,
     CareerProfile,
+    CoverageGap,
     DocumentKey,
     DocumentSet,
     DraftingContext,
@@ -25,6 +26,7 @@ from .models import (
     HiringManagerReview,
     JobDescription,
     NarrativeCoherenceResult,
+    NarrativeCoverageResult,
     NarrativePillar,
     RelevancePruningResult,
     RepairEdit,
@@ -224,6 +226,166 @@ class VoiceAgent:
     def _collect_paragraphs(self, raw: str) -> list[str]:
         paragraphs = [part.strip() for part in raw.split("\n\n") if part.strip()]
         return paragraphs[:3]
+
+
+class NarrativeCoverageAgent:
+    """Identifies narrative pillars not reflected in the resume despite having career evidence.
+
+    Runs after initial drafting but before the review loop. Advisory only —
+    its suggestions are applied to enrich the resume but never block convergence.
+    """
+
+    def __init__(self, client: ollama.Client | None = None) -> None:
+        self.client = client or ollama.Client(host=_BASE_URL)
+
+    def analyze_coverage(
+        self,
+        narrative: CandidacyNarrative,
+        career: CareerProfile,
+        docs: DocumentSet,
+        job: JobDescription,
+    ) -> NarrativeCoverageResult:
+        """Compare narrative pillars against the resume and return gaps."""
+        if not narrative.pillars or not docs.resume:
+            return NarrativeCoverageResult(
+                pillars_total=len(narrative.pillars),
+                pillars_covered=len(narrative.pillars),
+                coverage_summary="No pillars or resume to compare.",
+            )
+        try:
+            return self._analyze_llm(narrative, career, docs, job)
+        except Exception as exc:
+            logging.warning("LLM coverage analysis failed (%s); using fallback.", exc)
+            return self._analyze_fallback(narrative, docs)
+
+    def _analyze_llm(
+        self,
+        narrative: CandidacyNarrative,
+        career: CareerProfile,
+        docs: DocumentSet,
+        job: JobDescription,
+    ) -> NarrativeCoverageResult:
+        from .prompts import NARRATIVE_COVERAGE_SYSTEM_PROMPT, NARRATIVE_COVERAGE_USER_TEMPLATE
+
+        pillars_text = "\n".join(
+            f"- **{p.theme}**: {p.argument} (evidence: {', '.join(p.career_evidence)})"
+            for p in narrative.pillars
+        )
+        gap_text = "\n".join(f"- {g}" for g in narrative.gap_framing) or "None"
+
+        user_msg = NARRATIVE_COVERAGE_USER_TEMPLATE.format(
+            thesis=narrative.thesis,
+            pillars=pillars_text,
+            gap_framing=gap_text,
+            career_profile=career.raw_content,
+            resume=docs.resume or "",
+            job_description=job.raw_content,
+        )
+        raw = self._call_llm(NARRATIVE_COVERAGE_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+        gaps: list[CoverageGap] = []
+        for g in data.get("gaps", [])[:5]:
+            if isinstance(g, dict) and "pillar_theme" in g:
+                gaps.append(
+                    CoverageGap(
+                        pillar_theme=g["pillar_theme"],
+                        career_evidence=g.get("career_evidence", []),
+                        suggested_content=g.get("suggested_content", ""),
+                        anchor_section=g.get("anchor_section", ""),
+                        confidence=g.get("confidence", "medium"),
+                    )
+                )
+
+        return NarrativeCoverageResult(
+            gaps=gaps,
+            coverage_summary=data.get("coverage_summary", ""),
+            pillars_covered=data.get("pillars_covered", 0),
+            pillars_total=data.get("pillars_total", len(narrative.pillars)),
+        )
+
+    def _analyze_fallback(
+        self,
+        narrative: CandidacyNarrative,
+        docs: DocumentSet,
+    ) -> NarrativeCoverageResult:
+        """Keyword heuristic: check if each pillar's theme appears in the resume."""
+        resume_lower = (docs.resume or "").lower()
+        gaps: list[CoverageGap] = []
+        covered = 0
+        for pillar in narrative.pillars:
+            theme_words = set(pillar.theme.lower().split())
+            if any(w in resume_lower for w in theme_words if len(w) > 3):
+                covered += 1
+            elif pillar.career_evidence:
+                gaps.append(
+                    CoverageGap(
+                        pillar_theme=pillar.theme,
+                        career_evidence=pillar.career_evidence[:3],
+                        suggested_content=f"Consider adding evidence related to: {pillar.theme}",
+                        anchor_section="Experience",
+                        confidence="low",
+                    )
+                )
+            else:
+                covered += 1  # No evidence to draw from, skip
+
+        return NarrativeCoverageResult(
+            gaps=gaps,
+            coverage_summary=f"{covered} of {len(narrative.pillars)} pillars covered.",
+            pillars_covered=covered,
+            pillars_total=len(narrative.pillars),
+        )
+
+    def apply_suggestions(self, docs: DocumentSet, result: NarrativeCoverageResult) -> DocumentSet:
+        """Insert suggested content into the resume at anchor sections.
+
+        Modifies docs in place and returns it for chaining.
+        """
+        if not result.gaps or not docs.resume:
+            return docs
+
+        resume = docs.resume
+        for gap in result.gaps:
+            if not gap.suggested_content or not gap.anchor_section:
+                continue
+            # Find the anchor section heading and insert after it
+            pattern = re.compile(
+                r"(^#{1,3}\s+" + re.escape(gap.anchor_section) + r".*$)",
+                re.MULTILINE | re.IGNORECASE,
+            )
+            match = pattern.search(resume)
+            if match:
+                insert_pos = match.end()
+                resume = resume[:insert_pos] + "\n" + gap.suggested_content + resume[insert_pos:]
+        docs.resume = resume
+        return docs
+
+    def _call_llm(self, system: str, user_msg: str) -> str:
+        response = self.client.chat(
+            model=_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": "/no_think\n" + user_msg},
+            ],
+            think=False,
+            format="json",
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
+        )
+        raw = response.message.content.strip()
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+        from .reviewers import _normalize_llm_json
+        raw = _normalize_llm_json(raw)
+        if not raw:
+            raise ValueError("LLM returned empty content")
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.rsplit("```", 1)[0].strip()
+        return raw
 
 
 class DraftingAgent:

@@ -474,6 +474,31 @@ def _narrative_coherence_summary(nc) -> str:
     return "".join(parts)
 
 
+def _narrative_coverage_summary(cov) -> str:
+    if not cov:
+        return "<p class='muted'>No narrative coverage analysis available.</p>"
+    ratio = f"{cov.pillars_covered}/{cov.pillars_total}"
+    color = "ok" if cov.pillars_covered == cov.pillars_total else ("muted" if not cov.gaps else "bad")
+    parts = [f"<p class='{color}'>Coverage: <strong>{ratio}</strong> pillars covered"]
+    if cov.gaps:
+        parts.append(f" ({len(cov.gaps)} gap(s) enriched)")
+    parts.append("</p>")
+    if cov.coverage_summary:
+        parts.append(f"<p>{html.escape(cov.coverage_summary)}</p>")
+    if cov.gaps:
+        parts.append("<ul>")
+        for gap in cov.gaps:
+            badge = {"high": "bad", "medium": "muted", "low": "ok"}[gap.confidence]
+            anchor = f" &rarr; <em>{html.escape(gap.anchor_section)}</em>" if gap.anchor_section else ""
+            parts.append(
+                f"<li><span class='{badge}'>[{html.escape(gap.confidence.upper())}]</span> "
+                f"<strong>{html.escape(gap.pillar_theme)}</strong>{anchor}<br/>"
+                f"{html.escape(gap.suggested_content[:200])}</li>"
+            )
+        parts.append("</ul>")
+    return "".join(parts)
+
+
 def _narrative_summary(narrative: CandidacyNarrative | None) -> str:
     """Render the candidacy narrative as an HTML card."""
     if not narrative:
@@ -953,6 +978,7 @@ def show_session(session_id: str) -> HTMLResponse:
     docs = store.load_documents(session)
     reviews = store.load_reviews(session)
     context = store.load_context(session)
+    coverage = store.load_coverage(session)
 
     def esc(text: str | None) -> str:
         return html.escape(text or "")
@@ -994,6 +1020,10 @@ def show_session(session_id: str) -> HTMLResponse:
 <div class=\"card\">
   <h2>Narrative Coherence</h2>
   {_narrative_coherence_summary(reviews.narrative_coherence)}
+</div>
+<div class=\"card\">
+  <h2>Narrative Coverage</h2>
+  {_narrative_coverage_summary(coverage)}
 </div>
 {_artifact_summary(context)}
 <div class=\"card\">

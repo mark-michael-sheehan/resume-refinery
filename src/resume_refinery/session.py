@@ -47,6 +47,7 @@ from .models import (
     GrammarResult,
     HiringManagerReview,
     JobDescription,
+    NarrativeCoverageResult,
     RelevancePruningResult,
     ReviewBundle,
     Session,
@@ -280,6 +281,22 @@ class SessionStore:
         if narrative is None or vg is None:
             return None
         return DraftingContext(narrative=narrative, voice_style_guide=vg)
+
+    # --- Narrative coverage -------------------------------------------------
+
+    def save_coverage(self, session: Session, result: NarrativeCoverageResult) -> None:
+        """Persist the narrative coverage analysis for the current version."""
+        version_dir = self.root / session.session_id / f"v{session.current_version}"
+        version_dir.mkdir(parents=True, exist_ok=True)
+        (version_dir / "coverage.json").write_text(
+            result.model_dump_json(indent=2), encoding="utf-8"
+        )
+
+    def load_coverage(self, session: Session, version: int | None = None) -> NarrativeCoverageResult | None:
+        """Load persisted narrative coverage result for a version."""
+        v = version or session.current_version
+        version_dir = self.root / session.session_id / f"v{v}"
+        return _load_model_opt(version_dir / "coverage.json", NarrativeCoverageResult)
 
     # --- Suppression / exempted phrases ------------------------------------
 

@@ -22,14 +22,23 @@ voice_profile.md + career_profile.md + job_description.md
   │ VoiceAgent         -> VoiceStyleGuide                                │
   │                                                                      │
   │ DraftingAgent      -> DocumentSet (resume only)                      │
+  │ NarrativeCoverageAgent -> NarrativeCoverageResult (advisory)         │
+  │   Compares pillars vs resume, enriches with career-evidenced gaps    │
   │ VerificationAgent  -> Unified review + repair loop:                  │
   │   All 8 reviewers concurrent -> single repair if any gate fails      │
   │ RepairAgent        -> targeted rewrites with prior-edit context       │
   └──────────────────────────────────────────────────────────────────────┘
             │
             ▼
-    SessionStore.save_documents() + save_context() + DOCX export
+    SessionStore.save_documents() + save_context() + save_coverage() + DOCX export
     (saved immediately after generation, before review loop)
+            │
+            ▼
+    NarrativeCoverageAgent (advisory — runs once, not in loop):
+      Compares narrative pillars against resume content.
+      Identifies pillars backed by career evidence but not in the resume.
+      Inserts suggested content at anchor sections.
+      Never blocks convergence.
             │
             ▼
     Unified review + repair loop (per pass):

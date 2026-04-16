@@ -7,9 +7,11 @@ import pytest
 
 from resume_refinery.models import (
     CandidacyNarrative,
+    CoverageGap,
     DocumentSet,
     DocumentTruthResult,
     DraftingContext,
+    NarrativeCoverageResult,
     NarrativePillar,
     ReviewBundle,
     TruthfulnessResult,
@@ -420,3 +422,31 @@ def test_clear_staging_context(tmp_path, career_profile, voice_profile, job_desc
 
     store.clear_staging_context(session)
     assert store.load_staging_context(session) is None
+
+
+def test_save_and_load_coverage(tmp_path, career_profile, voice_profile, job_description, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    session = store.create(job_description, career_profile, voice_profile)
+
+    cov = NarrativeCoverageResult(
+        gaps=[CoverageGap(pillar_theme="Cost Optimisation", confidence="high")],
+        coverage_summary="1 gap found.",
+        pillars_covered=1,
+        pillars_total=2,
+    )
+    store.save_coverage(session, cov)
+    loaded = store.load_coverage(session)
+
+    assert loaded is not None
+    assert loaded.pillars_covered == 1
+    assert len(loaded.gaps) == 1
+    assert loaded.gaps[0].pillar_theme == "Cost Optimisation"
+
+
+def test_load_coverage_returns_none_when_missing(tmp_path, career_profile, voice_profile, job_description, monkeypatch):
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    session = store.create(job_description, career_profile, voice_profile)
+
+    assert store.load_coverage(session) is None

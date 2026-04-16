@@ -10,11 +10,13 @@ from resume_refinery.models import (
     AIDetectionResult,
     ATSKeywordResult,
     CandidacyNarrative,
+    CoverageGap,
     DocumentSet,
     DocumentTruthResult,
     GrammarResult,
     HiringManagerReview,
     NarrativeCoherenceResult,
+    NarrativeCoverageResult,
     NarrativePillar,
     RepairPassResult,
     ReviewBundle,
@@ -135,6 +137,26 @@ class FakeRepairAgent:
         return RepairPassResult()
 
 
+class FakeNarrativeCoverageAgent:
+    def __init__(self, gaps=None):
+        self._gaps = gaps or []
+        self.analyze_calls = 0
+        self.apply_calls = 0
+
+    def analyze_coverage(self, narrative, career, docs, job):
+        self.analyze_calls += 1
+        return NarrativeCoverageResult(
+            gaps=self._gaps,
+            coverage_summary="Fake coverage summary.",
+            pillars_covered=len(narrative.pillars) - len(self._gaps),
+            pillars_total=len(narrative.pillars),
+        )
+
+    def apply_suggestions(self, docs, result):
+        self.apply_calls += 1
+        return docs
+
+
 def test_orchestrator_create_exports_to_custom_output_dir(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
     sessions_dir = tmp_path / "sessions"
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(sessions_dir))
@@ -147,6 +169,7 @@ def test_orchestrator_create_exports_to_custom_output_dir(tmp_path, monkeypatch,
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(
@@ -179,6 +202,7 @@ def test_orchestrator_refine_exports_to_custom_output_dir(tmp_path, monkeypatch,
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     first = orchestrator.create_session_run(
@@ -216,6 +240,7 @@ def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, 
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -241,6 +266,7 @@ def test_orchestrator_create_verifies_all_three_loops(tmp_path, monkeypatch, car
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -272,6 +298,7 @@ def test_orchestrator_refine_session_run_updates_selected_doc(tmp_path, monkeypa
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     first = orchestrator.create_session_run(career_profile, voice_profile, job_description, skip_review=True)
@@ -294,6 +321,7 @@ def test_orchestrator_refine_uses_repair_agent_and_runs_reviews_once(tmp_path, m
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     first = orchestrator.create_session_run(career_profile, voice_profile, job_description, skip_review=True)
@@ -329,6 +357,7 @@ def test_orchestrator_refine_with_doc_only_modifies_targeted_doc(tmp_path, monke
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     first = orchestrator.create_session_run(career_profile, voice_profile, job_description, skip_review=True)
@@ -400,6 +429,7 @@ def test_no_repair_when_all_reviews_pass(tmp_path, monkeypatch, career_profile, 
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -439,6 +469,7 @@ def _build_orchestrator(tmp_path, monkeypatch, verification):
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
 
@@ -508,6 +539,7 @@ def test_suppression_prevents_reflagged_phrase_from_blocking_convergence(
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysFlagsAIPhraseVerification(),
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -568,6 +600,7 @@ def test_max_passes_zero_skips_all_reviews(tmp_path, monkeypatch, career_profile
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result, _, _exempted = orchestrator._verify_and_repair(
@@ -598,6 +631,7 @@ def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_p
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result, _, _exempted = orchestrator._verify_and_repair(
@@ -631,6 +665,7 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result, _, _exempted = orchestrator._verify_and_repair(
@@ -676,6 +711,7 @@ def test_strict_truth_failed_when_truth_fails(tmp_path, monkeypatch, career_prof
         drafting_agent=FakeDraftingAgent(),
         verification_agent=TruthFailsVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -691,6 +727,7 @@ def test_allow_unverified_suppresses_strict_truth_flag(tmp_path, monkeypatch, ca
         drafting_agent=FakeDraftingAgent(),
         verification_agent=TruthFailsVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(
@@ -713,6 +750,7 @@ def test_skip_review_persists_only_truthfulness(tmp_path, monkeypatch, career_pr
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(
@@ -740,6 +778,7 @@ def test_review_session_run_returns_full_review(tmp_path, monkeypatch, career_pr
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     created = orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -772,6 +811,7 @@ def test_stream_callback_receives_chunks(tmp_path, monkeypatch, career_profile, 
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     orchestrator.create_session_run(
@@ -799,6 +839,7 @@ def test_progress_callback_receives_messages(tmp_path, monkeypatch, career_profi
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     orchestrator.create_session_run(
@@ -842,6 +883,7 @@ def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, car
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result, _, _exempted = orchestrator._verify_and_repair(
@@ -873,6 +915,7 @@ def test_progress_includes_review_summaries(tmp_path, monkeypatch, career_profil
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     orchestrator.create_session_run(
@@ -907,6 +950,7 @@ def test_progress_includes_pass_headers(tmp_path, monkeypatch, career_profile, v
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     orchestrator.create_session_run(
@@ -957,6 +1001,7 @@ def test_docs_saved_before_review_loop(tmp_path, monkeypatch, career_profile, vo
         drafting_agent=FakeDraftingAgent(),
         verification_agent=CheckingVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -1020,6 +1065,7 @@ def test_exemptions_passed_to_reviewers_in_repair_loop(
         drafting_agent=FakeDraftingAgent(),
         verification_agent=verification,
         repair_agent=repair,
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -1070,6 +1116,7 @@ def test_refine_loads_exemptions_and_suppresses_review_findings(
         drafting_agent=FakeDraftingAgent(),
         verification_agent=create_verification,
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
     created = orchestrator.create_session_run(
         career_profile, voice_profile, job_description, skip_review=True,
@@ -1089,6 +1136,7 @@ def test_refine_loads_exemptions_and_suppresses_review_findings(
         drafting_agent=FakeDraftingAgent(),
         verification_agent=refine_verification,
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
     result = orchestrator2.refine_session_run(
         created.session.session_id, "Make it shorter",
@@ -1127,6 +1175,7 @@ def test_load_suppressions_returns_most_recent(
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
     created = orchestrator.create_session_run(
         career_profile, voice_profile, job_description, skip_review=True,
@@ -1159,6 +1208,7 @@ def test_docs_updated_after_each_repair_pass(tmp_path, monkeypatch, career_profi
         drafting_agent=FakeDraftingAgent(),
         verification_agent=FakeVerificationAgent(),  # pass 1 fails, pass 2 passes â†’ 1 repair
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
@@ -1261,6 +1311,7 @@ def test_selected_docs_generates_resume(tmp_path, monkeypatch, career_profile, v
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(
@@ -1284,6 +1335,7 @@ def test_selected_docs_persisted_in_session(tmp_path, monkeypatch, career_profil
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(
@@ -1306,6 +1358,7 @@ def test_selected_docs_default_all(tmp_path, monkeypatch, career_profile, voice_
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     result = orchestrator.create_session_run(
@@ -1328,6 +1381,7 @@ def test_selected_docs_refine(tmp_path, monkeypatch, career_profile, voice_profi
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     created = orchestrator.create_session_run(
@@ -1353,6 +1407,7 @@ def test_selected_docs_stream_callback_only_selected(tmp_path, monkeypatch, care
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     orchestrator.create_session_run(
@@ -1381,6 +1436,7 @@ def test_extract_context_creates_session_and_stages_context(tmp_path, monkeypatc
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     session, context = orchestrator.extract_context(
@@ -1407,6 +1463,7 @@ def test_generate_session_run_uses_staged_context(tmp_path, monkeypatch, career_
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     session, context = orchestrator.extract_context(
@@ -1434,6 +1491,7 @@ def test_generate_session_run_with_filtered_evidence(tmp_path, monkeypatch, care
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     session, context = orchestrator.extract_context(
@@ -1473,6 +1531,7 @@ def test_generate_session_run_fails_without_staged_context(tmp_path, monkeypatch
         drafting_agent=FakeDraftingAgent(),
         verification_agent=AlwaysPassVerificationAgent(),
         repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
     )
 
     # Create a session manually without staging context
@@ -1480,3 +1539,86 @@ def test_generate_session_run_fails_without_staged_context(tmp_path, monkeypatch
 
     with pytest.raises(ValueError, match="No staged context"):
         orchestrator.generate_session_run(session.session_id)
+
+
+# ---------------------------------------------------------------------------
+# Narrative coverage integration
+# ---------------------------------------------------------------------------
+
+
+def test_create_session_run_includes_coverage_result(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """create_session_run should populate coverage_result on OrchestrationResult."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    coverage_agent = FakeNarrativeCoverageAgent()
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        narrative_agent=FakeNarrativeAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+        coverage_agent=coverage_agent,
+    )
+
+    result = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+
+    assert result.coverage_result is not None
+    assert coverage_agent.analyze_calls == 1
+    assert result.coverage_result.pillars_total == 1  # FakeNarrativeAgent has 1 pillar
+
+
+def test_create_session_run_coverage_with_gaps_applies_suggestions(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """When coverage gaps exist, apply_suggestions should be called."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    gap = CoverageGap(
+        pillar_theme="Cost Optimisation",
+        career_evidence=["$180K savings"],
+        suggested_content="- Reduced costs by $180K",
+        anchor_section="Experience",
+        confidence="high",
+    )
+    coverage_agent = FakeNarrativeCoverageAgent(gaps=[gap])
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        narrative_agent=FakeNarrativeAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+        coverage_agent=coverage_agent,
+    )
+
+    result = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+
+    assert coverage_agent.apply_calls == 1
+    assert len(result.coverage_result.gaps) == 1
+
+
+def test_coverage_result_persisted(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Coverage result should be saved to disk and loadable."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+    coverage_agent = FakeNarrativeCoverageAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        narrative_agent=FakeNarrativeAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+        coverage_agent=coverage_agent,
+    )
+
+    result = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+
+    loaded = store.load_coverage(result.session)
+    assert loaded is not None
+    assert loaded.pillars_total == result.coverage_result.pillars_total

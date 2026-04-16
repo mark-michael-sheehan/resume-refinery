@@ -399,6 +399,30 @@ class DraftingContext(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Narrative coverage models
+# ---------------------------------------------------------------------------
+
+
+class CoverageGap(BaseModel):
+    """A narrative pillar that is backed by career evidence but not reflected in the resume."""
+
+    pillar_theme: str = Field(description="Theme label of the uncovered pillar")
+    career_evidence: list[str] = Field(default_factory=list, description="Evidence from the career profile supporting this pillar")
+    suggested_content: str = Field(default="", description="Concrete bullet or sentence to add to the resume")
+    anchor_section: str = Field(default="", description="Resume section where the addition fits best")
+    confidence: Literal["high", "medium", "low"] = Field(default="medium", description="Confidence that adding this gap would improve the resume")
+
+
+class NarrativeCoverageResult(BaseModel):
+    """Result of comparing narrative pillars against resume content."""
+
+    gaps: list[CoverageGap] = Field(default_factory=list, description="Narrative pillars not covered in the resume")
+    coverage_summary: str = Field(default="", description="Brief summary of overall narrative coverage")
+    pillars_covered: int = Field(default=0, description="Number of pillars adequately represented in the resume")
+    pillars_total: int = Field(default=0, description="Total number of narrative pillars")
+
+
+# ---------------------------------------------------------------------------
 # Output models
 # ---------------------------------------------------------------------------
 
@@ -703,6 +727,7 @@ class OrchestrationResult(BaseModel):
     repair_passes: list[RepairPassResult] = Field(default_factory=list)
     narrative: Optional[CandidacyNarrative] = None
     voice_style_guide: Optional[VoiceStyleGuide] = None
+    coverage_result: Optional[NarrativeCoverageResult] = None
     exported_paths: dict[str, str] = Field(default_factory=dict)
     strict_truth_failed: bool = False
 

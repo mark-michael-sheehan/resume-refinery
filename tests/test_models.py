@@ -7,12 +7,14 @@ from resume_refinery.models import (
     AIDetectionResult,
     CandidacyNarrative,
     CareerProfile,
+    CoverageGap,
     DocumentSet,
     DocumentTruthResult,
     DraftingContext,
     JobDescription,
     NarrativeCoherenceIssue,
     NarrativeCoherenceResult,
+    NarrativeCoverageResult,
     NarrativePillar,
     OrchestrationResult,
     ReviewBundle,
@@ -368,3 +370,75 @@ def test_review_bundle_includes_narrative_coherence():
 def test_review_bundle_narrative_coherence_defaults_none():
     bundle = ReviewBundle()
     assert bundle.narrative_coherence is None
+
+
+# ---------------------------------------------------------------------------
+# Narrative coverage models
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_gap_defaults():
+    gap = CoverageGap(pillar_theme="Backend")
+    assert gap.pillar_theme == "Backend"
+    assert gap.career_evidence == []
+    assert gap.suggested_content == ""
+    assert gap.anchor_section == ""
+    assert gap.confidence == "medium"
+
+
+def test_coverage_gap_full():
+    gap = CoverageGap(
+        pillar_theme="Cost Optimisation",
+        career_evidence=["$180K savings"],
+        suggested_content="- Reduced costs by $180K",
+        anchor_section="Experience",
+        confidence="high",
+    )
+    assert gap.confidence == "high"
+    assert len(gap.career_evidence) == 1
+
+
+def test_narrative_coverage_result_defaults():
+    result = NarrativeCoverageResult()
+    assert result.gaps == []
+    assert result.coverage_summary == ""
+    assert result.pillars_covered == 0
+    assert result.pillars_total == 0
+
+
+def test_narrative_coverage_result_with_gaps():
+    result = NarrativeCoverageResult(
+        gaps=[CoverageGap(pillar_theme="X")],
+        coverage_summary="1 gap found.",
+        pillars_covered=1,
+        pillars_total=2,
+    )
+    assert len(result.gaps) == 1
+    assert result.pillars_total == 2
+
+
+def test_orchestration_result_includes_coverage():
+    cov = NarrativeCoverageResult(pillars_covered=2, pillars_total=2)
+    r = OrchestrationResult(
+        session=Session(
+            session_id="test",
+            job_description=JobDescription(raw_content="job"),
+            created_at="2026-01-01T00:00:00Z",
+        ),
+        documents=DocumentSet(),
+        coverage_result=cov,
+    )
+    assert r.coverage_result is not None
+    assert r.coverage_result.pillars_covered == 2
+
+
+def test_orchestration_result_coverage_defaults_none():
+    r = OrchestrationResult(
+        session=Session(
+            session_id="test",
+            job_description=JobDescription(raw_content="job"),
+            created_at="2026-01-01T00:00:00Z",
+        ),
+        documents=DocumentSet(),
+    )
+    assert r.coverage_result is None

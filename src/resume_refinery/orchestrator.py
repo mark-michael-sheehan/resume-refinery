@@ -25,6 +25,7 @@ from .models import (
     GrammarResult,
     HiringManagerReview,
     NarrativeCoherenceResult,
+    NarrativeCoverageResult,
     OrchestrationResult,
     RelevancePruningResult,
     RepairPassResult,
@@ -36,7 +37,7 @@ from .models import (
     JobDescription,
 )
 from .session import SessionStore
-from .specialist_agents import DraftingAgent, NarrativeAgent, RepairAgent, VerificationAgent, VoiceAgent
+from .specialist_agents import DraftingAgent, NarrativeAgent, NarrativeCoverageAgent, RepairAgent, VerificationAgent, VoiceAgent
 
 load_dotenv()
 
@@ -64,6 +65,7 @@ class ResumeRefineryOrchestrator:
         drafting_agent: DraftingAgent | None = None,
         verification_agent: VerificationAgent | None = None,
         repair_agent: RepairAgent | None = None,
+        coverage_agent: NarrativeCoverageAgent | None = None,
     ) -> None:
         self.store = store or SessionStore()
         self.narrative_agent = narrative_agent or NarrativeAgent()
@@ -71,6 +73,7 @@ class ResumeRefineryOrchestrator:
         self.drafting_agent = drafting_agent or DraftingAgent()
         self.verification_agent = verification_agent or VerificationAgent()
         self.repair_agent = repair_agent or RepairAgent(self.drafting_agent)
+        self.coverage_agent = coverage_agent or NarrativeCoverageAgent()
 
     def create_session_run(
         self,
@@ -115,6 +118,16 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         self._export(session, docs, output_dir=output_dir)
 
+        # --- Narrative coverage analysis (advisory) ---
+        coverage_result = self._run_coverage_analysis(
+            context.narrative, career, docs, job, progress=progress,
+        )
+        if coverage_result is not None:
+            self.store.save_coverage(session, coverage_result)
+            if coverage_result.gaps:
+                self.store.update_documents(session, docs)
+                self._export(session, docs, output_dir=output_dir)
+
         if skip_review:
             self._progress(progress, "  Truthfulness review (3 LLM calls)...")
             try:
@@ -150,6 +163,7 @@ class ResumeRefineryOrchestrator:
             repair_passes=repair_passes,
             narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
+            coverage_result=coverage_result,
             exported_paths={key: str(path) for key, path in exported.items()},
             strict_truth_failed=strict_failed and not allow_unverified,
         )
@@ -226,6 +240,16 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         self._export(session, docs, output_dir=output_dir)
 
+        # --- Narrative coverage analysis (advisory) ---
+        coverage_result = self._run_coverage_analysis(
+            context.narrative, career, docs, job, progress=progress,
+        )
+        if coverage_result is not None:
+            self.store.save_coverage(session, coverage_result)
+            if coverage_result.gaps:
+                self.store.update_documents(session, docs)
+                self._export(session, docs, output_dir=output_dir)
+
         if skip_review:
             self._progress(progress, "  Truthfulness review (3 LLM calls)...")
             try:
@@ -263,6 +287,7 @@ class ResumeRefineryOrchestrator:
             repair_passes=repair_passes,
             narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
+            coverage_result=coverage_result,
             exported_paths={key: str(path) for key, path in exported.items()},
             strict_truth_failed=strict_failed and not allow_unverified,
         )
@@ -523,6 +548,32 @@ class ResumeRefineryOrchestrator:
         self._progress(progress, "Distilling voice guide...")
         style_guide = self.voice_agent.build_style_guide(voice)
         return DraftingContext(narrative=narrative, voice_style_guide=style_guide)
+
+    def _run_coverage_analysis(
+        self,
+        narrative: CandidacyNarrative,
+        career: CareerProfile,
+        docs: DocumentSet,
+        job: JobDescription,
+        *,
+        progress: ProgressCallback | None = None,
+    ) -> NarrativeCoverageResult | None:
+        """Run narrative coverage analysis and apply suggestions (advisory)."""
+        self._progress(progress, "Analyzing narrative coverage gaps...")
+        try:
+            result = self.coverage_agent.analyze_coverage(narrative, career, docs, job)
+        except Exception as exc:
+            logging.warning("Narrative coverage analysis failed (%s)", exc)
+            return None
+        if result.gaps:
+            self._progress(
+                progress,
+                f"  Found {len(result.gaps)} coverage gap(s); enriching resume...",
+            )
+            self.coverage_agent.apply_suggestions(docs, result)
+        else:
+            self._progress(progress, "  All narrative pillars covered.")
+        return result
 
     def _verify_and_repair(
         self,

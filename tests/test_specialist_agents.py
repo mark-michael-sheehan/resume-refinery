@@ -9,11 +9,15 @@ from resume_refinery.models import (
     AIDetectionResult,
     ATSKeywordResult,
     CandidacyNarrative,
+    CareerProfile,
+    CoverageGap,
     DocumentSet,
     DocumentTruthResult,
     DraftingContext,
     GrammarResult,
+    JobDescription,
     NarrativeCoherenceResult,
+    NarrativeCoverageResult,
     NarrativePillar,
     RepairPassResult,
     ReviewBundle,
@@ -24,6 +28,7 @@ from resume_refinery.models import (
 from resume_refinery.specialist_agents import (
     DraftingAgent,
     NarrativeAgent,
+    NarrativeCoverageAgent,
     RepairAgent,
     VerificationAgent,
     VoiceAgent,
@@ -661,3 +666,151 @@ def test_repair_build_review_findings_empty_when_passing():
     findings = agent._build_review_findings("resume", truth, voice_review, ai_review, None)
 
     assert findings == ""
+
+
+# ---------------------------------------------------------------------------
+# NarrativeCoverageAgent
+# ---------------------------------------------------------------------------
+
+
+def _coverage_narrative():
+    return CandidacyNarrative(
+        thesis="Distributed systems expert.",
+        pillars=[
+            NarrativePillar(
+                theme="Backend Migration",
+                argument="Led migrations cutting deploy time.",
+                career_evidence=["Cut deploy time 60%"],
+            ),
+            NarrativePillar(
+                theme="Cost Optimisation",
+                argument="Reduced infra spend by $180K.",
+                career_evidence=["Reduced infra costs by $180K/year"],
+            ),
+        ],
+        gap_framing=["No Rust experience"],
+        raw_narrative="Full narrative.",
+    )
+
+
+def test_coverage_agent_llm_success(career_profile, job_description):
+    """NarrativeCoverageAgent should parse LLM JSON into a NarrativeCoverageResult."""
+    coverage_json = json.dumps({
+        "coverage_summary": "1 of 2 pillars covered.",
+        "pillars_covered": 1,
+        "pillars_total": 2,
+        "gaps": [
+            {
+                "pillar_theme": "Cost Optimisation",
+                "career_evidence": ["Reduced infra costs by $180K/year"],
+                "suggested_content": "- Reduced infrastructure costs by $180K/year through resource optimisation",
+                "anchor_section": "Experience",
+                "confidence": "high",
+            }
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_llm_resp(coverage_json)
+
+    agent = NarrativeCoverageAgent(client=mock_client)
+    docs = DocumentSet(resume="# Jordan Lee\n\n## Experience\n\n- Led backend migration")
+    result = agent.analyze_coverage(_coverage_narrative(), career_profile, docs, job_description)
+
+    assert result.pillars_covered == 1
+    assert result.pillars_total == 2
+    assert len(result.gaps) == 1
+    assert result.gaps[0].pillar_theme == "Cost Optimisation"
+    assert result.gaps[0].confidence == "high"
+
+
+def test_coverage_agent_fallback_on_failure(career_profile, job_description):
+    """When LLM fails, keyword fallback should still produce a result."""
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = Exception("Connection refused")
+
+    agent = NarrativeCoverageAgent(client=mock_client)
+    docs = DocumentSet(resume="# Jordan Lee\n\n## Experience\n\n- Led backend migration")
+    result = agent.analyze_coverage(_coverage_narrative(), career_profile, docs, job_description)
+
+    assert isinstance(result, NarrativeCoverageResult)
+    assert result.pillars_total == 2
+
+
+def test_coverage_agent_no_pillars():
+    """Empty pillars should return full coverage."""
+    narrative = CandidacyNarrative(thesis="Expert.", pillars=[])
+    agent = NarrativeCoverageAgent(client=MagicMock())
+    career = CareerProfile(raw_content="Career text.")
+    docs = DocumentSet(resume="Resume text.")
+    job = JobDescription(raw_content="Job text.")
+
+    result = agent.analyze_coverage(narrative, career, docs, job)
+
+    assert result.pillars_covered == 0
+    assert result.pillars_total == 0
+    assert result.gaps == []
+
+
+def test_coverage_agent_no_resume():
+    """Missing resume should return full coverage."""
+    narrative = _coverage_narrative()
+    agent = NarrativeCoverageAgent(client=MagicMock())
+    career = CareerProfile(raw_content="Career text.")
+    docs = DocumentSet(resume=None)
+    job = JobDescription(raw_content="Job text.")
+
+    result = agent.analyze_coverage(narrative, career, docs, job)
+
+    assert result.pillars_covered == 2
+    assert result.gaps == []
+
+
+def test_coverage_agent_apply_suggestions():
+    """apply_suggestions should insert content at anchor sections."""
+    agent = NarrativeCoverageAgent(client=MagicMock())
+    docs = DocumentSet(resume="# Jordan Lee\n\n## Experience\n\n- Point 1\n\n## Skills\n\n- Python")
+    result = NarrativeCoverageResult(
+        gaps=[
+            CoverageGap(
+                pillar_theme="Cost Optimisation",
+                career_evidence=["$180K savings"],
+                suggested_content="- Reduced infrastructure costs by $180K/year",
+                anchor_section="Experience",
+                confidence="high",
+            ),
+        ],
+        pillars_covered=1,
+        pillars_total=2,
+    )
+    agent.apply_suggestions(docs, result)
+
+    assert "Reduced infrastructure costs by $180K/year" in docs.resume
+    assert docs.resume.index("Reduced infrastructure") < docs.resume.index("## Skills")
+
+
+def test_coverage_agent_apply_suggestions_no_anchor():
+    """apply_suggestions should skip gaps without an anchor_section."""
+    agent = NarrativeCoverageAgent(client=MagicMock())
+    original = "# Resume\n\n## Experience\n\n- Point 1"
+    docs = DocumentSet(resume=original)
+    result = NarrativeCoverageResult(
+        gaps=[CoverageGap(pillar_theme="X", suggested_content="New bullet", anchor_section="", confidence="low")],
+        pillars_covered=0,
+        pillars_total=1,
+    )
+    agent.apply_suggestions(docs, result)
+
+    assert docs.resume == original
+
+
+def test_coverage_agent_fallback_themes_in_resume(career_profile, job_description):
+    """Fallback should count pillars whose theme words appear in the resume."""
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = Exception("fail")
+
+    agent = NarrativeCoverageAgent(client=mock_client)
+    # "migration" is in theme "Backend Migration"
+    docs = DocumentSet(resume="Led backend migration cutting deploy time.")
+    result = agent.analyze_coverage(_coverage_narrative(), career_profile, docs, job_description)
+
+    assert result.pillars_covered >= 1
