@@ -41,6 +41,9 @@ from .models import (
 from .prompts import (
     NARRATIVE_SYSTEM_PROMPT,
     NARRATIVE_USER_TEMPLATE,
+    NARRATIVE_CRITIQUE_SYSTEM_PROMPT,
+    NARRATIVE_CRITIQUE_USER_TEMPLATE,
+    NARRATIVE_REVISION_USER_TEMPLATE,
 )
 from .reviewers import DocumentReviewer
 
@@ -51,6 +54,7 @@ _MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 _NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
 _MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "8192"))
 _MAX_WORKERS = int(os.environ.get("RESUME_REFINERY_MAX_WORKERS", "1"))
+_MAX_NARRATIVE_CRITIQUE_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_NARRATIVE_CRITIQUE_PASSES", "2"))
 
 _STOPWORDS = {
     "a",
@@ -91,12 +95,113 @@ class NarrativeAgent:
     def __init__(self, client: ollama.Client | None = None) -> None:
         self.client = client or ollama.Client(host=_BASE_URL)
 
-    def build_narrative(self, career: CareerProfile, job: JobDescription) -> CandidacyNarrative:
+    def build_narrative(
+        self,
+        career: CareerProfile,
+        job: JobDescription,
+        *,
+        max_critique_passes: int = _MAX_NARRATIVE_CRITIQUE_PASSES,
+        progress: object | None = None,
+    ) -> CandidacyNarrative:
         try:
-            return self._build_narrative_llm(career.raw_content, job.raw_content)
+            narrative = self._build_narrative_llm(career.raw_content, job.raw_content)
         except Exception as exc:
             logging.warning("LLM narrative generation failed (%s); using keyword fallback.", exc)
             return self._build_narrative_fallback(career.raw_content, job.raw_content)
+
+        if max_critique_passes <= 0:
+            return narrative
+
+        critic = NarrativeCriticAgent(client=self.client)
+        for pass_num in range(max_critique_passes):
+            try:
+                critique = critic.critique(narrative, career, job)
+            except Exception as exc:
+                logging.warning("Narrative critique pass %d failed (%s); keeping current narrative.", pass_num, exc)
+                break
+
+            if critique.get("passes", False):
+                logging.info("Narrative passed critique on pass %d.", pass_num)
+                break
+
+            issues = critique.get("issues", [])
+            if not issues:
+                break
+
+            logging.info(
+                "Narrative critique pass %d found %d issue(s); revising.",
+                pass_num, len(issues),
+            )
+
+            try:
+                narrative = self._revise_narrative(narrative, career, job, issues)
+            except Exception as exc:
+                logging.warning("Narrative revision failed on pass %d (%s); keeping current.", pass_num, exc)
+                break
+
+        return narrative
+
+    def _revise_narrative(
+        self,
+        narrative: CandidacyNarrative,
+        career: CareerProfile,
+        job: JobDescription,
+        issues: list[dict],
+    ) -> CandidacyNarrative:
+        """Ask the LLM to revise the narrative based on critique findings."""
+        pillars_text = "\n".join(
+            f"- **{p.theme}**: {p.argument} (evidence: {', '.join(ev.evidence for ev in p.career_evidence)})"
+            for p in narrative.pillars
+        )
+        gap_text = "\n".join(f"- {g}" for g in narrative.gap_framing) or "None"
+
+        critique_text = "\n".join(
+            f"- [{i.get('severity', 'medium').upper()}] {i.get('criterion', 'unknown')}: "
+            f"{i.get('description', '')} → Suggestion: {i.get('suggestion', '')}"
+            for i in issues
+        )
+
+        user_msg = NARRATIVE_REVISION_USER_TEMPLATE.format(
+            career_profile=career.raw_content,
+            job_description=job.raw_content,
+            thesis=narrative.thesis,
+            pillars=pillars_text,
+            gap_framing=gap_text,
+            raw_narrative=narrative.raw_narrative or "(none)",
+            critique_findings=critique_text,
+        )
+        raw = self._call_llm(NARRATIVE_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+        pillars: list[NarrativePillar] = []
+        for p in data.get("pillars", [])[:5]:
+            if isinstance(p, dict) and "theme" in p:
+                raw_evidence = p.get("career_evidence", [])
+                evidence: list[SupportingEvidence] = []
+                for item in raw_evidence:
+                    if isinstance(item, dict):
+                        evidence.append(SupportingEvidence(
+                            evidence=item.get("evidence", ""),
+                            justification=item.get("justification", ""),
+                        ))
+                    elif isinstance(item, str):
+                        evidence.append(SupportingEvidence(evidence=item))
+                pillars.append(
+                    NarrativePillar(
+                        theme=p["theme"],
+                        argument=p.get("argument", ""),
+                        career_evidence=evidence,
+                    )
+                )
+
+        return CandidacyNarrative(
+            thesis=data.get("thesis", ""),
+            pillars=pillars,
+            gap_framing=data.get("gap_framing", []),
+            raw_narrative=data.get("raw_narrative", ""),
+        )
 
     def _build_narrative_llm(self, career_content: str, job_content: str) -> CandidacyNarrative:
         user_msg = NARRATIVE_USER_TEMPLATE.format(
@@ -199,6 +304,68 @@ class NarrativeAgent:
             for token in re.findall(r"[a-zA-Z][a-zA-Z0-9+-]{2,}", text.lower())
             if token not in _STOPWORDS
         }
+
+
+class NarrativeCriticAgent:
+    """Critiques a candidacy narrative for quality, completeness, and strategic fitness.
+
+    Used by NarrativeAgent in a tight self-critique loop to strengthen the
+    narrative before it reaches the DraftingAgent.
+    """
+
+    def __init__(self, client: ollama.Client | None = None) -> None:
+        self.client = client or ollama.Client(host=_BASE_URL)
+
+    def critique(
+        self,
+        narrative: CandidacyNarrative,
+        career: CareerProfile,
+        job: JobDescription,
+    ) -> dict:
+        """Return a critique dict with 'passes' bool and 'issues' list."""
+        pillars_text = "\n".join(
+            f"- **{p.theme}**: {p.argument} (evidence: {', '.join(ev.evidence for ev in p.career_evidence)})"
+            for p in narrative.pillars
+        )
+        gap_text = "\n".join(f"- {g}" for g in narrative.gap_framing) or "None"
+
+        user_msg = NARRATIVE_CRITIQUE_USER_TEMPLATE.format(
+            career_profile=career.raw_content,
+            job_description=job.raw_content,
+            thesis=narrative.thesis,
+            pillars=pillars_text,
+            gap_framing=gap_text,
+            raw_narrative=narrative.raw_narrative or "(none)",
+        )
+        raw = self._call_llm(NARRATIVE_CRITIQUE_SYSTEM_PROMPT, user_msg)
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+        return data
+
+    def _call_llm(self, system: str, user_msg: str) -> str:
+        response = self.client.chat(
+            model=_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": "/no_think\n" + user_msg},
+            ],
+            think=False,
+            format="json",
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
+        )
+        raw = response.message.content.strip()
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+        from .reviewers import _normalize_llm_json
+        raw = _normalize_llm_json(raw)
+        if not raw:
+            raise ValueError("LLM returned empty content")
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.rsplit("```", 1)[0].strip()
+        return raw
 
 
 class VoiceAgent:

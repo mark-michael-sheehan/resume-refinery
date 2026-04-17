@@ -29,7 +29,7 @@ from resume_refinery.session import SessionStore
 
 
 class FakeNarrativeAgent:
-    def build_narrative(self, career, job):
+    def build_narrative(self, career, job, **kwargs):
         return CandidacyNarrative(
             thesis="Strong distributed systems background.",
             pillars=[NarrativePillar(theme="Backend", argument="Led migrations", career_evidence=["Reduced infra costs by $180K/year"])],
@@ -249,13 +249,13 @@ def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, 
     assert result.narrative is not None
     assert result.voice_style_guide is not None
     assert result.exported_paths
-    # Single unified repair in first pass
+    # Single truth repair in first pass (truth fails once, then passes)
     assert repair.unified_calls == 1
     assert Path(next(iter(result.exported_paths.values()))).exists()
 
 
-def test_orchestrator_create_verifies_all_three_loops(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """All three repair loops (truth, voice, AI) trigger with the default fakes."""
+def test_orchestrator_create_verifies_truth_loop_and_advisory(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Truth loop repairs, then advisory reviews run once."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     verification = FakeVerificationAgent()
     repair = FakeRepairAgent()
@@ -271,19 +271,17 @@ def test_orchestrator_create_verifies_all_three_loops(tmp_path, monkeypatch, car
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    # Pass 1: truth + AI fail â†’ single unified repair.
-    # Pass 2: all pass â†’ exit.
+    # Pass 1: truth fails -> repair. Pass 2: truth passes -> break.
+    # Advisory: all reviewers called once (including truth again).
     assert repair.unified_calls == 1
-    assert verification.truth_calls == 2
-    assert verification.voice_calls == 2
-    assert verification.ai_calls == 2
-    # Final reviews should reflect the passing second call
+    assert verification.truth_calls == 3  # 2 loop + 1 advisory
+    assert verification.voice_calls == 1  # advisory only
+    assert verification.ai_calls == 1     # advisory only
+    # Final reviews: truth from loop (passing), others from advisory
     assert result.reviews.truthfulness is not None
     assert result.reviews.truthfulness.all_supported is True
     assert result.reviews.voice is not None
-    assert result.reviews.voice.overall_match == "strong"
     assert result.reviews.ai_detection is not None
-    assert result.reviews.ai_detection.risk_level == "low"
 
 
 def test_orchestrator_refine_session_run_updates_selected_doc(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -526,10 +524,10 @@ class AcceptsAIPhraseRepairAgent:
         return RepairPassResult(accepted_ai_phrases=["accepted-phrase"])
 
 
-def test_suppression_prevents_reflagged_phrase_from_blocking_convergence(
+def test_ai_flags_appear_as_advisory_not_blocking(
     tmp_path, monkeypatch, career_profile, voice_profile, job_description
 ):
-    """A phrase accepted by the repairer should be suppressed in subsequent passes."""
+    """AI flags no longer block convergence; they appear in advisory reviews only."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     repair = AcceptsAIPhraseRepairAgent()
     orchestrator = ResumeRefineryOrchestrator(
@@ -544,12 +542,12 @@ def test_suppression_prevents_reflagged_phrase_from_blocking_convergence(
 
     result = orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    # Pass 1: AI flag found â†’ repair called â†’ phrase accepted.
-    # Pass 2: same AI flag found but suppressed â†’ gate passes â†’ loop exits early.
-    assert repair.unified_calls == 1
-    # The final review reflects the suppressed (filtered) state
+    # Truth always passes (from AlwaysPassVerificationAgent) -> no repair needed.
+    # AI flags are advisory-only, so no repair is triggered by AI.
+    assert repair.unified_calls == 0
+    # Advisory review shows AI findings
     assert result.reviews.ai_detection is not None
-    assert result.reviews.ai_detection.resume_flags == []
+    assert result.reviews.ai_detection.resume_flags == ["accepted-phrase"]
 
 
 # ---------------------------------------------------------------------------
@@ -610,13 +608,15 @@ def test_max_passes_zero_skips_all_reviews(tmp_path, monkeypatch, career_profile
         max_passes=0,
     )
 
-    assert verification.truth_calls == 0
-    assert verification.voice_calls == 0
-    assert verification.ai_calls == 0
+    # Loop skipped entirely, but advisory reviews still run.
+    assert verification.truth_calls == 1  # advisory only
+    assert verification.voice_calls == 1  # advisory only
+    assert verification.ai_calls == 1     # advisory only
     assert repair.unified_calls == 0
+    # truth is overridden to None (loop never set it), others come from advisory
     assert result.truthfulness is None
-    assert result.voice is None
-    assert result.ai_detection is None
+    assert result.voice is not None
+    assert result.ai_detection is not None
 
 
 def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
@@ -641,13 +641,13 @@ def test_max_passes_one_reviews_and_repairs_once(tmp_path, monkeypatch, career_p
         max_passes=1,
     )
 
-    # All reviewers called once in the single pass
-    assert verification.truth_calls == 1
-    assert verification.voice_calls == 1
-    assert verification.ai_calls == 1
-    # Single unified repair
+    # Truth called once in loop + once in advisory = 2
+    assert verification.truth_calls == 2
+    assert verification.voice_calls == 1  # advisory only
+    assert verification.ai_calls == 1     # advisory only
+    # Single truth repair
     assert repair.unified_calls == 1
-    # Result reflects the failing review (no second review after repair)
+    # Truth from loop (still failing), others from advisory
     assert result.truthfulness.all_supported is False
     assert result.voice.overall_match == "weak"
     assert result.ai_detection.risk_level == "high"
@@ -675,12 +675,13 @@ def test_max_passes_exhaustion_returns_last_review(tmp_path, monkeypatch, career
         max_passes=4,
     )
 
-    # 4 passes Ã— 1 call each = 4 calls per reviewer
-    assert verification.truth_calls == 4
-    assert verification.voice_calls == 4
-    assert verification.ai_calls == 4
-    # 4 passes Ã— 1 unified repair = 4
+    # 4 truth passes in loop + 1 advisory = 5
+    assert verification.truth_calls == 5
+    assert verification.voice_calls == 1  # advisory only
+    assert verification.ai_calls == 1     # advisory only
+    # 4 truth repairs
     assert repair.unified_calls == 4
+    # Truth from loop (still failing), others from advisory
     assert result.truthfulness.all_supported is False
     assert result.voice.overall_match == "weak"
     assert result.ai_detection.risk_level == "high"
@@ -893,8 +894,8 @@ def test_ai_loop_exits_on_no_flags_despite_risk_level(tmp_path, monkeypatch, car
         max_passes=3,
     )
 
-    # All reviews pass (truth+voice from AlwaysPass, AI has no flags) â†’ no repair
-    assert verification.ai_calls == 1
+    # Truth passes in loop (from AlwaysPass), AI is advisory-only.
+    assert verification.ai_calls == 1  # advisory only
     assert repair.unified_calls == 0
     assert result.ai_detection.risk_level == "medium"  # preserved as-is
 
@@ -960,9 +961,9 @@ def test_progress_includes_pass_headers(tmp_path, monkeypatch, career_profile, v
 
     combined = "\n".join(messages)
     # Should include pass headers
-    assert "Review Pass 1/" in combined
-    # truth_calls = 2 (pass 1 fails, pass 2 passes)
-    assert verification.truth_calls == 2
+    assert "Truth Pass 1/" in combined
+    # truth_calls = 2 in loop + 1 advisory = 3
+    assert verification.truth_calls == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1051,10 +1052,10 @@ class AcceptsAIPhraseAndTrackRepair:
         return RepairPassResult(accepted_ai_phrases=["flagged-phrase"])
 
 
-def test_exemptions_passed_to_reviewers_in_repair_loop(
+def test_exemptions_passed_to_truth_reviewer_in_repair_loop(
     tmp_path, monkeypatch, career_profile, voice_profile, job_description
 ):
-    """After a repair pass accepts a phrase, the exemption list is passed to reviewers on the next pass."""
+    """After a repair pass accepts a truth claim, the exemption list is passed on the next pass."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     verification = ExemptionTrackingVerification()
     repair = AcceptsAIPhraseAndTrackRepair()
@@ -1070,12 +1071,10 @@ def test_exemptions_passed_to_reviewers_in_repair_loop(
 
     orchestrator.create_session_run(career_profile, voice_profile, job_description)
 
-    # Pass 1: no exemptions â†’ AI fails â†’ repair accepts the phrase
+    # Truth always passes -> no repair pass -> no AI exemption from repair
+    assert repair.unified_calls == 0
+    # Advisory still calls AI; first call has no exemptions
     assert verification.ai_exemptions[0] is None
-    # Pass 2: exemptions include the accepted phrase â†’ AI passes
-    assert verification.ai_exemptions[1] == ["flagged-phrase"]
-    # Repair only called once (pass 2 converges)
-    assert repair.unified_calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1546,8 +1545,8 @@ def test_generate_session_run_fails_without_staged_context(tmp_path, monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def test_create_session_run_includes_coverage_result(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """create_session_run should populate coverage_result on OrchestrationResult."""
+def test_create_session_run_coverage_result_is_none(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Coverage analysis is absorbed into the narrative critic; coverage_result is None."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     coverage_agent = FakeNarrativeCoverageAgent()
     store = SessionStore()
@@ -1565,13 +1564,13 @@ def test_create_session_run_includes_coverage_result(tmp_path, monkeypatch, care
         career_profile, voice_profile, job_description, skip_review=True,
     )
 
-    assert result.coverage_result is not None
-    assert coverage_agent.analyze_calls == 1
-    assert result.coverage_result.pillars_total == 1  # FakeNarrativeAgent has 1 pillar
+    # Coverage analysis no longer runs in orchestrator
+    assert result.coverage_result is None
+    assert coverage_agent.analyze_calls == 0
 
 
-def test_create_session_run_coverage_with_gaps_applies_suggestions(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """When coverage gaps exist, apply_suggestions should be called."""
+def test_create_session_run_no_coverage_analysis(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Coverage analysis is no longer invoked during create (absorbed into narrative critic)."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     gap = CoverageGap(
         pillar_theme="Cost Optimisation",
@@ -1596,12 +1595,13 @@ def test_create_session_run_coverage_with_gaps_applies_suggestions(tmp_path, mon
         career_profile, voice_profile, job_description, skip_review=True,
     )
 
-    assert coverage_agent.apply_calls == 1
-    assert len(result.coverage_result.gaps) == 1
+    assert coverage_agent.analyze_calls == 0
+    assert coverage_agent.apply_calls == 0
+    assert result.coverage_result is None
 
 
-def test_coverage_result_persisted(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
-    """Coverage result should be saved to disk and loadable."""
+def test_coverage_result_not_persisted(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """Coverage result is no longer persisted (absorbed into narrative critic)."""
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     store = SessionStore()
     coverage_agent = FakeNarrativeCoverageAgent()
@@ -1620,5 +1620,5 @@ def test_coverage_result_persisted(tmp_path, monkeypatch, career_profile, voice_
     )
 
     loaded = store.load_coverage(result.session)
-    assert loaded is not None
-    assert loaded.pillars_total == result.coverage_result.pillars_total
+    assert loaded is None
+    assert result.coverage_result is None

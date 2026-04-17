@@ -214,6 +214,170 @@ Return JSON only — no markdown fences, no explanation.
 
 
 # ---------------------------------------------------------------------------
+# Narrative critique prompts
+# ---------------------------------------------------------------------------
+
+NARRATIVE_CRITIQUE_SYSTEM_PROMPT = """\
+You are a strategic career positioning critic. You evaluate candidacy narratives \
+for quality, completeness, and strategic fitness. You are given:
+1. A candidacy narrative (thesis + pillars + gap framing)
+2. The candidate's full career profile
+3. The target job description
+
+Your job is to identify weaknesses in the narrative that would weaken a resume \
+built from it. You are NOT writing the resume — you are stress-testing the \
+strategic framing that will guide resume generation.
+
+Evaluate these criteria:
+
+1. THESIS SPECIFICITY — Is the thesis specific to THIS candidate and THIS role, \
+   or could it describe any qualified person? A good thesis names a unique \
+   combination of strengths. "Experienced engineer with strong backend skills" \
+   is generic. "Platform engineer whose distributed-systems migrations consistently \
+   cut deploy times and infra costs at scale" is specific.
+
+2. PILLAR-JD ALIGNMENT — Do the pillars cover the job description's top \
+   priorities? If the JD emphasises cloud architecture but no pillar addresses \
+   it despite career evidence existing, that's a gap.
+
+3. EVIDENCE EXHAUSTIVENESS — For each pillar, has the narrative gathered ALL \
+   strong supporting evidence from the career profile? If the career profile \
+   mentions 3 relevant accomplishments for a pillar but the narrative only cites \
+   1, flag the omission with the specific missing evidence.
+
+4. PILLAR QUALITY — Does every pillar have at least 2 strong pieces of evidence? \
+   A pillar with only 1 weak example should be flagged for consolidation or \
+   replacement.
+
+5. EVIDENCE OMISSION — Are there major career accomplishments or skills that \
+   aren't referenced by ANY pillar? High-impact items left on the table weaken \
+   the resume.
+
+6. GAP FRAMING HONESTY — Does the gap framing fabricate transferable skills \
+   that don't exist in the career profile? Gaps must pivot to real evidence.
+
+7. PILLAR COVERAGE OF RESUME CONTENT — Consider what a resume built from this \
+   narrative would look like. Are there important career facts that would be \
+   excluded because no pillar references them? Identifying this now prevents \
+   coverage gaps in the final resume.
+"""
+
+NARRATIVE_CRITIQUE_USER_TEMPLATE = """\
+## Career Profile
+{career_profile}
+
+## Job Description
+{job_description}
+
+## Candidacy Narrative to Critique
+
+### Thesis
+{thesis}
+
+### Pillars
+{pillars}
+
+### Gap Framing
+{gap_framing}
+
+### Raw Narrative
+{raw_narrative}
+
+## Task
+Critique this candidacy narrative against the career profile and job description. \
+Identify specific, actionable weaknesses.
+
+Return a JSON object with this shape:
+{{
+  "passes": boolean,
+  "overall_assessment": "<1-2 sentence summary of narrative quality>",
+  "issues": [
+    {{
+      "criterion": "<which of the 7 criteria this issue falls under>",
+      "description": "<specific description of the problem>",
+      "suggestion": "<concrete actionable fix>",
+      "severity": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+Rules:
+- "passes" should be true ONLY when there are no high-severity issues and at \
+  most 1 medium-severity issue. A narrative with any high-severity issue or \
+  2+ medium-severity issues does NOT pass.
+- Focus on issues that would materially weaken a resume built from this narrative.
+- Do NOT flag stylistic preferences or minor wording choices.
+- For evidence exhaustiveness issues, quote the specific career profile content \
+  that was omitted.
+- For pillar-JD alignment issues, name the specific JD priority not covered.
+- Limit to at most 8 issues. Prioritise high-severity issues.
+- If the narrative is strong, return passes=true with an empty issues array.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+NARRATIVE_REVISION_USER_TEMPLATE = """\
+## Career Profile
+{career_profile}
+
+## Job Description
+{job_description}
+
+## Current Narrative (to revise)
+
+### Thesis
+{thesis}
+
+### Pillars
+{pillars}
+
+### Gap Framing
+{gap_framing}
+
+### Raw Narrative
+{raw_narrative}
+
+## Critique Findings (address ALL of these)
+{critique_findings}
+
+## Task
+Revise the candidacy narrative to address every critique finding above. \
+Return a complete replacement narrative.
+
+Return a JSON object with the same shape as the original:
+{{
+  "thesis": "<revised thesis>",
+  "pillars": [
+    {{
+      "theme": "<theme label>",
+      "argument": "<how this supports the thesis>",
+      "career_evidence": [
+        {{
+          "evidence": "<specific fact from career profile>",
+          "justification": "<why this supports the pillar>"
+        }}
+      ]
+    }}
+  ],
+  "gap_framing": ["<revised gap reframings>"],
+  "raw_narrative": "<revised full narrative text>"
+}}
+
+Rules:
+- Address every critique finding. Do not ignore any.
+- Keep all evidence grounded in the career profile — do NOT fabricate.
+- Maintain 3-5 pillars. You may add, remove, merge, or restructure pillars \
+  as the critique suggests.
+- Order career_evidence from strongest to weakest within each pillar.
+- Each evidence item must include a justification.
+- Preserve any aspects of the original narrative that the critique did NOT \
+  flag — do not regress on working parts.
+
+Return JSON only — no markdown fences, no explanation.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Review prompts
 # ---------------------------------------------------------------------------
 

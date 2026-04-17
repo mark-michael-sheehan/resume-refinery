@@ -108,6 +108,137 @@ def test_narrative_agent_limits_pillars(career_profile, job_description):
     assert len(narrative.pillars) <= 5
 
 
+def test_narrative_agent_critique_loop_revises(career_profile, job_description):
+    """NarrativeAgent runs the critique loop and revises the narrative when issues are found."""
+    first_narrative = json.dumps({
+        "thesis": "Weak thesis.",
+        "pillars": [{"theme": "A", "argument": "Arg A", "career_evidence": ["ev A"]}],
+        "gap_framing": [],
+        "raw_narrative": "First draft.",
+    })
+    critique_result = json.dumps({
+        "passes": False,
+        "issues": [{"criterion": "thesis_specificity", "severity": "high",
+                     "description": "Too vague", "suggestion": "Be specific"}],
+    })
+    revised_narrative = json.dumps({
+        "thesis": "Strong distributed-systems engineer with 8 years.",
+        "pillars": [{"theme": "A", "argument": "Arg A", "career_evidence": ["ev A"]}],
+        "gap_framing": [],
+        "raw_narrative": "Revised draft.",
+    })
+    mock_client = MagicMock()
+    # Call sequence: build -> critique -> revise
+    mock_client.chat.side_effect = [
+        _make_llm_resp(first_narrative),
+        _make_llm_resp(critique_result),
+        _make_llm_resp(revised_narrative),
+    ]
+
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job_description, max_critique_passes=1)
+
+    assert narrative.thesis == "Strong distributed-systems engineer with 8 years."
+    assert mock_client.chat.call_count == 3  # build + critique + revise
+
+
+def test_narrative_agent_critique_loop_stops_on_pass(career_profile, job_description):
+    """NarrativeAgent stops the critique loop when the narrative passes."""
+    first_narrative = json.dumps({
+        "thesis": "Already solid thesis.",
+        "pillars": [{"theme": "A", "argument": "Arg A", "career_evidence": ["ev A"]}],
+        "gap_framing": [],
+        "raw_narrative": "Good draft.",
+    })
+    critique_result = json.dumps({
+        "passes": True,
+        "issues": [],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [
+        _make_llm_resp(first_narrative),
+        _make_llm_resp(critique_result),
+    ]
+
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job_description, max_critique_passes=2)
+
+    assert narrative.thesis == "Already solid thesis."
+    assert mock_client.chat.call_count == 2  # build + critique (no revise)
+
+
+def test_narrative_agent_critique_loop_skipped_when_zero_passes(career_profile, job_description):
+    """NarrativeAgent skips the critique loop when max_critique_passes=0."""
+    narrative_json = json.dumps({
+        "thesis": "Direct output.",
+        "pillars": [{"theme": "A", "argument": "Arg A", "career_evidence": ["ev A"]}],
+        "gap_framing": [],
+        "raw_narrative": "Draft.",
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_llm_resp(narrative_json)
+
+    agent = NarrativeAgent(client=mock_client)
+    narrative = agent.build_narrative(career_profile, job_description, max_critique_passes=0)
+
+    assert narrative.thesis == "Direct output."
+    assert mock_client.chat.call_count == 1  # build only
+
+
+# ---------------------------------------------------------------------------
+# NarrativeCriticAgent
+# ---------------------------------------------------------------------------
+
+
+def test_narrative_critic_agent_returns_critique(career_profile, job_description):
+    """NarrativeCriticAgent should return a dict with passes/issues."""
+    from resume_refinery.specialist_agents import NarrativeCriticAgent
+
+    critique_json = json.dumps({
+        "passes": False,
+        "issues": [
+            {"criterion": "thesis_specificity", "severity": "high",
+             "description": "Too vague", "suggestion": "Be specific"},
+        ],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_llm_resp(critique_json)
+
+    agent = NarrativeCriticAgent(client=mock_client)
+    narrative = CandidacyNarrative(
+        thesis="Strong engineer.",
+        pillars=[NarrativePillar(theme="A", argument="Arg A", career_evidence=["ev A"])],
+        gap_framing=[],
+        raw_narrative="Narrative text.",
+    )
+    result = agent.critique(narrative, career_profile, job_description)
+
+    assert result["passes"] is False
+    assert len(result["issues"]) == 1
+    assert result["issues"][0]["criterion"] == "thesis_specificity"
+
+
+def test_narrative_critic_agent_passes_clean_narrative(career_profile, job_description):
+    """NarrativeCriticAgent should return passes=True for a solid narrative."""
+    from resume_refinery.specialist_agents import NarrativeCriticAgent
+
+    critique_json = json.dumps({"passes": True, "issues": []})
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_llm_resp(critique_json)
+
+    agent = NarrativeCriticAgent(client=mock_client)
+    narrative = CandidacyNarrative(
+        thesis="Strong distributed-systems engineer with 8 years experience.",
+        pillars=[NarrativePillar(theme="Backend", argument="Led migrations", career_evidence=["Cut deploy time 60%"])],
+        gap_framing=[],
+        raw_narrative="Full narrative.",
+    )
+    result = agent.critique(narrative, career_profile, job_description)
+
+    assert result["passes"] is True
+    assert result["issues"] == []
+
+
 # ---------------------------------------------------------------------------
 # VoiceAgent
 # ---------------------------------------------------------------------------

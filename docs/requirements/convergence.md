@@ -19,22 +19,22 @@ ensure convergence.
 |---|---|
 | CR-2.1 | All reviewers pin `temperature=0` to minimise non-determinism between passes. |
 | CR-2.2 | Reviewers use `think=False` and `format="json"` so that raw output is parseable without stripping thinking tags. |
-| CR-2.3 | The truthfulness reviewer is the strictest gate — it NEVER relaxes. It receives both the career profile and the job description as grounding sources. Voice and AI detection may relax on later passes (see CR-3). |
+| CR-2.3 | The truthfulness reviewer is the only gate in the repair loop — it NEVER relaxes. It receives both the career profile and the job description as grounding sources. All other reviewers run once after the loop as advisory (see CR-3). |
 
 ## CR-3 Acceptance Thresholds
 
 | ID | Requirement |
 |---|---|
-| CR-3.1 | Voice: "moderate" or "strong" per-document match is accepted from pass 0 onward. |
-| CR-3.2 | AI detection: on passes before `RELAXED_PASS_START`, the resume must have zero flags. From `RELAXED_PASS_START` onward, total flags ≤ `AI_FLAG_TOLERANCE`. |
-| CR-3.3 | Truthfulness: `pass_strict=True` is required on every pass. No relaxation. |
+| CR-3.1 | Voice: advisory only — runs once after the truthfulness loop. Match strength is recorded but never blocks convergence or triggers repair. |
+| CR-3.2 | AI detection: advisory only — runs once after the truthfulness loop. Flags are recorded but never block convergence or trigger repair. |
+| CR-3.3 | Truthfulness: `pass_strict=True` is required on every pass. No relaxation. This is the only gate in the repair loop. |
 | CR-3.4 | _(Reserved.)_ |
-| CR-3.5 | Hiring-manager review is advisory only — it feeds findings into the repair agent but NEVER blocks convergence. This prevents feedback loops where the HM asks for bolder claims that the truthfulness reviewer then rejects. |
-| CR-3.6 | Relevance-pruning review is advisory only — it feeds findings into the repair agent but NEVER blocks convergence. |
-| CR-3.7 | ATS keyword alignment: "strong" or "moderate" `alignment_score` is accepted. "weak" blocks convergence and triggers repair. |
+| CR-3.5 | Hiring-manager review is advisory only — runs once after the truthfulness loop. Findings are recorded but never block convergence or trigger repair. |
+| CR-3.6 | Relevance-pruning review is advisory only — runs once after the truthfulness loop. Findings are recorded but never block convergence or trigger repair. |
+| CR-3.7 | ATS keyword alignment: advisory only — runs once after the truthfulness loop. Alignment score is recorded but never blocks convergence or triggers repair. |
 | CR-3.8 | _(Reserved — cross-document consistency reviewer removed; only one document type exists.)_ |
-| CR-3.9 | Grammar & mechanics: on passes before `RELAXED_PASS_START`, `clean=True` is required (zero issues). From `RELAXED_PASS_START` onward, total issues ≤ 2 is accepted. |
-| CR-3.10 | Narrative coherence: "strong" or "moderate" alignment is accepted (soft gate, same pattern as voice). "weak" triggers repair but does not block convergence on its own. |
+| CR-3.9 | Grammar & mechanics: advisory only — runs once after the truthfulness loop. Issues are recorded but never block convergence or trigger repair. |
+| CR-3.10 | Narrative coherence: advisory only — runs once after the truthfulness loop. Alignment rating is recorded but never blocks convergence or triggers repair. |
 
 ## CR-4 Feedback Hygiene
 
@@ -56,18 +56,18 @@ ensure convergence.
 
 | ID | Requirement |
 |---|---|
-| CR-6.1 | The maximum number of review+repair passes is bounded by `RESUME_REFINERY_MAX_REPAIR_PASSES` (default 3). |
-| CR-6.2 | If all documents pass all reviewers on any pass, the loop exits early. |
+| CR-6.1 | The maximum number of truthfulness review+repair passes is bounded by `RESUME_REFINERY_MAX_REPAIR_PASSES` (default 3). |
+| CR-6.2 | If truthfulness passes on any pass, the loop exits early. |
 | CR-6.3 | If the loop exhausts all passes without convergence, the best version so far is kept and a warning is logged. |
-| CR-6.4 | Each pass runs all 8 reviewers concurrently (truthfulness, ATS, grammar, voice, AI detection, HM, pruning, narrative coherence), checks all gates, and makes a single unified repair call if any gate fails. |
+| CR-6.4 | Only the truthfulness reviewer runs in the repair loop. After the loop completes, all 8 reviewers (truthfulness, ATS, grammar, voice, AI detection, HM, pruning, narrative coherence) run once as an advisory pass. The loop's truthfulness result is merged with the advisory results. |
 | CR-6.5 | The repair prompt includes prior-edit context with conflict resolution instructions (fix/merge/accept), replacing the former Phase B preserve note. Cross-reviewer regressions are handled by the prior-edits annotated pass-through system (CR-8). |
-| CR-6.6 | The loop re-runs all reviewers after each repair, so any regression introduced by a repair is caught on the next pass. |
+| CR-6.6 | The advisory pass runs all reviewers after the truthfulness loop completes, providing informational scores without triggering further repair. |
 
 ## CR-7 Per-Reviewer Suppression
 
 | ID | Requirement |
 |---|---|
-| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of eight per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice), `accepted_hm_issues` (hiring manager), `accepted_pruning_issues` (relevance pruning), `accepted_ats_issues` (ATS keyword), `accepted_grammar_issues` (grammar), `accepted_narrative_issues` (narrative coherence). |
+| CR-7.1 | The repair agent may signal that a reviewer's finding is a false positive by populating one of eight per-reviewer acceptance arrays in its output: `accepted_claims` (truthfulness), `accepted_ai_phrases` (AI-detection), `accepted_voice_issues` (voice), `accepted_hm_issues` (hiring manager), `accepted_pruning_issues` (relevance pruning), `accepted_ats_issues` (ATS keyword), `accepted_grammar_issues` (grammar), `accepted_narrative_issues` (narrative coherence). In the truthfulness repair loop, only `accepted_claims` is relevant; the other arrays apply during `refine_session_run`. |
 | CR-7.2 | The orchestrator maintains eight independent suppression sets — one per reviewer — that accumulate accepted phrases across all repair passes within a single run. |
 | CR-7.3 | Before each pass's gate check and repair call, raw reviewer results are filtered through the corresponding suppression set. Suppressed items are removed from flag/issue/claim lists; truthfulness `pass_strict` and `all_supported` are recalculated; AI `risk_level` is recalculated from the remaining flag count; ATS `alignment_score` is recalculated from remaining missing/stuffing keywords; grammar `clean` is recalculated from remaining issue counts. Voice match levels are preserved as-is (they reflect holistic LLM judgment, not issue count). |
 | CR-7.4 | A phrase accepted in any pass is suppressed for all subsequent passes in the same run. Suppression sets persist beyond a single `create_session_run` call: `refine_session_run` loads the most recent `exempted_phrases.json` from prior versions, applies those exemptions during its review pass, and saves the combined (prior + any new) exemptions to the new version directory. |

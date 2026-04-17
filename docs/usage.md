@@ -275,10 +275,14 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 
 | Variable | Default | Description |
 |---|---|---|
-| `RESUME_REFINERY_MAX_REPAIR_PASSES` | `3` | Max unified review+repair passes per run. Each pass runs all reviewers (truthfulness, voice, AI-detection, etc.), checks convergence, and — if any reviewer still fails — runs the repair agent before the next pass. Set to `1` to review once with no repair. |
-| `RESUME_REFINERY_RELAXED_PASS_START` | `1` | 0-based pass index at which voice and AI-detection thresholds relax. Before this pass, AI-detection requires zero flags on the resume. From this pass onward, total flags ≤ `AI_FLAG_TOLERANCE`. Voice accepts "moderate" on all passes. Truthfulness never relaxes. |
-| `RESUME_REFINERY_AI_FLAG_TOLERANCE` | `2` | Maximum AI-detection flags allowed on relaxed passes (pass ≥ `RELAXED_PASS_START`). |
+| `RESUME_REFINERY_MAX_REPAIR_PASSES` | `3` | Max truthfulness review+repair passes per run. Each pass runs only the truthfulness reviewer, checks for unsupported claims, and — if any remain — runs the repair agent before the next pass. After the loop, all 8 reviewers run once as advisory. Set to `1` to review once with no repair. |
 | `RESUME_REFINERY_EDIT_FAIL_THRESHOLD` | `3` | Max surgical edits that may fail to match their target text in a single repair call before an `EditApplicationError` is raised. |
+
+### Narrative quality
+
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_REFINERY_MAX_NARRATIVE_CRITIQUE_PASSES` | `2` | Max narrative self-critique passes. After the NarrativeAgent generates a narrative, the NarrativeCriticAgent evaluates it against quality criteria and the narrative is revised if issues are found. Set to `0` to disable narrative critique. |
 
 ### Storage
 
@@ -334,8 +338,8 @@ which balances quality and resource usage. Here are some practical guidelines:
   profile the model can see. If your career profile is long (>5 pages), raise this to
   `32768` or higher. Each 16K tokens ≈ 2 GB extra RAM.
 - **Smaller models produce more repair passes.** Review flags and unsupported-claim counts
-  tend to be higher with smaller models, which means more repair iterations. You can raise
-  `RESUME_REFINERY_AI_FLAG_TOLERANCE` or `RESUME_REFINERY_MAX_REPAIR_PASSES` to compensate.
+  tend to be higher with smaller models, which means more truthfulness repair iterations.
+  You can raise `RESUME_REFINERY_MAX_REPAIR_PASSES` to compensate.
 - **Pull your model before running.** Ollama must already have the model downloaded:
   ```bash
   ollama pull qwen3.5:9b
@@ -503,16 +507,14 @@ Increase `RESUME_REFINERY_NUM_CTX` in your `.env`.
 
 ### Repair loop never converges
 
-If the repair loop exhausts all passes without all reviews passing:
+If the repair loop exhausts all passes without truthfulness passing:
 
 - **Truthfulness failures:** Check that your career profile actually contains the evidence
   the reviewer is looking for. The truthfulness gate never relaxes — if a claim isn't
   traceable to your career profile, it won't pass.
-- **AI-detection flags:** Raise `RESUME_REFINERY_AI_FLAG_TOLERANCE` (e.g. to `4`) to allow
-  more flags on later passes. Or lower `RESUME_REFINERY_RELAXED_PASS_START` (e.g. to `0`)
-  to relax earlier.
-- **Voice match stuck at "weak":** Improve your voice profile — add more writing samples
-  and specific style notes. The models need concrete examples to match voice well.
+- **Other reviewer scores low:** Voice, AI detection, ATS, grammar, and narrative coherence
+  are advisory only — they do not block convergence. Low advisory scores suggest improving
+  your input files (voice profile, career profile) or adjusting narrative critique passes.
 - **Increase passes:** Raise `RESUME_REFINERY_MAX_REPAIR_PASSES` (e.g. to `5` or `7`).
 
 ### Review model == generation model warning

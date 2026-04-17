@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -25,7 +24,6 @@ from .models import (
     GrammarResult,
     HiringManagerReview,
     NarrativeCoherenceResult,
-    NarrativeCoverageResult,
     OrchestrationResult,
     RelevancePruningResult,
     RepairPassResult,
@@ -42,13 +40,6 @@ from .specialist_agents import DraftingAgent, NarrativeAgent, NarrativeCoverageA
 load_dotenv()
 
 MAX_REPAIR_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_REPAIR_PASSES", "3"))
-MAX_WORKERS = int(os.environ.get("RESUME_REFINERY_MAX_WORKERS", "1"))
-
-# On later passes, relax voice/AI thresholds to help convergence.
-# Truthfulness always stays strict.
-_AI_FLAG_TOLERANCE_LATE = int(os.environ.get("RESUME_REFINERY_AI_FLAG_TOLERANCE", "2"))
-# 0-based pass index at which relaxed thresholds kick in (default: pass 2, i.e. the second pass).
-_RELAXED_PASS_START = int(os.environ.get("RESUME_REFINERY_RELAXED_PASS_START", "1"))
 
 ProgressCallback = Callable[[str], None]
 StreamCallback = Callable[[str], None]
@@ -118,18 +109,8 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         self._export(session, docs, output_dir=output_dir)
 
-        # --- Narrative coverage analysis (advisory) ---
-        coverage_result = self._run_coverage_analysis(
-            context.narrative, career, docs, job, progress=progress,
-        )
-        if coverage_result is not None:
-            self.store.save_coverage(session, coverage_result)
-            if coverage_result.gaps:
-                self.store.update_documents(session, docs)
-                self._export(session, docs, output_dir=output_dir)
-
         if skip_review:
-            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
+            self._progress(progress, "  Truthfulness review...")
             try:
                 truth = self.verification_agent.review_truthfulness(docs, career, job)
             except Exception as exc:
@@ -148,7 +129,7 @@ class ResumeRefineryOrchestrator:
                 docs, career, voice, job, context, progress=progress,
                 on_repair_pass=_on_repair_pass,
             )
-        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.grammar_issues:
+        if exempted.claims:
             self.store.save_suppressions(session, exempted)
         # Final export with the fully-repaired documents.
         exported = self._export(session, docs, output_dir=output_dir)
@@ -163,7 +144,7 @@ class ResumeRefineryOrchestrator:
             repair_passes=repair_passes,
             narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
-            coverage_result=coverage_result,
+            coverage_result=None,
             exported_paths={key: str(path) for key, path in exported.items()},
             strict_truth_failed=strict_failed and not allow_unverified,
         )
@@ -240,18 +221,8 @@ class ResumeRefineryOrchestrator:
         self.store.save_context(session, context)
         self._export(session, docs, output_dir=output_dir)
 
-        # --- Narrative coverage analysis (advisory) ---
-        coverage_result = self._run_coverage_analysis(
-            context.narrative, career, docs, job, progress=progress,
-        )
-        if coverage_result is not None:
-            self.store.save_coverage(session, coverage_result)
-            if coverage_result.gaps:
-                self.store.update_documents(session, docs)
-                self._export(session, docs, output_dir=output_dir)
-
         if skip_review:
-            self._progress(progress, "  Truthfulness review (3 LLM calls)...")
+            self._progress(progress, "  Truthfulness review...")
             try:
                 truth = self.verification_agent.review_truthfulness(docs, career, job)
             except Exception as exc:
@@ -270,7 +241,7 @@ class ResumeRefineryOrchestrator:
                 docs, career, voice, job, context, progress=progress,
                 on_repair_pass=_on_repair_pass,
             )
-        if exempted.claims or exempted.ai_phrases or exempted.voice_issues or exempted.hm_issues or exempted.pruning_issues or exempted.ats_issues or exempted.grammar_issues:
+        if exempted.claims:
             self.store.save_suppressions(session, exempted)
         exported = self._export(session, docs, output_dir=output_dir)
         self.store.save_reviews(session, reviews)
@@ -287,7 +258,7 @@ class ResumeRefineryOrchestrator:
             repair_passes=repair_passes,
             narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
-            coverage_result=coverage_result,
+            coverage_result=None,
             exported_paths={key: str(path) for key, path in exported.items()},
             strict_truth_failed=strict_failed and not allow_unverified,
         )
@@ -544,36 +515,10 @@ class ResumeRefineryOrchestrator:
         progress: ProgressCallback | None = None,
     ) -> DraftingContext:
         self._progress(progress, "Building candidacy narrative...")
-        narrative = self.narrative_agent.build_narrative(career, job)
+        narrative = self.narrative_agent.build_narrative(career, job, progress=progress)
         self._progress(progress, "Distilling voice guide...")
         style_guide = self.voice_agent.build_style_guide(voice)
         return DraftingContext(narrative=narrative, voice_style_guide=style_guide)
-
-    def _run_coverage_analysis(
-        self,
-        narrative: CandidacyNarrative,
-        career: CareerProfile,
-        docs: DocumentSet,
-        job: JobDescription,
-        *,
-        progress: ProgressCallback | None = None,
-    ) -> NarrativeCoverageResult | None:
-        """Run narrative coverage analysis and apply suggestions (advisory)."""
-        self._progress(progress, "Analyzing narrative coverage gaps...")
-        try:
-            result = self.coverage_agent.analyze_coverage(narrative, career, docs, job)
-        except Exception as exc:
-            logging.warning("Narrative coverage analysis failed (%s)", exc)
-            return None
-        if result.gaps:
-            self._progress(
-                progress,
-                f"  Found {len(result.gaps)} coverage gap(s); enriching resume...",
-            )
-            self.coverage_agent.apply_suggestions(docs, result)
-        else:
-            self._progress(progress, "  All narrative pillars covered.")
-        return result
 
     def _verify_and_repair(
         self,
@@ -588,287 +533,90 @@ class ResumeRefineryOrchestrator:
         max_passes: int = MAX_REPAIR_PASSES,
         on_repair_pass: Callable[[int, DocumentSet, ReviewBundle], None] | None = None,
     ) -> tuple[ReviewBundle, list[RepairPassResult], ExemptedPhrases]:
+        """Truthfulness-gated repair loop followed by a single advisory review.
+
+        Only truthfulness failures trigger repair iterations.  All other
+        reviewers (voice, AI detection, ATS, grammar, hiring manager,
+        relevance pruning, narrative coherence) run once after the loop as
+        advisory information.
+        """
         import logging
 
         repair_results: list[RepairPassResult] = []
-
-        truth = None
-        voice_result = None
-        ai_result = None
-        hm_result: HiringManagerReview | None = None
-        pruning_result: RelevancePruningResult | None = None
-        ats_result: ATSKeywordResult | None = None
-        grammar_result: GrammarResult | None = None
-        narrative_result: NarrativeCoherenceResult | None = None
-
-        # Per-reviewer suppression sets â€” accumulated across all repair passes.
-        # Each reviewer has its own independent set so a voice false positive
-        # cannot accidentally suppress a truthfulness finding (and vice versa).
         suppressed_claims: set[str] = set()
-        suppressed_ai_phrases: set[str] = set()
-        suppressed_voice_issues: set[str] = set()
-        suppressed_hm_issues: set[str] = set()
-        suppressed_pruning_issues: set[str] = set()
-        suppressed_ats_issues: set[str] = set()
-        suppressed_grammar_issues: set[str] = set()
-        suppressed_narrative_issues: set[str] = set()
+        truth: TruthfulnessResult | None = None
+        repair_sub_pass = 0
 
-        repair_sub_pass = 0  # running counter for on_repair_pass snapshots
-
+        # ── Truthfulness repair loop ────────────────────────────────────
         for pass_num in range(max_passes):
-            self._progress(progress, f"â”€â”€â”€ Review Pass {pass_num + 1}/{max_passes} â”€â”€â”€")
+            self._progress(progress, f"─── Truth Pass {pass_num + 1}/{max_passes} ───")
+            self._progress(progress, "  Truthfulness review...")
 
-            # ============================================================
-            # Run all 8 reviewers concurrently
-            # ============================================================
-            self._progress(progress, "  Running all reviews (truth, ATS, grammar, voice, AI, HM, pruning)...")
+            try:
+                truth = self.verification_agent.review_truthfulness(
+                    docs, career, job,
+                    exemptions=sorted(suppressed_claims) if suppressed_claims else None,
+                )
+                self._progress(progress, "    ✓ Truth review complete")
+            except Exception as exc:
+                logging.warning("Truthfulness review failed (%s)", exc)
+                self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
+                truth = None
 
-            def _run_truth():
-                try:
-                    result = self.verification_agent.review_truthfulness(
-                        docs, career, job,
-                        exemptions=sorted(suppressed_claims) if suppressed_claims else None,
-                    )
-                    self._progress(progress, "    \u2713 Truth review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("Truthfulness review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Truth review skipped: {exc}[/yellow]")
-                    return None
+            # Apply suppression filter.
+            if truth and suppressed_claims:
+                def _filter_doc(doc: DocumentTruthResult) -> DocumentTruthResult:
+                    remaining = [c for c in doc.unsupported_claims if c not in suppressed_claims]
+                    return doc.model_copy(update={"unsupported_claims": remaining, "pass_strict": not remaining})
+                res = _filter_doc(truth.resume)
+                truth = truth.model_copy(update={
+                    "resume": res,
+                    "all_supported": res.pass_strict,
+                })
 
-            def _run_ats():
-                try:
-                    result = self.verification_agent.review_ats_keyword(
-                        docs, job, career,
-                        exemptions=sorted(suppressed_ats_issues) if suppressed_ats_issues else None,
-                    )
-                    self._progress(progress, "    \u2713 ATS keyword review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("ATS-keyword review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]ATS-keyword review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_grammar():
-                try:
-                    result = self.verification_agent.review_grammar(
-                        docs,
-                        exemptions=sorted(suppressed_grammar_issues) if suppressed_grammar_issues else None,
-                    )
-                    self._progress(progress, "    \u2713 Grammar review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("Grammar review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Grammar review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_voice():
-                try:
-                    result = self.verification_agent.review_voice(
-                        docs, voice,
-                        exemptions=sorted(suppressed_voice_issues) if suppressed_voice_issues else None,
-                    )
-                    self._progress(progress, "    \u2713 Voice review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("Voice review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Voice review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_ai():
-                try:
-                    result = self.verification_agent.review_ai_detection(
-                        docs,
-                        exemptions=sorted(suppressed_ai_phrases) if suppressed_ai_phrases else None,
-                    )
-                    self._progress(progress, "    \u2713 AI detection review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("AI-detection review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]AI-detection review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_hm():
-                try:
-                    result = self.verification_agent.review_hiring_manager(
-                        docs, job,
-                        exemptions=sorted(suppressed_hm_issues) if suppressed_hm_issues else None,
-                    )
-                    self._progress(progress, "    \u2713 Hiring manager review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("Hiring-manager review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Hiring-manager review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_pruning():
-                try:
-                    result = self.verification_agent.review_relevance_pruning(
-                        docs, job,
-                        exemptions=sorted(suppressed_pruning_issues) if suppressed_pruning_issues else None,
-                    )
-                    self._progress(progress, "    \u2713 Relevance pruning review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("Relevance-pruning review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Relevance-pruning review skipped: {exc}[/yellow]")
-                    return None
-
-            def _run_narrative():
-                if not context.narrative or not context.narrative.thesis:
-                    return None
-                try:
-                    result = self.verification_agent.review_narrative_coherence(
-                        docs, context.narrative,
-                        exemptions=sorted(suppressed_narrative_issues) if suppressed_narrative_issues else None,
-                    )
-                    self._progress(progress, "    \u2713 Narrative coherence review complete")
-                    return result
-                except Exception as exc:
-                    logging.warning("Narrative-coherence review failed (%s)", exc)
-                    self._progress(progress, f"[yellow]Narrative-coherence review skipped: {exc}[/yellow]")
-                    return None
-
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 8)) as pool:
-                truth_future = pool.submit(_run_truth)
-                ats_future = pool.submit(_run_ats)
-                grammar_future = pool.submit(_run_grammar)
-                voice_future = pool.submit(_run_voice)
-                ai_future = pool.submit(_run_ai)
-                hm_future = pool.submit(_run_hm)
-                pruning_future = pool.submit(_run_pruning)
-                narrative_future = pool.submit(_run_narrative)
-
-                truth = truth_future.result()
-                ats_result = ats_future.result()
-                grammar_result = grammar_future.result()
-                voice_result = voice_future.result()
-                ai_result = ai_future.result()
-                hm_result = hm_future.result()
-                pruning_result = pruning_future.result()
-                narrative_result = narrative_future.result()
-
-            # Filter out items accepted as false positives in earlier passes.
-            truth, voice_result, ai_result, hm_result, pruning_result, ats_result, grammar_result, narrative_result = self._apply_suppressions(
-                truth, voice_result, ai_result, hm_result, pruning_result,
-                ats_result, grammar_result, narrative_result,
-                suppressed_claims, suppressed_ai_phrases, suppressed_voice_issues,
-                suppressed_hm_issues, suppressed_pruning_issues,
-                suppressed_ats_issues, suppressed_grammar_issues,
-                suppressed_narrative_issues,
-            )
-
-            # Summarise all reviews
             if truth:
                 self._progress(progress, self._summarise_truth(truth))
-            if ats_result:
-                self._progress(progress, self._summarise_ats_keyword(ats_result))
-            if grammar_result:
-                self._progress(progress, self._summarise_grammar(grammar_result))
-            if voice_result:
-                self._progress(progress, self._summarise_voice(voice_result))
-            if ai_result:
-                self._progress(progress, self._summarise_ai(ai_result))
-            if hm_result:
-                self._progress(progress, self._summarise_hiring_manager(hm_result))
-            if pruning_result:
-                self._progress(progress, self._summarise_relevance_pruning(pruning_result))
-            if narrative_result:
-                self._progress(progress, self._summarise_narrative_coherence(narrative_result))
 
-            # Check all gates
             truth_ok = truth is None or truth.all_supported
-            ats_ok = ats_result is None or ats_result.alignment_score in ("strong", "moderate")
-
-            is_late_pass = pass_num >= _RELAXED_PASS_START
-            if is_late_pass:
-                grammar_ok = grammar_result is None or (
-                    len(grammar_result.resume_issues)
-                ) <= 2
-            else:
-                grammar_ok = grammar_result is None or grammar_result.clean
-
-            voice_ok = voice_result is None or voice_result.overall_match in ("strong", "moderate")
-            narrative_ok = narrative_result is None or narrative_result.alignment in ("strong", "moderate")
-
-            if is_late_pass:
-                total_ai_flags = (
-                    len(ai_result.resume_flags)
-                ) if ai_result else 0
-                ai_ok = ai_result is None or total_ai_flags <= _AI_FLAG_TOLERANCE_LATE
-            else:
-                ai_ok = ai_result is None or not ai_result.resume_flags
-
-            # Hiring manager and relevance pruning are advisory â€” they feed
-            # findings into repair but never block convergence (no hard gate).
-            all_ok = truth_ok and ats_ok and grammar_ok and voice_ok and ai_ok and narrative_ok
-
-            if all_ok:
+            if truth_ok:
                 break
 
-            # Single unified repair with all findings
-            self._progress(progress, "  Repair (up to 3 LLM calls, thinking enabled)...")
+            # Repair with truthfulness findings only.
+            self._progress(progress, "  Repair (truthfulness)...")
             repair_pass = self.repair_agent.repair_unified(
-                docs, truth, voice_result, ai_result,
+                docs, truth, None, None,
                 career, voice, job, context,
                 feedback=feedback,
-                hm_review=hm_result,
-                pruning_review=pruning_result,
-                ats_review=ats_result,
-                grammar_review=grammar_result,
-                narrative_review=narrative_result,
                 pass_num=pass_num,
                 prior_edits=self._build_prior_edits(repair_results),
             )
             repair_results.append(repair_pass)
             suppressed_claims.update(repair_pass.accepted_claims)
-            suppressed_ai_phrases.update(repair_pass.accepted_ai_phrases)
-            suppressed_voice_issues.update(repair_pass.accepted_voice_issues)
-            suppressed_hm_issues.update(repair_pass.accepted_hm_issues)
-            suppressed_pruning_issues.update(repair_pass.accepted_pruning_issues)
-            suppressed_ats_issues.update(repair_pass.accepted_ats_issues)
-            suppressed_grammar_issues.update(repair_pass.accepted_grammar_issues)
-            suppressed_narrative_issues.update(repair_pass.accepted_narrative_issues)
             if repair_pass.edits:
                 self._progress(progress, self._summarise_repair(repair_pass))
-            if repair_pass.accepted_claims or repair_pass.accepted_ai_phrases or repair_pass.accepted_voice_issues or repair_pass.accepted_hm_issues or repair_pass.accepted_pruning_issues or repair_pass.accepted_ats_issues or repair_pass.accepted_grammar_issues or repair_pass.accepted_narrative_issues:
+            if repair_pass.accepted_claims:
                 self._progress(progress, self._summarise_acceptances(repair_pass))
             if repair_pass.failed_edits:
                 self._progress(progress, self._summarise_failed_edits(repair_pass))
 
             if on_repair_pass is not None:
-                pass_reviews = ReviewBundle(
-                    truthfulness=truth,
-                    voice=voice_result,
-                    ai_detection=ai_result,
-                    hiring_manager=hm_result,
-                    relevance_pruning=pruning_result,
-                    ats_keyword=ats_result,
-                    grammar=grammar_result,
-                    narrative_coherence=narrative_result,
-                )
+                pass_reviews = ReviewBundle(truthfulness=truth)
                 on_repair_pass(repair_sub_pass, docs, pass_reviews)
             repair_sub_pass += 1
 
-        return ReviewBundle(
-            truthfulness=truth,
-            voice=voice_result,
-            ai_detection=ai_result,
-            hiring_manager=hm_result,
-            relevance_pruning=pruning_result,
-            ats_keyword=ats_result,
-            grammar=grammar_result,
-            narrative_coherence=narrative_result,
-        ), repair_results, ExemptedPhrases(
-            claims=sorted(suppressed_claims),
-            ai_phrases=sorted(suppressed_ai_phrases),
-            voice_issues=sorted(suppressed_voice_issues),
-            hm_issues=sorted(suppressed_hm_issues),
-            pruning_issues=sorted(suppressed_pruning_issues),
-            ats_issues=sorted(suppressed_ats_issues),
-            grammar_issues=sorted(suppressed_grammar_issues),
-            narrative_issues=sorted(suppressed_narrative_issues),
+        # ── Advisory reviews (single pass, all reviewers) ─────────────
+        self._progress(progress, "─── Advisory Reviews ───")
+        exempted = ExemptedPhrases(claims=sorted(suppressed_claims))
+        advisory = self._run_all_reviews(
+            docs, career, voice, job, progress,
+            exempted=exempted,
+            narrative=context.narrative,
         )
+
+        # Merge the loop's truthfulness result with advisory scores.
+        reviews = advisory.model_copy(update={"truthfulness": truth})
+
+        return reviews, repair_results, exempted
 
     def _export(
         self,

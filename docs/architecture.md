@@ -19,34 +19,27 @@ voice_profile.md + career_profile.md + job_description.md
   ResumeRefineryOrchestrator
   ┌──────────────────────────────────────────────────────────────────────┐
   │ NarrativeAgent     -> CandidacyNarrative (thesis + pillars + gaps)   │
+  │   NarrativeCriticAgent  -> critique loop (up to N passes)            │
+  │   Revises narrative until critique passes or max passes exhausted    │
   │ VoiceAgent         -> VoiceStyleGuide                                │
   │                                                                      │
   │   ── User edits narrative via /curate page (optional) ──             │
   │                                                                      │
   │ DraftingAgent      -> DocumentSet (resume only)                      │
-  │ NarrativeCoverageAgent -> NarrativeCoverageResult (advisory)         │
-  │   Compares pillars vs resume, enriches with career-evidenced gaps    │
-  │ VerificationAgent  -> Unified review + repair loop:                  │
-  │   All 8 reviewers concurrent -> single repair if any gate fails      │
+  │ VerificationAgent  -> Truthfulness-only repair loop                  │
   │ RepairAgent        -> targeted rewrites with prior-edit context       │
+  │ All 8 reviewers    -> single advisory pass (no repair)               │
   └──────────────────────────────────────────────────────────────────────┘
             │
             ▼
-    SessionStore.save_documents() + save_context() + save_coverage() + DOCX export
+    SessionStore.save_documents() + save_context() + DOCX export
     (saved immediately after generation, before review loop)
             │
             ▼
-    NarrativeCoverageAgent (advisory — runs once, not in loop):
-      Compares narrative pillars against resume content.
-      Identifies pillars backed by career evidence but not in the resume.
-      Inserts suggested content at anchor sections.
-      Never blocks convergence.
-            │
-            ▼
-    Unified review + repair loop (per pass):
-      All 8 reviewers run concurrently (truth, ATS, grammar,
-        voice, AI detection, HM, pruning, narrative coherence)
-      Suppressions applied, gates checked, single repair if any fail
+    Truthfulness repair loop (per pass):
+      Only the truthfulness reviewer runs in the loop.
+      If unsupported claims remain after suppression, a repair pass
+        targets only truthfulness findings.
       Edit-region tracking (annotated pass-through): each repair records
         edits tagged with the reviewer that triggered them. On subsequent
         passes, the repair agent receives a "Prior Edits" summary listing
@@ -60,7 +53,14 @@ voice_profile.md + career_profile.md + job_description.md
         overlapping text spans, they are merged via a lightweight LLM call
         that combines all overlapping edits' intents into one replacement.
         Whitespace-normalized matching handles LLM quoting imprecision.
-      Loop repeats until all gates pass or max passes exhausted
+      Loop repeats until truthfulness passes or max passes exhausted
+            │
+            ▼
+    Advisory reviews (single pass, all 8 reviewers):
+      All 8 reviewers run once (truth, ATS, grammar, voice, AI detection,
+        HM, pruning, narrative coherence).
+      Results are merged with the loop's truthfulness result.
+      Advisory scores are informational — they never trigger repair.
             │
             ▼
     SessionStore.save_reviews() + final DOCX export
@@ -300,6 +300,15 @@ the pillar theme. Evidence may overlap across pillars when it genuinely supports
 multiple themes. When the LLM is unavailable, a keyword overlap fallback produces a
 basic narrative. Pillars are capped at 5 to keep the narrative focused.
 
+**Narrative self-critique:** After the initial narrative is generated, a
+`NarrativeCriticAgent` evaluates it against seven quality criteria (thesis specificity,
+pillar-JD alignment, evidence exhaustiveness, pillar quality, evidence omission, gap
+framing honesty, and pillar coverage of resume content). If the critique identifies
+issues, the NarrativeAgent revises the narrative using the critique findings. This
+loop runs up to `RESUME_REFINERY_MAX_NARRATIVE_CRITIQUE_PASSES` times (default 2).
+This is the highest-leverage intervention: a strong narrative prevents most downstream
+quality issues (voice, ATS, coherence) at generation time.
+
 **Intermediate artifacts for explainability:** `CandidacyNarrative` and `VoiceStyleGuide`
 are explicit artifacts that can be inspected in the UI and reasoned about in reviews.
 
@@ -310,11 +319,13 @@ targeted refinement cheap and traceable.
 is especially valuable for the review passes, where the model needs to reason carefully
 about voice match and AI-detection signals before producing a JSON result.
 
-**Verification gates:** Truthfulness, voice match, and AI-detection are treated as
-separate verification concerns. The truthfulness reviewer receives the career profile
-and job description as grounding sources; voice and AI-detection reviewers operate
-only on the documents and voice profile. Truth checks run before final acceptance,
-and repair passes target only failing documents.
+**Verification gates:** Truthfulness is the only hard gate in the repair loop —
+unsupported claims must be fixed before a resume ships. All other reviewers (voice
+match, AI detection, ATS alignment, grammar, hiring-manager, relevance pruning,
+narrative coherence) run once after the truthfulness loop as an advisory pass. Their
+scores are recorded and displayed but never trigger repair. This design eliminates
+cross-reviewer oscillation (e.g., the HM reviewer requesting bolder claims that the
+truthfulness reviewer then rejects) and dramatically reduces LLM calls per run.
 
 **Raw content over structured parsing:** Input files are passed to the LLM as raw text.
 This is intentional — flexible, user-friendly input formats are more important than
