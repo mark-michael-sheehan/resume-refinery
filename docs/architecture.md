@@ -347,5 +347,21 @@ all hiring-manager suggestions except the one about the summary section") withou
 re-running the reviewers up front. Reviewer findings are labeled as "PRIOR REVIEWER
 CONTEXT — REFERENCE ONLY" in the repair prompt so the LLM only acts on them when
 the user's feedback explicitly requests it — they are never applied autonomously.
-After the repair pass, a fresh set of advisory reviews runs once on the updated
+
+*Section operations:* Before planning edits, the repair agent extracts a section
+index from the document via a lightweight LLM call (heading, start/end lines).
+This index enables `remove_section` and `add_section` operations alongside the
+standard find/replace edits. Section ops are resolved in Phase 0 of `apply_edits`
+— `remove_section` is expanded into a find/replace that targets the full section
+text, and `add_section` into an `insert_after` anchored at the end of a reference
+section. The section index is also included in the repair prompt so the LLM can
+reason about document structure.
+
+*Multi-pass retry:* The refine loop runs up to `RESUME_REFINERY_MAX_REFINE_PASSES`
+times (default 2). If the first pass produces failed edits (find text that could
+not be located in the document), those failures are surfaced as `prior_edits`
+context in subsequent passes so the LLM can re-attempt with corrected find strings.
+The loop exits early when no edits fail.
+
+After the repair passes, a fresh set of advisory reviews runs once on the updated
 documents.

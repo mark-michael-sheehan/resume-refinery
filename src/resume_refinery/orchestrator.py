@@ -298,23 +298,64 @@ class ResumeRefineryOrchestrator:
         # and docs outside the session's selected_docs.
         originals = current_docs.model_copy(deep=True)
 
-        # Apply user's instructions via the repair agent (single pass).
-        self._progress(progress, "Applying refinement instructions...")
-        repair_pass = self.repair_agent.repair_unified(
-            current_docs,
-            prior_reviews.truthfulness,
-            prior_reviews.voice,
-            prior_reviews.ai_detection,
-            career, voice, job, context,
-            feedback=feedback,
-            hm_review=prior_reviews.hiring_manager,
-            pruning_review=prior_reviews.relevance_pruning,
-            ats_review=prior_reviews.ats_keyword,
-            grammar_review=prior_reviews.grammar,
-            narrative_review=prior_reviews.narrative_coherence,
-        )
-        if repair_pass.edits:
-            self._progress(progress, self._summarise_repair(repair_pass))
+        # Multi-pass refinement: retry when edits fail to apply.
+        max_refine_passes = int(os.getenv("RESUME_REFINERY_MAX_REFINE_PASSES", "2"))
+        all_repair_passes: list[RepairPassResult] = []
+        cumulative_prior_edits: dict[str, str] = {}
+
+        for refine_pass in range(max_refine_passes):
+            if refine_pass == 0:
+                self._progress(progress, "Applying refinement instructions...")
+            else:
+                self._progress(
+                    progress,
+                    f"Retrying {sum(len(v) for v in repair_pass.failed_edits.values())} "
+                    f"failed edit(s) (pass {refine_pass + 1}/{max_refine_passes})...",
+                )
+
+            repair_pass = self.repair_agent.repair_unified(
+                current_docs,
+                prior_reviews.truthfulness,
+                prior_reviews.voice,
+                prior_reviews.ai_detection,
+                career, voice, job, context,
+                feedback=feedback,
+                hm_review=prior_reviews.hiring_manager,
+                pruning_review=prior_reviews.relevance_pruning,
+                ats_review=prior_reviews.ats_keyword,
+                grammar_review=prior_reviews.grammar,
+                narrative_review=prior_reviews.narrative_coherence,
+                pass_num=refine_pass,
+                prior_edits=cumulative_prior_edits if refine_pass > 0 else None,
+            )
+            all_repair_passes.append(repair_pass)
+            if repair_pass.edits:
+                self._progress(progress, self._summarise_repair(repair_pass))
+
+            # If there are no failed edits, we're done.
+            if not repair_pass.failed_edits:
+                break
+
+            # Build prior_edits context for the retry: describe which edits
+            # failed so the LLM can re-attempt with corrected find strings.
+            for doc_key, failures in repair_pass.failed_edits.items():
+                lines = cumulative_prior_edits.get(doc_key, "").split("\n") if cumulative_prior_edits.get(doc_key) else []
+                for fe in failures:
+                    lines.append(
+                        f"FAILED EDIT (could not locate in document): "
+                        f"find={fe.get('find', '')!r} → replace={fe.get('replace', '')!r} "
+                        f"reason={fe.get('reason', '')!r}"
+                    )
+                cumulative_prior_edits[doc_key] = "\n".join(lines)
+
+            self._progress(
+                progress,
+                f"[yellow]{sum(len(v) for v in repair_pass.failed_edits.values())} "
+                f"edit(s) failed to locate their target text.[/yellow]",
+            )
+
+        # Merge all repair passes into a single combined result.
+        repair_pass = self._merge_repair_passes(all_repair_passes)
 
         # Accumulate any new acceptances from the repair pass.
         suppressed_claims = set(exempted.claims)
@@ -405,7 +446,7 @@ class ResumeRefineryOrchestrator:
             session=session,
             documents=current_docs,
             reviews=reviews,
-            repair_passes=[repair_pass],
+            repair_passes=all_repair_passes,
             narrative=context.narrative,
             voice_style_guide=context.voice_style_guide,
             exported_paths={key: str(path) for key, path in exported.items()},
@@ -925,6 +966,30 @@ class ResumeRefineryOrchestrator:
                 if issue.suggestion:
                     parts.append(f"      Suggestion: {issue.suggestion}")
         return "\n".join(parts)
+
+    @staticmethod
+    def _merge_repair_passes(passes: list[RepairPassResult]) -> RepairPassResult:
+        """Merge multiple repair passes into one combined result."""
+        if len(passes) == 1:
+            return passes[0]
+        merged = RepairPassResult()
+        for p in passes:
+            for key, edits in p.edits.items():
+                merged.edits.setdefault(key, []).extend(edits)
+            for key, regions in p.edit_regions.items():
+                merged.edit_regions.setdefault(key, []).extend(regions)
+            merged.accepted_claims.extend(p.accepted_claims)
+            merged.accepted_ai_phrases.extend(p.accepted_ai_phrases)
+            merged.accepted_voice_issues.extend(p.accepted_voice_issues)
+            merged.accepted_hm_issues.extend(p.accepted_hm_issues)
+            merged.accepted_pruning_issues.extend(p.accepted_pruning_issues)
+            merged.accepted_ats_issues.extend(p.accepted_ats_issues)
+            merged.accepted_grammar_issues.extend(p.accepted_grammar_issues)
+            merged.accepted_narrative_issues.extend(p.accepted_narrative_issues)
+        # Only track failed edits from the final pass (earlier failures may
+        # have been resolved by subsequent passes).
+        merged.failed_edits = passes[-1].failed_edits
+        return merged
 
     def _summarise_repair(self, repair_pass: RepairPassResult) -> str:
         doc_labels = self._doc_labels()

@@ -276,6 +276,7 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 | Variable | Default | Description |
 |---|---|---|
 | `RESUME_REFINERY_MAX_REPAIR_PASSES` | `3` | Max truthfulness review+repair passes per run. Each pass runs only the truthfulness reviewer, checks for unsupported claims, and — if any remain — runs the repair agent before the next pass. After the loop, all 8 reviewers run once as advisory. Set to `1` to review once with no repair. |
+| `RESUME_REFINERY_MAX_REFINE_PASSES` | `2` | Max retry passes during user-driven refinement (`refine_session_run`). When edits fail to locate their target text, the loop retries with failed-edit context so the LLM can re-attempt with corrected find strings. Set to `1` to disable retry. |
 | `RESUME_REFINERY_EDIT_FAIL_THRESHOLD` | `3` | Max surgical edits that may fail to match their target text in a single repair call before an `EditApplicationError` is raised. |
 
 ### Narrative quality

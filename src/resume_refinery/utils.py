@@ -10,7 +10,7 @@ from typing import Callable, TypedDict
 
 from dotenv import load_dotenv
 
-from .models import EditRegion, ReviewerPriority
+from .models import EditRegion, ReviewerPriority, SectionEntry
 
 load_dotenv()
 
@@ -26,6 +26,7 @@ class EditOp(TypedDict, total=False):
     replace: str
     reason: str
     insert_after: bool
+    operation: str  # "remove_section" or "add_section"
 
 
 class EditApplicationError(Exception):
@@ -176,6 +177,84 @@ satisfies all the overlapping edits' intents, or ``None`` on failure.
 
 
 # ------------------------------------------------------------------
+# Section-operation resolver
+# ------------------------------------------------------------------
+
+
+def _resolve_section_ops(
+    document: str,
+    edits: list[EditOp],
+    section_index: list[SectionEntry] | None,
+) -> list[EditOp]:
+    """Pre-process edits, converting section operations into regular find/replace.
+
+    ``remove_section`` edits are translated into a find/replace where ``find``
+    is the full section text (heading + body) and ``replace`` is empty.
+
+    ``add_section`` edits are translated into an ``insert_after`` edit where
+    ``find`` is the last line of the anchor section and ``replace`` is the new
+    section content.
+
+    Regular edits are passed through unchanged.
+    """
+    if not section_index:
+        # Without a section index, section ops cannot be resolved.
+        # Pass them through as-is (they'll likely fail the locate phase).
+        return edits
+
+    lines = document.split("\n")
+
+    # Build a lookup from stripped heading text to SectionEntry.
+    heading_map: dict[str, SectionEntry] = {}
+    for entry in section_index:
+        heading_map[entry.heading.strip()] = entry
+
+    resolved: list[EditOp] = []
+    for edit in edits:
+        op = edit.get("operation", "")
+        if op == "remove_section":
+            heading = edit.get("find", "").strip()
+            entry = heading_map.get(heading)
+            if entry is None:
+                log.warning("remove_section: heading %r not found in section index", heading)
+                resolved.append(edit)  # will fail locate as a normal edit
+                continue
+            # Extract the full section text from the document.
+            start_idx = max(0, entry.start_line - 1)
+            end_idx = min(len(lines), entry.end_line)
+            section_text = "\n".join(lines[start_idx:end_idx])
+            # Include trailing newline if section isn't at end of doc.
+            if end_idx < len(lines):
+                section_text += "\n"
+            resolved.append({
+                "find": section_text,
+                "replace": "",
+                "reason": edit.get("reason", f"remove_section: {heading}"),
+            })
+        elif op == "add_section":
+            anchor_heading = edit.get("find", "").strip()
+            new_content = edit.get("replace", "")
+            anchor_entry = heading_map.get(anchor_heading)
+            if anchor_entry is None:
+                log.warning("add_section: anchor heading %r not found in section index", anchor_heading)
+                resolved.append(edit)  # will fail locate as a normal edit
+                continue
+            # Use the last line of the anchor section as the insert anchor.
+            anchor_line_idx = min(anchor_entry.end_line - 1, len(lines) - 1)
+            anchor_text = lines[anchor_line_idx]
+            resolved.append({
+                "find": anchor_text,
+                "replace": "\n" + new_content.strip() + "\n" if new_content.strip() else "",
+                "insert_after": True,
+                "reason": edit.get("reason", f"add_section after: {anchor_heading}"),
+            })
+        else:
+            resolved.append(edit)
+
+    return resolved
+
+
+# ------------------------------------------------------------------
 # apply_edits — main entry point
 # ------------------------------------------------------------------
 
@@ -188,8 +267,13 @@ def apply_edits(
     reviewer: ReviewerPriority = "truthfulness",
     pass_num: int = 0,
     merge_fn: MergeFn | None = None,
+    section_index: list[SectionEntry] | None = None,
 ) -> tuple[str, list[EditRegion], list[EditOp]]:
     """Apply surgical find/replace edits to *document*.
+
+    **Phase 0 — Resolve section ops:** Edits with ``operation`` set to
+    ``remove_section`` or ``add_section`` are translated into regular
+    find/replace (or insert_after) edits using *section_index*.
 
     **Phase 1 — Locate:** Each edit's ``find`` text is located in the
     original document (exact match first, whitespace-normalized fallback
@@ -213,6 +297,11 @@ def apply_edits(
     Returns ``(modified_document, edit_regions, failed_edits)``.
     """
     threshold = fail_threshold if fail_threshold is not None else _EDIT_FAIL_THRESHOLD
+
+    # ------------------------------------------------------------------
+    # Phase 0 — resolve section operations into regular edits.
+    # ------------------------------------------------------------------
+    edits = _resolve_section_ops(document, edits, section_index)
 
     # ------------------------------------------------------------------
     # Phase 1 — locate every edit in the original document.

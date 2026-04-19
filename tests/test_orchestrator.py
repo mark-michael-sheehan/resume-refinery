@@ -1696,3 +1696,214 @@ def test_coverage_result_not_persisted(tmp_path, monkeypatch, career_profile, vo
     loaded = store.load_coverage(result.session)
     assert loaded is None
     assert result.coverage_result is None
+
+
+# ---------------------------------------------------------------------------
+# _merge_repair_passes
+# ---------------------------------------------------------------------------
+
+
+def test_merge_repair_passes_single_pass():
+    """Single pass should be returned as-is."""
+    from resume_refinery.models import RepairEdit
+    p = RepairPassResult(
+        edits={"resume": [RepairEdit(find="a", replace="b", reviewer="truthfulness")]},
+        accepted_claims=["claim1"],
+    )
+    merged = ResumeRefineryOrchestrator._merge_repair_passes([p])
+    assert merged is p
+
+
+def test_merge_repair_passes_combines_edits():
+    """Multiple passes should have their edits and acceptances combined."""
+    from resume_refinery.models import RepairEdit
+    p1 = RepairPassResult(
+        edits={"resume": [RepairEdit(find="a", replace="b", reviewer="truthfulness")]},
+        accepted_claims=["claim1"],
+        failed_edits={"resume": [{"find": "missing", "replace": "x"}]},
+    )
+    p2 = RepairPassResult(
+        edits={"resume": [RepairEdit(find="c", replace="d", reviewer="voice")]},
+        accepted_ai_phrases=["phrase1"],
+        failed_edits={},
+    )
+    merged = ResumeRefineryOrchestrator._merge_repair_passes([p1, p2])
+    assert len(merged.edits["resume"]) == 2
+    assert merged.accepted_claims == ["claim1"]
+    assert merged.accepted_ai_phrases == ["phrase1"]
+    # Failed edits should come from the LAST pass only
+    assert merged.failed_edits == {}
+
+
+def test_merge_repair_passes_failed_edits_from_last():
+    """Failed edits should always come from the final pass."""
+    p1 = RepairPassResult(failed_edits={})
+    p2 = RepairPassResult(failed_edits={"resume": [{"find": "still broken"}]})
+    merged = ResumeRefineryOrchestrator._merge_repair_passes([p1, p2])
+    assert merged.failed_edits == {"resume": [{"find": "still broken"}]}
+
+
+# ---------------------------------------------------------------------------
+# Multi-pass refinement (retry on failed edits)
+# ---------------------------------------------------------------------------
+
+
+def test_refine_retries_on_failed_edits(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """refine_session_run should retry when repair_unified reports failed edits."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    monkeypatch.setenv("RESUME_REFINERY_MAX_REFINE_PASSES", "3")
+    store = SessionStore()
+
+    class RetryRepairAgent:
+        """First call returns failed edits; second call succeeds."""
+        def __init__(self):
+            self.call_count = 0
+
+        def repair_unified(self, docs, truth, voice_review, ai_review, career,
+                           voice, job, context, feedback=None, hm_review=None,
+                           pruning_review=None, ats_review=None,
+                           grammar_review=None, narrative_review=None,
+                           preserve_instructions=None, phase="a", pass_num=0,
+                           prior_edits=None):
+            self.call_count += 1
+            docs.resume = "resume repaired"
+            if self.call_count == 1:
+                # First pass: some edits fail
+                return RepairPassResult(
+                    failed_edits={"resume": [{"find": "missing text", "replace": "new"}]},
+                )
+            # Second pass: all edits succeed
+            return RepairPassResult()
+
+    retry_repair = RetryRepairAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        narrative_agent=FakeNarrativeAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
+    )
+
+    # Create initial session
+    first = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+
+    # Swap in retry agent and refine
+    orchestrator.repair_agent = retry_repair
+    result = orchestrator.refine_session_run(
+        first.session.session_id,
+        "Add a certifications section",
+    )
+
+    # Should have been called twice (first pass fails, second succeeds)
+    assert retry_repair.call_count == 2
+    # Repair passes list should contain both passes
+    assert len(result.repair_passes) == 2
+
+
+def test_refine_stops_at_max_passes(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """refine_session_run should stop retrying after RESUME_REFINERY_MAX_REFINE_PASSES."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    monkeypatch.setenv("RESUME_REFINERY_MAX_REFINE_PASSES", "2")
+    store = SessionStore()
+
+    class AlwaysFailRepairAgent:
+        """Every call returns failed edits."""
+        def __init__(self):
+            self.call_count = 0
+
+        def repair_unified(self, docs, truth, voice_review, ai_review, career,
+                           voice, job, context, feedback=None, hm_review=None,
+                           pruning_review=None, ats_review=None,
+                           grammar_review=None, narrative_review=None,
+                           preserve_instructions=None, phase="a", pass_num=0,
+                           prior_edits=None):
+            self.call_count += 1
+            docs.resume = "resume repaired"
+            return RepairPassResult(
+                failed_edits={"resume": [{"find": "unfindable", "replace": "x"}]},
+            )
+
+    always_fail = AlwaysFailRepairAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        narrative_agent=FakeNarrativeAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
+    )
+
+    first = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+
+    orchestrator.repair_agent = always_fail
+    result = orchestrator.refine_session_run(
+        first.session.session_id,
+        "Rewrite everything",
+    )
+
+    # Should cap at 2 passes
+    assert always_fail.call_count == 2
+    assert len(result.repair_passes) == 2
+
+
+def test_refine_passes_prior_edits_on_retry(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """On retry, prior_edits should contain descriptions of failed edits."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    monkeypatch.setenv("RESUME_REFINERY_MAX_REFINE_PASSES", "2")
+    store = SessionStore()
+
+    class InspectingRepairAgent:
+        """Captures prior_edits arg on the second call."""
+        def __init__(self):
+            self.call_count = 0
+            self.last_prior_edits = None
+
+        def repair_unified(self, docs, truth, voice_review, ai_review, career,
+                           voice, job, context, feedback=None, hm_review=None,
+                           pruning_review=None, ats_review=None,
+                           grammar_review=None, narrative_review=None,
+                           preserve_instructions=None, phase="a", pass_num=0,
+                           prior_edits=None):
+            self.call_count += 1
+            self.last_prior_edits = prior_edits
+            docs.resume = "resume repaired"
+            if self.call_count == 1:
+                return RepairPassResult(
+                    failed_edits={"resume": [{"find": "old text", "replace": "new text", "reason": "fix voice"}]},
+                )
+            return RepairPassResult()
+
+    inspecting = InspectingRepairAgent()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        narrative_agent=FakeNarrativeAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=AlwaysPassVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
+    )
+
+    first = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=True,
+    )
+
+    orchestrator.repair_agent = inspecting
+    orchestrator.refine_session_run(
+        first.session.session_id,
+        "Fix voice issues",
+    )
+
+    assert inspecting.call_count == 2
+    # Second call should receive prior_edits with the failed edit info
+    assert inspecting.last_prior_edits is not None
+    assert "resume" in inspecting.last_prior_edits
+    assert "FAILED EDIT" in inspecting.last_prior_edits["resume"]
+    assert "old text" in inspecting.last_prior_edits["resume"]

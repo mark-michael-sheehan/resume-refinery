@@ -685,10 +685,18 @@ class DocumentEditHistory(BaseModel):
 
 class RepairEdit(BaseModel):
     find: str
-    replace: str
+    replace: str = ""
     reason: str = ""
     reviewer: str = Field(default="", description="Which reviewer triggered this edit")
     insert_after: bool = Field(default=False, description="When True, 'find' is an anchor; 'replace' is inserted after the anchor without removing it")
+    operation: Optional[str] = Field(default=None, description="Section-level operation: 'remove_section' or 'add_section'. When set, overrides normal find/replace behaviour.")
+
+
+class SectionEntry(BaseModel):
+    """A single section extracted from a document's structure."""
+    heading: str = Field(description="Exact heading line including # prefix, or '' for preamble")
+    start_line: int = Field(description="1-based line number where the heading appears")
+    end_line: int = Field(description="1-based line number of the last content line of this section")
 
 
 class RepairPassResult(BaseModel):

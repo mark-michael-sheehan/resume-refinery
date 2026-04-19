@@ -107,3 +107,22 @@ ensure convergence.
 | CR-9.8 | Duplicate `find` texts (two edits targeting the same string at the same position) are reassigned to successive occurrences of that string in the document. |
 | CR-9.9 | `apply_edits` returns a 3-tuple `(document, edit_regions, failed_edits)`. The third element is a list of `EditOp` dicts for edits that failed Phase 1 locate (could not find the `find` text via exact or whitespace-normalized matching). |
 | CR-9.10 | `RepairPassResult` includes a `failed_edits` field (dict mapping document key to list of failed edit dicts). The orchestrator emits a progress message listing each failed edit's `find` snippet and reason when any locate failures occur. |
+
+## CR-10 Section Operations
+
+| ID | Requirement |
+|---|---|
+| CR-10.1 | Before planning edits, the repair agent extracts a **section index** from the document via a lightweight LLM call (`extract_section_index`). The index is a list of `SectionEntry(heading, start_line, end_line)` objects. The index is included in the repair prompt as a "Document Structure" block so the LLM can reason about section boundaries. |
+| CR-10.2 | The `RepairEdit` model supports an optional `operation` field with two section-level values: `remove_section` (delete an entire section by heading) and `add_section` (insert a new section after an anchor section). |
+| CR-10.3 | Section operations are resolved in **Phase 0** of `apply_edits` via `_resolve_section_ops`. `remove_section` is expanded into a find/replace where `find` is the full section text (heading + body extracted from the document using the section index line ranges) and `replace` is empty. `add_section` is expanded into an `insert_after` edit where `find` is the last line of the anchor section and `replace` is the new section content. |
+| CR-10.4 | If no section index is available (e.g. extraction failed), section operations pass through unchanged and are likely to fail the Phase 1 locate step. |
+| CR-10.5 | Section operations are subject to all existing constraints: truthfulness (no fabricated content), career-evidence backing, and reviewer priority. The repair prompt includes guidance (rules 10–13) on when and how to use section operations. |
+
+## CR-11 Multi-Pass Refinement
+
+| ID | Requirement |
+|---|---|
+| CR-11.1 | `refine_session_run` runs the repair agent in a retry loop of up to `RESUME_REFINERY_MAX_REFINE_PASSES` times (default 2, configurable via environment variable). |
+| CR-11.2 | After each pass, if `RepairPassResult.failed_edits` is non-empty, the loop builds a `prior_edits` context describing which edits failed (including their `find`, `replace`, and `reason` fields) and passes it to the next repair call so the LLM can re-attempt with corrected find strings. |
+| CR-11.3 | The loop exits early when no edits fail (i.e. `failed_edits` is empty). |
+| CR-11.4 | All repair passes are merged into a single `RepairPassResult` via `_merge_repair_passes`. Edits, edit regions, and acceptances are combined across all passes. Failed edits are taken from the final pass only (earlier failures may have been resolved by subsequent passes). |

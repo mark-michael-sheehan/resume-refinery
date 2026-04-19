@@ -2,7 +2,8 @@
 
 import pytest
 
-from resume_refinery.utils import EditApplicationError, apply_edits
+from resume_refinery.models import SectionEntry
+from resume_refinery.utils import EditApplicationError, apply_edits, _resolve_section_ops
 
 
 def test_apply_edits_basic():
@@ -412,3 +413,125 @@ def test_apply_edits_insert_after_false_is_regular():
     edits = [{"find": "BBB", "replace": "XXX", "insert_after": False}]
     result, regions, _failed = apply_edits(doc, edits, fail_threshold=0)
     assert result == "AAA XXX CCC"
+
+
+# ------------------------------------------------------------------
+# Section operation tests (_resolve_section_ops)
+# ------------------------------------------------------------------
+
+
+SECTION_DOC = """\
+# Jordan Lee
+
+jordan@example.com
+
+## Experience
+
+### Senior Engineer @ DataFlow Inc
+- Led backend migration
+- Reduced infra costs
+
+## Skills
+
+Python, Java, Kubernetes
+
+## Education
+
+B.S. Computer Science, UC Berkeley"""
+
+SECTION_INDEX = [
+    SectionEntry(heading="# Jordan Lee", start_line=1, end_line=3),
+    SectionEntry(heading="## Experience", start_line=5, end_line=9),
+    SectionEntry(heading="## Skills", start_line=11, end_line=13),
+    SectionEntry(heading="## Education", start_line=15, end_line=17),
+]
+
+
+def test_resolve_section_ops_remove_section():
+    """remove_section should translate to a find/replace that removes the full section text."""
+    edits = [{"find": "## Skills", "replace": "", "operation": "remove_section", "reason": "not relevant"}]
+    resolved = _resolve_section_ops(SECTION_DOC, edits, SECTION_INDEX)
+    assert len(resolved) == 1
+    assert resolved[0]["replace"] == ""
+    assert "## Skills" in resolved[0]["find"]
+    assert "Python, Java, Kubernetes" in resolved[0]["find"]
+    # Should be a normal find/replace (no operation key)
+    assert "operation" not in resolved[0]
+
+
+def test_resolve_section_ops_add_section():
+    """add_section should translate to an insert_after edit anchored after the target section."""
+    edits = [{"find": "## Skills", "replace": "## Certifications\n\nAWS Certified", "operation": "add_section", "reason": "missing certs"}]
+    resolved = _resolve_section_ops(SECTION_DOC, edits, SECTION_INDEX)
+    assert len(resolved) == 1
+    assert resolved[0].get("insert_after") is True
+    assert "Certifications" in resolved[0]["replace"]
+    # The anchor find should be the last line of the Skills section
+    assert resolved[0]["find"] == "Python, Java, Kubernetes"
+
+
+def test_resolve_section_ops_passthrough_regular_edit():
+    """Regular edits without operation should pass through unchanged."""
+    edits = [{"find": "Python", "replace": "Python 3.12"}]
+    resolved = _resolve_section_ops(SECTION_DOC, edits, SECTION_INDEX)
+    assert resolved == edits
+
+
+def test_resolve_section_ops_no_section_index():
+    """Without a section index, section ops should pass through as-is."""
+    edits = [{"find": "## Skills", "replace": "", "operation": "remove_section"}]
+    resolved = _resolve_section_ops(SECTION_DOC, edits, None)
+    assert resolved == edits
+    resolved2 = _resolve_section_ops(SECTION_DOC, edits, [])
+    assert resolved2 == edits
+
+
+def test_resolve_section_ops_unknown_heading():
+    """remove_section with a heading not in the index should pass through as-is."""
+    edits = [{"find": "## Awards", "replace": "", "operation": "remove_section"}]
+    resolved = _resolve_section_ops(SECTION_DOC, edits, SECTION_INDEX)
+    assert resolved == edits
+
+
+def test_resolve_section_ops_mixed_operations():
+    """A mix of regular, remove_section, and add_section should all be resolved correctly."""
+    edits = [
+        {"find": "Python", "replace": "Python 3.12"},
+        {"find": "## Skills", "replace": "", "operation": "remove_section"},
+        {"find": "## Education", "replace": "## Certifications\n\nAWS", "operation": "add_section"},
+    ]
+    resolved = _resolve_section_ops(SECTION_DOC, edits, SECTION_INDEX)
+    assert len(resolved) == 3
+    # First: regular passthrough
+    assert resolved[0] == edits[0]
+    # Second: remove_section resolved
+    assert resolved[1]["replace"] == ""
+    assert "## Skills" in resolved[1]["find"]
+    # Third: add_section resolved
+    assert resolved[2].get("insert_after") is True
+
+
+# ------------------------------------------------------------------
+# End-to-end section ops through apply_edits
+# ------------------------------------------------------------------
+
+
+def test_apply_edits_remove_section_end_to_end():
+    """apply_edits with remove_section operation should remove the entire section."""
+    edits = [{"find": "## Skills", "replace": "", "operation": "remove_section", "reason": "irrelevant"}]
+    result, regions, _failed = apply_edits(SECTION_DOC, edits, section_index=SECTION_INDEX, fail_threshold=0)
+    assert "## Skills" not in result
+    assert "Python, Java, Kubernetes" not in result
+    assert "## Experience" in result
+    assert "## Education" in result
+
+
+def test_apply_edits_add_section_end_to_end():
+    """apply_edits with add_section should insert new section after the anchor."""
+    edits = [{"find": "## Skills", "replace": "## Certifications\n\nAWS Certified", "operation": "add_section"}]
+    result, regions, _failed = apply_edits(SECTION_DOC, edits, section_index=SECTION_INDEX, fail_threshold=0)
+    assert "## Certifications" in result
+    assert "AWS Certified" in result
+    # Skills section should still be present (we're adding after it, not replacing)
+    assert "## Skills" in result
+    assert "Python, Java, Kubernetes" in result

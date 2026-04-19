@@ -32,6 +32,7 @@ from .models import (
     RepairEdit,
     RepairPassResult,
     ReviewBundle,
+    SectionEntry,
     SupportingEvidence,
     TruthfulnessResult,
     VoiceProfile,
@@ -766,7 +767,7 @@ class RepairAgent:
         all_accepted_grammar_issues: list[str] = []
         all_accepted_narrative_issues: list[str] = []
 
-        def _plan_for_key(key: str) -> tuple[str, list[dict], dict[str, list[str]]] | None:
+        def _plan_for_key(key: str) -> tuple[str, list[dict], dict[str, list[str]], list[SectionEntry]] | None:
             review_findings = self._build_review_findings(
                 key, truth, voice_review, ai_review, feedback, hm_review, pruning_review,
                 ats_review, grammar_review, narrative_review,
@@ -779,6 +780,10 @@ class RepairAgent:
             if not doc_content:
                 return None
 
+            # Extract section index via lightweight LLM call.
+            sec_index = self.extract_section_index(doc_content)
+            sec_index_text = self.format_section_index(sec_index)
+
             user_msg = repair_user_message(
                 doc_content=doc_content,
                 career_profile=career.raw_content,
@@ -787,10 +792,11 @@ class RepairAgent:
                 review_findings=review_findings,
                 prior_edits=(prior_edits or {}).get(key, ""),
                 narrative=context.narrative.raw_narrative if context.narrative else "",
+                section_index=sec_index_text,
             )
 
             edits, acceptances = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)
-            return key, edits, acceptances
+            return key, edits, acceptances, sec_index
 
         keys = ["resume"]
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -800,7 +806,7 @@ class RepairAgent:
         for result in results:
             if result is None:
                 continue
-            key, edits, acceptances = result
+            key, edits, acceptances, sec_index = result
             all_accepted_claims.extend(acceptances.get("accepted_claims", []))
             all_accepted_ai_phrases.extend(acceptances.get("accepted_ai_phrases", []))
             all_accepted_voice_issues.extend(acceptances.get("accepted_voice_issues", []))
@@ -835,6 +841,7 @@ class RepairAgent:
                     reviewer=phase_reviewer,
                     pass_num=pass_num,
                     merge_fn=self._merge_overlapping_edits,
+                    section_index=sec_index,
                 )
                 docs.set(key, repaired)
                 all_regions[key] = regions
@@ -847,6 +854,7 @@ class RepairAgent:
                         reason=e.get("reason", ""),
                         reviewer=phase_reviewer,
                         insert_after=bool(e.get("insert_after", False)),
+                        operation=e.get("operation"),
                     )
                     for e in edits
                 ]
@@ -957,6 +965,88 @@ class RepairAgent:
         }
 
     # ------------------------------------------------------------------
+    # LLM call for section index extraction
+    # ------------------------------------------------------------------
+
+    def extract_section_index(self, doc_content: str) -> list[SectionEntry]:
+        """Use a lightweight LLM call to extract section structure from a document.
+
+        Returns a list of SectionEntry objects describing each section's heading
+        and line range. Falls back to an empty list on failure.
+        """
+        from .prompts import SECTION_INDEX_SYSTEM_PROMPT, SECTION_INDEX_USER_TEMPLATE
+        from .reviewers import _normalize_llm_json
+
+        if not doc_content or not doc_content.strip():
+            return []
+
+        try:
+            response = self.client.chat(
+                model=_MODEL,
+                messages=[
+                    {"role": "system", "content": SECTION_INDEX_SYSTEM_PROMPT},
+                    {"role": "user", "content": SECTION_INDEX_USER_TEMPLATE.format(doc_content=doc_content)},
+                ],
+                think=False,
+                format={
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "heading": {"type": "string"},
+                            "start_line": {"type": "integer"},
+                            "end_line": {"type": "integer"},
+                        },
+                        "required": ["heading", "start_line", "end_line"],
+                    },
+                },
+                options={"num_ctx": _NUM_CTX, "num_predict": 2048, "temperature": 0},
+            )
+        except Exception as exc:
+            logging.warning("Section index extraction failed (%s); continuing without", exc)
+            return []
+
+        raw = (response.message.content or "").strip()
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
+        if not raw:
+            return []
+        raw = _normalize_llm_json(raw)
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logging.warning("Section index LLM returned non-JSON; continuing without")
+            return []
+
+        if not isinstance(data, list):
+            return []
+
+        entries: list[SectionEntry] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            try:
+                entries.append(SectionEntry(
+                    heading=item.get("heading", ""),
+                    start_line=int(item.get("start_line", 0)),
+                    end_line=int(item.get("end_line", 0)),
+                ))
+            except (ValueError, TypeError):
+                continue
+        return entries
+
+    @staticmethod
+    def format_section_index(entries: list[SectionEntry]) -> str:
+        """Format a section index as a human-readable string for prompt injection."""
+        if not entries:
+            return ""
+        parts: list[str] = []
+        for i, e in enumerate(entries, 1):
+            label = e.heading if e.heading else "(preamble)"
+            parts.append(f"{i}. {label} (lines {e.start_line}–{e.end_line})")
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------
     # LLM call for edit planning
     # ------------------------------------------------------------------
 
@@ -990,8 +1080,9 @@ class RepairAgent:
                                 "replace": {"type": "string"},
                                 "reason":  {"type": "string"},
                                 "insert_after": {"type": "boolean"},
+                                "operation": {"type": "string", "enum": ["remove_section", "add_section"]},
                             },
-                            "required": ["find", "replace"],
+                            "required": ["find"],
                         },
                     },
                     "accepted_claims":        {"type": "array", "items": {"type": "string"}},

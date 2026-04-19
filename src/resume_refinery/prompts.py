@@ -778,12 +778,52 @@ Return JSON only — no markdown fences, no explanation.
 
 
 # ---------------------------------------------------------------------------
+# Section index extraction prompt (lightweight LLM call)
+# ---------------------------------------------------------------------------
+
+SECTION_INDEX_SYSTEM_PROMPT = """\
+You are a document structure analyser. Given a Markdown document, identify \
+every top-level section. A section starts at a heading line (any level: #, \
+##, ###, etc.) and ends just before the next heading of equal or higher level, \
+or at the end of the document. Content before the first heading is the \
+"preamble" (include it only if non-empty, using heading "").
+
+Return a JSON array of objects, one per section, in document order:
+[
+  {
+    "heading": "<exact heading text including any # prefix, e.g. '## Experience'>",
+    "start_line": <1-based line number where the heading appears>,
+    "end_line": <1-based line number of the last content line of this section>
+  }
+]
+
+Rules:
+- Include ALL headings at every level (#, ##, ###, ####, etc.).
+- "heading" must be the EXACT heading line from the document (with # prefix).
+- start_line is the line of the heading itself.
+- end_line is the last non-empty line before the next heading of equal or \
+  higher level (or the last line of the document for the final section).
+- Content before the first heading: set "heading" to "" and start_line to 1.
+- Return JSON only — no markdown fences, no explanation.
+"""
+
+SECTION_INDEX_USER_TEMPLATE = """\
+{doc_content}
+"""
+
+
+# ---------------------------------------------------------------------------
 # Repair prompts  (surgical find/replace edits)
 # ---------------------------------------------------------------------------
 
 REPAIR_SYSTEM_PROMPT = """\
 You are a surgical document editor. You receive a resume alongside \
-review findings and/or user instructions. For each item, choose the \
+review findings and/or user instructions. You also receive a \
+"Document Structure" block listing every section heading with its \
+line range. Use it to understand the document layout and to name \
+sections precisely in section-level operations.
+
+For each item, choose the \
 appropriate action:
 
 For REVIEWER FINDINGS (under "REVIEW FINDINGS"), choose EXACTLY ONE:
@@ -965,12 +1005,35 @@ EDIT RULES:
    verbatim in the document. "replace" is the new content to insert \
    immediately after the anchor. The anchor text is preserved — it is NOT removed. \
    Use this instead of duplicating the anchor text inside "replace".
+
+SECTION-LEVEL OPERATIONS:
+Use these when the user requests adding or removing entire sections, or when \
+a reviewer finding requires structural changes. Consult the "Document Structure" \
+block to identify exact section headings and their line ranges.
+
+10. To REMOVE an entire section, set "operation" to "remove_section". \
+    "find" must be the EXACT section heading line from the Document Structure \
+    (e.g. "## Education"). The system will locate the heading and delete \
+    everything from that heading to the end of that section (just before the \
+    next heading of equal or higher level). "replace" and "insert_after" are \
+    ignored for this operation.
+11. To ADD a new section, set "operation" to "add_section". \
+    "find" must be the EXACT heading of an existing section from the Document \
+    Structure — the new section will be inserted AFTER that section ends. \
+    "replace" must contain the full new section content including its heading \
+    (e.g. "\\n## Projects\\n\\n### My Project\\n- Built X using Y\\n"). \
+    "insert_after" is ignored for this operation.
+12. For all other edits (reword, delete a phrase, insert a bullet), use the \
+    default find/replace or insert_after operations (rules 1–9 above). Do NOT \
+    use "operation" for phrase-level edits.
+13. Section operations still obey the truthfulness and voice rules — new section \
+    content must not introduce unsupported claims or violate voice guidelines.
 """
 
 REPAIR_USER_TEMPLATE = """\
 ## Document to Edit
 {doc_content}
-
+{section_index_section}
 ## Career Profile [FACT-CHECK REFERENCE — do not copy text from this into the document]
 {career_profile}
 
@@ -998,6 +1061,17 @@ phrase to the matching accepted array). Return a single JSON object:
       "replace": "<new content to insert after the anchor>",
       "insert_after": true,
       "reason": "<which review finding this fixes>"
+    }},
+    {{
+      "find": "<exact section heading from Document Structure, e.g. '## Education'>",
+      "operation": "remove_section",
+      "reason": "<why this section should be removed>"
+    }},
+    {{
+      "find": "<exact heading of section to insert AFTER, e.g. '## Skills'>",
+      "replace": "<full new section including heading, e.g. '\\n## Projects\\n\\n### ...'>",
+      "operation": "add_section",
+      "reason": "<why this section should be added>"
     }}
   ],
   "accepted_claims":        ["<verbatim truthfulness-flagged phrase that IS supported>"],
@@ -1019,6 +1093,11 @@ Rules:
 - One edit OR one acceptance per flagged issue — do not both fix and accept the same phrase.
 - To insert new content after an anchor, set "insert_after" to true. The anchor \
   text in "find" is preserved; "replace" is inserted immediately after it.
+- To remove an entire section, set "operation" to "remove_section" and "find" \
+  to the exact section heading from the Document Structure.
+- To add a new section, set "operation" to "add_section", "find" to the heading \
+  of the section to insert after, and "replace" to the full new section content \
+  (including its heading).
 - If no edits are needed, set "edits" to [].
 - If no acceptances apply, set the accepted arrays to [].
 - Return JSON only — no markdown fences, no explanation.
@@ -1033,6 +1112,7 @@ def repair_user_message(
     review_findings: str,
     prior_edits: str = "",
     narrative: str = "",
+    section_index: str = "",
 ) -> str:
     """Build the user message for a surgical-repair call (no-think mode)."""
     if prior_edits:
@@ -1054,6 +1134,15 @@ def repair_user_message(
         )
     else:
         narrative_section = ""
+    if section_index:
+        section_index_section = (
+            "\n## Document Structure [REFERENCE — section headings with line ranges; "
+            "use for section-level operations]\n"
+            + section_index
+            + "\n"
+        )
+    else:
+        section_index_section = ""
     return REPAIR_USER_TEMPLATE.format(
         doc_content=doc_content,
         career_profile=career_profile,
@@ -1062,6 +1151,7 @@ def repair_user_message(
         review_findings=review_findings,
         prior_edits_section=prior_edits_section,
         narrative_section=narrative_section,
+        section_index_section=section_index_section,
     )
 
 
