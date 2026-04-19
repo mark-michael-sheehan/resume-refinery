@@ -277,7 +277,12 @@ class ResumeRefineryOrchestrator:
         career, voice = self.store.load_inputs(session)
         job = session.job_description
         current_docs = self.store.load_documents(session)
-        context = self._build_context(career, voice, job, progress)
+
+        # Reuse the saved context (narrative + voice guide) from the current
+        # version instead of regenerating it, saving two LLM calls per refine.
+        context = self.store.load_context(session)
+        if context is None:
+            context = self._build_context(career, voice, job, progress)
 
         # Load exemptions accumulated from prior runs in this session.
         exempted = self.store.load_suppressions(session) or ExemptedPhrases()
