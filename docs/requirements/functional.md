@@ -19,7 +19,7 @@
 | FR-2.4 | **Verification** — The truthfulness reviewer runs in a repair loop (up to `MAX_REPAIR_PASSES` iterations). After the loop completes, all eight independent reviewers (truthfulness, voice match, AI detection, hiring-manager, relevance pruning, ATS keyword alignment, grammar & mechanics, narrative coherence) run once as an advisory pass. Only truthfulness findings trigger repair; all other reviewer scores are informational. |
 | FR-2.5 | **Repair** — The RepairAgent fixes documents that fail verification using surgical find/replace edits (see [convergence.md](convergence.md)). |
 | FR-2.6 | **Iteration** — The truthfulness repair loop repeats up to `MAX_REPAIR_PASSES` times or until truthfulness passes. All other reviewers run once after the loop as advisory. |
-| FR-2.7 | **Refinement** — The `refine` operation applies user instructions via the RepairAgent (single pass, no loop), then runs all eight reviewers once on the result. The updated document is saved as a new version with review feedback. |
+| FR-2.7 | **Refinement** — The `refine` operation loads the prior version's reviewer findings (all eight reviewers) and passes them to the RepairAgent alongside the user's free-form feedback (single pass, no loop). Reviewer findings are labeled as reference-only context — the LLM only acts on them when the user's feedback explicitly requests it (e.g. "implement all hiring-manager suggestions except X"). They are never applied autonomously. After the repair pass, all eight reviewers run once on the result. The updated document is saved as a new version with review feedback. |
 | FR-2.8 | _(Reserved)_ |
 
 ## FR-3 Outputs

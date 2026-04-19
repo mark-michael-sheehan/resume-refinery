@@ -366,6 +366,80 @@ def test_orchestrator_refine_with_doc_only_modifies_targeted_doc(tmp_path, monke
     assert second.documents.resume == "resume repaired"
     
 
+def test_refine_passes_prior_reviews_to_repair_agent(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """refine_session_run should load prior reviewer findings and forward them
+    to repair_unified so the user can reference reviewer feedback."""
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
+    store = SessionStore()
+
+    class CapturingRepairAgent:
+        """Captures the review arguments passed to repair_unified."""
+        def __init__(self):
+            self.last_truth = "NOT_CALLED"
+            self.last_voice = "NOT_CALLED"
+            self.last_ai = "NOT_CALLED"
+            self.last_hm = "NOT_CALLED"
+            self.last_pruning = "NOT_CALLED"
+            self.last_ats = "NOT_CALLED"
+            self.last_grammar = "NOT_CALLED"
+            self.last_narrative = "NOT_CALLED"
+
+        def repair_unified(self, docs, truth, voice_review, ai_review, career,
+                           voice, job, context, feedback=None, hm_review=None,
+                           pruning_review=None, ats_review=None,
+                           grammar_review=None, narrative_review=None,
+                           preserve_instructions=None, phase="a", pass_num=0,
+                           prior_edits=None):
+            self.last_truth = truth
+            self.last_voice = voice_review
+            self.last_ai = ai_review
+            self.last_hm = hm_review
+            self.last_pruning = pruning_review
+            self.last_ats = ats_review
+            self.last_grammar = grammar_review
+            self.last_narrative = narrative_review
+            docs.resume = "resume repaired"
+            return RepairPassResult()
+
+    capturing_repair = CapturingRepairAgent()
+
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        narrative_agent=FakeNarrativeAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=FakeVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
+    )
+
+    # Create a session with skip_review=False so reviews are saved.
+    first = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description, skip_review=False,
+    )
+    assert first.reviews.truthfulness is not None
+
+    # Now swap in the capturing repair agent and refine.
+    orchestrator.repair_agent = capturing_repair
+    orchestrator.refine_session_run(
+        first.session.session_id,
+        "Implement all hiring-manager suggestions",
+    )
+
+    # The prior reviews should have been loaded and passed through.
+    assert capturing_repair.last_truth is not None
+    assert capturing_repair.last_truth != "NOT_CALLED"
+    assert capturing_repair.last_voice is not None
+    assert capturing_repair.last_voice != "NOT_CALLED"
+    assert capturing_repair.last_ai is not None
+    assert capturing_repair.last_ai != "NOT_CALLED"
+    assert capturing_repair.last_hm is not None
+    assert capturing_repair.last_hm != "NOT_CALLED"
+    assert capturing_repair.last_ats is not None
+    assert capturing_repair.last_ats != "NOT_CALLED"
+    assert capturing_repair.last_grammar is not None
+    assert capturing_repair.last_grammar != "NOT_CALLED"
+
 
 # ---------------------------------------------------------------------------
 # All-pass: no repair when every review passes immediately

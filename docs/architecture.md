@@ -335,3 +335,14 @@ naming.
 **DOCX output:** python-docx produces Word documents without requiring Pandoc (an
 external binary). The Markdown source is also preserved alongside the DOCX for easy
 diffing and re-export.
+
+**User-driven refinement:** `refine_session_run` loads the prior version's reviewer
+findings (truthfulness, voice, AI detection, hiring-manager, ATS alignment, grammar,
+relevance pruning, narrative coherence) and passes them all to the repair agent
+alongside the user's free-form feedback. This lets users reference reviewer output
+directly (e.g. "implement all hiring-manager suggestions except the one about the
+summary section") without re-running the reviewers up front. Reviewer findings are
+labeled as "PRIOR REVIEWER CONTEXT — REFERENCE ONLY" in the repair prompt so the
+LLM only acts on them when the user's feedback explicitly requests it — they are
+never applied autonomously. After the repair pass, a fresh set of advisory reviews
+runs once on the updated documents.

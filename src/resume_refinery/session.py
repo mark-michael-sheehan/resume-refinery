@@ -19,6 +19,7 @@ Layout:
             relevance_pruning_review.json   (optional)
             ats_keyword_review.json         (optional)
             grammar_review.json             (optional)
+            narrative_coherence_review.json (optional)
         v2/
             ...
 """
@@ -47,6 +48,7 @@ from .models import (
     GrammarResult,
     HiringManagerReview,
     JobDescription,
+    NarrativeCoherenceResult,
     NarrativeCoverageResult,
     RelevancePruningResult,
     ReviewBundle,
@@ -199,6 +201,7 @@ class SessionStore:
             ("relevance_pruning_review.json", reviews.relevance_pruning),
             ("ats_keyword_review.json", reviews.ats_keyword),
             ("grammar_review.json", reviews.grammar),
+            ("narrative_coherence_review.json", reviews.narrative_coherence),
         ]
         for filename, model in _save_pairs:
             if model is not None:
@@ -227,6 +230,7 @@ class SessionStore:
             relevance_pruning=_load_model_opt(version_dir / "relevance_pruning_review.json", RelevancePruningResult),
             ats_keyword=_load_model_opt(version_dir / "ats_keyword_review.json", ATSKeywordResult),
             grammar=_load_model_opt(version_dir / "grammar_review.json", GrammarResult),
+            narrative_coherence=_load_model_opt(version_dir / "narrative_coherence_review.json", NarrativeCoherenceResult),
         )
 
     # --- Staging context (pre-generation narrative review) ----------------

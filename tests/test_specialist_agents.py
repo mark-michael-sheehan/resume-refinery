@@ -799,6 +799,33 @@ def test_repair_build_review_findings_empty_when_passing():
     assert findings == ""
 
 
+def test_repair_build_review_findings_reference_only_with_feedback():
+    """When feedback is present, reviewer findings should be labeled as
+    reference-only context, not actionable findings."""
+    agent = RepairAgent()
+    doc_fail = DocumentTruthResult(
+        pass_strict=False,
+        unsupported_claims=["quantum AI expertise"],
+        evidence_examples=[],
+    )
+    truth = TruthfulnessResult(all_supported=False, resume=doc_fail)
+
+    # With feedback: reviewer findings become reference-only.
+    findings_with_feedback = agent._build_review_findings(
+        "resume", truth, None, None, "fix the opener",
+    )
+    assert "PRIOR REVIEWER CONTEXT — REFERENCE ONLY" in findings_with_feedback
+    assert "USER FEEDBACK" in findings_with_feedback
+    assert "REVIEW FINDINGS" not in findings_with_feedback
+
+    # Without feedback: reviewer findings are actionable.
+    findings_without_feedback = agent._build_review_findings(
+        "resume", truth, None, None, None,
+    )
+    assert "REVIEW FINDINGS" in findings_without_feedback
+    assert "PRIOR REVIEWER CONTEXT" not in findings_without_feedback
+
+
 # ---------------------------------------------------------------------------
 # NarrativeCoverageAgent
 # ---------------------------------------------------------------------------

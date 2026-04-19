@@ -282,6 +282,11 @@ class ResumeRefineryOrchestrator:
         # Load exemptions accumulated from prior runs in this session.
         exempted = self.store.load_suppressions(session) or ExemptedPhrases()
 
+        # Load prior reviewer findings so the user can reference them in
+        # refinement instructions (e.g. "implement all suggestions from the
+        # hiring-manager reviewer except X").
+        prior_reviews = self.store.load_reviews(session)
+
         keys_to_refine = [doc] if doc else list(self._doc_labels(session.selected_docs).keys())
 
         # Preserve originals so we can restore docs the user didn't target
@@ -291,9 +296,17 @@ class ResumeRefineryOrchestrator:
         # Apply user's instructions via the repair agent (single pass).
         self._progress(progress, "Applying refinement instructions...")
         repair_pass = self.repair_agent.repair_unified(
-            current_docs, None, None, None,
+            current_docs,
+            prior_reviews.truthfulness,
+            prior_reviews.voice,
+            prior_reviews.ai_detection,
             career, voice, job, context,
             feedback=feedback,
+            hm_review=prior_reviews.hiring_manager,
+            pruning_review=prior_reviews.relevance_pruning,
+            ats_review=prior_reviews.ats_keyword,
+            grammar_review=prior_reviews.grammar,
+            narrative_review=prior_reviews.narrative_coherence,
         )
         if repair_pass.edits:
             self._progress(progress, self._summarise_repair(repair_pass))

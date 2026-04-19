@@ -1081,36 +1081,40 @@ class RepairAgent:
         """Return a human-readable summary of review findings for *key*.
 
         Returns empty string if no issues were found for this document.
+
+        When *feedback* is present (user-driven refinement), reviewer findings
+        are included as "PRIOR REVIEWER CONTEXT — REFERENCE ONLY" so the LLM
+        can act on them only when the user's feedback references them.  Without
+        feedback (automated repair loop), reviewer findings are presented as
+        actionable "REVIEW FINDINGS" that the LLM must fix or accept.
         """
-        parts: list[str] = []
-        has_issues = False
+        feedback_parts: list[str] = []
+        reviewer_parts: list[str] = []
 
         if feedback:
-            parts.append(f"USER FEEDBACK:\n{feedback}")
-            has_issues = True
+            feedback_parts.append(f"USER FEEDBACK:\n{feedback}")
 
         # --- Truthfulness ---
         if truth:
             doc_truth = truth.resume
             if not doc_truth.pass_strict:
-                has_issues = True
                 if doc_truth.unsupported_claims:
                     n = len(doc_truth.unsupported_claims)
                     logging.debug(
                         "[repair:%s] truthfulness: %d unsupported claim(s) — passing ALL to repair",
                         key, n,
                     )
-                    parts.append(
+                    reviewer_parts.append(
                         "TRUTHFULNESS — Unsupported claims (verbatim from document):\n"
                         + "\n".join(f"- {c}" for c in doc_truth.unsupported_claims)
                     )
                 else:
-                    parts.append(
+                    reviewer_parts.append(
                         "TRUTHFULNESS — The truthfulness check failed but no specific "
                         "claims were listed. Review every factual claim."
                     )
                 if doc_truth.evidence_examples:
-                    parts.append(
+                    reviewer_parts.append(
                         "Supporting evidence from Career Profile:\n"
                         + "\n".join(f"- {e}" for e in doc_truth.evidence_examples)
                     )
@@ -1118,14 +1122,13 @@ class RepairAgent:
         # --- Voice ---
         if voice_review:
             if voice_review.resume_match not in ("strong",):
-                has_issues = True
                 issues = voice_review.resume_issues or voice_review.specific_issues
                 if issues:
                     logging.debug(
                         "[repair:%s] voice: %d off-voice issue(s) — passing ALL to repair",
                         key, len(issues),
                     )
-                    parts.append(
+                    reviewer_parts.append(
                         "VOICE — Off-voice phrases (verbatim from document):\n"
                         + "\n".join(f"- {i}" for i in issues)
                     )
@@ -1134,12 +1137,11 @@ class RepairAgent:
         if ai_review:
             flags = ai_review.resume_flags
             if flags:
-                has_issues = True
                 logging.debug(
                     "[repair:%s] ai-detection: %d flagged phrase(s) — passing ALL to repair",
                     key, len(flags),
                 )
-                parts.append(
+                reviewer_parts.append(
                     "AI DETECTION — Flagged phrases (verbatim from document):\n"
                     + "\n".join(f'"- "{f}"' for f in flags)
                 )
@@ -1148,12 +1150,11 @@ class RepairAgent:
         if hm_review:
             doc_issues = hm_review.resume_issues
             if doc_issues:
-                has_issues = True
                 logging.debug(
                     "[repair:%s] hiring-manager: %d issue(s) — passing ALL to repair",
                     key, len(doc_issues),
                 )
-                parts.append(
+                reviewer_parts.append(
                     "HIRING MANAGER — Issues (verbatim from document):\n"
                     + "\n".join(
                         f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
@@ -1165,12 +1166,11 @@ class RepairAgent:
         if pruning_review:
             doc_pruning_issues = pruning_review.resume_issues
             if doc_pruning_issues:
-                has_issues = True
                 logging.debug(
                     "[repair:%s] relevance-pruning: %d issue(s) — passing ALL to repair",
                     key, len(doc_pruning_issues),
                 )
-                parts.append(
+                reviewer_parts.append(
                     "RELEVANCE PRUNING — Content flagged for removal (verbatim from document):\n"
                     + "\n".join(
                         f'- "{i.phrase}" — {i.reason} (category: {i.category}, severity: {i.severity})'
@@ -1182,12 +1182,11 @@ class RepairAgent:
         if ats_review and key == "resume":
             ats_issues = ats_review.missing_keywords + ats_review.stuffing_keywords
             if ats_issues:
-                has_issues = True
                 logging.debug(
                     "[repair:%s] ats-keyword: %d issue(s) — passing ALL to repair",
                     key, len(ats_issues),
                 )
-                parts.append(
+                reviewer_parts.append(
                     "ATS KEYWORD — Alignment issues:\n"
                     + "\n".join(
                         f'- [{i.issue_type.upper()}] "{i.keyword}" — section: {i.section}. Suggestion: {i.suggestion}'
@@ -1199,12 +1198,11 @@ class RepairAgent:
         if grammar_review:
             doc_grammar_issues = grammar_review.resume_issues
             if doc_grammar_issues:
-                has_issues = True
                 logging.debug(
                     "[repair:%s] grammar: %d issue(s) — passing ALL to repair",
                     key, len(doc_grammar_issues),
                 )
-                parts.append(
+                reviewer_parts.append(
                     "GRAMMAR & MECHANICS — Issues (verbatim from document):\n"
                     + "\n".join(
                         f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion} (category: {i.category})'
@@ -1215,12 +1213,11 @@ class RepairAgent:
         # --- Narrative coherence ---
         if narrative_review:
             if narrative_review.resume_issues:
-                has_issues = True
                 logging.debug(
                     "[repair:%s] narrative-coherence: %d issue(s) — passing ALL to repair",
                     key, len(narrative_review.resume_issues),
                 )
-                parts.append(
+                reviewer_parts.append(
                     "NARRATIVE COHERENCE — Misaligned content (verbatim from document):\n"
                     + "\n".join(
                         f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
@@ -1228,9 +1225,25 @@ class RepairAgent:
                     )
                 )
 
-        if not has_issues:
+        if not feedback_parts and not reviewer_parts:
             logging.debug("[repair:%s] no issues found — skipping repair for this document", key)
             return ""
+
+        # Assemble the final findings string.  When user feedback is present,
+        # reviewer findings are reference-only context.  Without feedback
+        # (automated repair loop), they are actionable findings.
+        parts: list[str] = list(feedback_parts)
+        if reviewer_parts:
+            if feedback:
+                parts.append(
+                    "PRIOR REVIEWER CONTEXT — REFERENCE ONLY (act on these "
+                    "ONLY when the user's feedback above references them):\n\n"
+                    + "\n\n".join(reviewer_parts)
+                )
+            else:
+                parts.append(
+                    "REVIEW FINDINGS:\n\n" + "\n\n".join(reviewer_parts)
+                )
 
         findings = "\n\n".join(parts)
         logging.debug(
