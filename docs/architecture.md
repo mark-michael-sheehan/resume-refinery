@@ -339,10 +339,13 @@ diffing and re-export.
 **User-driven refinement:** `refine_session_run` loads the prior version's reviewer
 findings (truthfulness, voice, AI detection, hiring-manager, ATS alignment, grammar,
 relevance pruning, narrative coherence) and passes them all to the repair agent
-alongside the user's free-form feedback. This lets users reference reviewer output
-directly (e.g. "implement all hiring-manager suggestions except the one about the
-summary section") without re-running the reviewers up front. Reviewer findings are
-labeled as "PRIOR REVIEWER CONTEXT — REFERENCE ONLY" in the repair prompt so the
-LLM only acts on them when the user's feedback explicitly requests it — they are
-never applied autonomously. After the repair pass, a fresh set of advisory reviews
-runs once on the updated documents.
+alongside the user's free-form feedback. The candidacy narrative (thesis, pillars,
+gap framing) is also included as a reference section so users can say things like
+"strengthen the second pillar" or "lean harder into the gap framing". This lets
+users reference reviewer output and narrative structure directly (e.g. "implement
+all hiring-manager suggestions except the one about the summary section") without
+re-running the reviewers up front. Reviewer findings are labeled as "PRIOR REVIEWER
+CONTEXT — REFERENCE ONLY" in the repair prompt so the LLM only acts on them when
+the user's feedback explicitly requests it — they are never applied autonomously.
+After the repair pass, a fresh set of advisory reviews runs once on the updated
+documents.

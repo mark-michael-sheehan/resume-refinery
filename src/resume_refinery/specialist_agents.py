@@ -786,6 +786,7 @@ class RepairAgent:
                 job_description=job.raw_content,
                 review_findings=review_findings,
                 prior_edits=(prior_edits or {}).get(key, ""),
+                narrative=context.narrative.raw_narrative if context.narrative else "",
             )
 
             edits, acceptances = self._plan_edits(REPAIR_SYSTEM_PROMPT, user_msg)

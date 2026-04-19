@@ -979,7 +979,7 @@ REPAIR_USER_TEMPLATE = """\
 
 ## Job Description [FACT-CHECK REFERENCE — do not copy text from this into the document]
 {job_description}
-{prior_edits_section}
+{narrative_section}{prior_edits_section}
 ## Review Findings
 {review_findings}
 
@@ -1032,6 +1032,7 @@ def repair_user_message(
     job_description: str,
     review_findings: str,
     prior_edits: str = "",
+    narrative: str = "",
 ) -> str:
     """Build the user message for a surgical-repair call (no-think mode)."""
     if prior_edits:
@@ -1043,6 +1044,16 @@ def repair_user_message(
         )
     else:
         prior_edits_section = ""
+    if narrative:
+        narrative_section = (
+            "\n## Candidacy Narrative [REFERENCE — the strategic framing that guided "
+            "document generation; the user may reference pillars, thesis, or gap "
+            "framing in their feedback]\n"
+            + narrative
+            + "\n"
+        )
+    else:
+        narrative_section = ""
     return REPAIR_USER_TEMPLATE.format(
         doc_content=doc_content,
         career_profile=career_profile,
@@ -1050,6 +1061,7 @@ def repair_user_message(
         job_description=job_description,
         review_findings=review_findings,
         prior_edits_section=prior_edits_section,
+        narrative_section=narrative_section,
     )
 
 

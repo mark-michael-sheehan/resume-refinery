@@ -826,6 +826,32 @@ def test_repair_build_review_findings_reference_only_with_feedback():
     assert "PRIOR REVIEWER CONTEXT" not in findings_without_feedback
 
 
+def test_repair_user_message_includes_narrative_when_provided():
+    """repair_user_message should include a Candidacy Narrative section when
+    a narrative string is provided, and omit it when empty."""
+    from resume_refinery.prompts import repair_user_message
+
+    msg_with = repair_user_message(
+        doc_content="resume text",
+        career_profile="career text",
+        voice_profile="voice text",
+        job_description="job text",
+        review_findings="USER FEEDBACK:\nfix the opener",
+        narrative="Strong distributed systems background.",
+    )
+    assert "Candidacy Narrative" in msg_with
+    assert "Strong distributed systems background." in msg_with
+
+    msg_without = repair_user_message(
+        doc_content="resume text",
+        career_profile="career text",
+        voice_profile="voice text",
+        job_description="job text",
+        review_findings="USER FEEDBACK:\nfix the opener",
+    )
+    assert "Candidacy Narrative" not in msg_without
+
+
 # ---------------------------------------------------------------------------
 # NarrativeCoverageAgent
 # ---------------------------------------------------------------------------
