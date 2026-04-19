@@ -61,6 +61,7 @@ NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
 
 _MATCH_RANK = {"strong": 3, "moderate": 2, "weak": 1}
 _RISK_RANK = {"low": 1, "medium": 2, "high": 3}
+_SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
 
 
 def _normalize_llm_json(raw: str) -> str:
@@ -270,8 +271,8 @@ class DocumentReviewer:
             summary=data.get("summary") or "",
             strengths=data.get("strengths") or [],
             concerns=data.get("concerns") or [],
-            improvements=improvements,
-            resume_issues=resume_issues,
+            improvements=sorted(improvements, key=lambda i: _SEVERITY_RANK.get(i.impact, 1)),
+            resume_issues=sorted(resume_issues, key=lambda i: _SEVERITY_RANK.get(i.impact, 1)),
         )
 
     def review_relevance_pruning(
@@ -314,7 +315,7 @@ class DocumentReviewer:
 
         return RelevancePruningResult(
             overall_density=density,
-            resume_issues=resume_issues,
+            resume_issues=sorted(resume_issues, key=lambda i: _SEVERITY_RANK.get(i.severity, 1)),
         )
 
     def review_ats_keyword(
@@ -368,8 +369,8 @@ class DocumentReviewer:
 
         return ATSKeywordResult(
             alignment_score=score,
-            missing_keywords=missing,
-            stuffing_keywords=stuffing,
+            missing_keywords=sorted(missing, key=lambda i: _SEVERITY_RANK.get(i.priority, 1)),
+            stuffing_keywords=sorted(stuffing, key=lambda i: _SEVERITY_RANK.get(i.priority, 1)),
         )
 
     def review_grammar(self, docs: DocumentSet, *, exemptions: list[str] | None = None) -> GrammarResult:
@@ -411,7 +412,7 @@ class DocumentReviewer:
 
         return GrammarResult(
             clean=all_clean,
-            resume_issues=resume_issues,
+            resume_issues=sorted(resume_issues, key=lambda i: _SEVERITY_RANK.get(i.severity, 1)),
         )
 
     def review_narrative_coherence(
@@ -458,7 +459,7 @@ class DocumentReviewer:
 
         return NarrativeCoherenceResult(
             alignment=alignment,
-            resume_issues=resume_issues,
+            resume_issues=sorted(resume_issues, key=lambda i: _SEVERITY_RANK.get(i.severity, 1)),
         )
 
     def _call(self, system: str, user_msg: str, *, think: bool = False) -> str:

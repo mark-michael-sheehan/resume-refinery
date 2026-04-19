@@ -1157,7 +1157,7 @@ class RepairAgent:
                 reviewer_parts.append(
                     "HIRING MANAGER — Issues (verbatim from document):\n"
                     + "\n".join(
-                        f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
+                        f'- [{i.impact.upper()}] "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
                         for i in doc_issues
                     )
                 )
@@ -1173,7 +1173,7 @@ class RepairAgent:
                 reviewer_parts.append(
                     "RELEVANCE PRUNING — Content flagged for removal (verbatim from document):\n"
                     + "\n".join(
-                        f'- "{i.phrase}" — {i.reason} (category: {i.category}, severity: {i.severity})'
+                        f'- [{i.severity.upper()}] "{i.phrase}" — {i.reason} (category: {i.category})'
                         for i in doc_pruning_issues
                     )
                 )
@@ -1189,7 +1189,7 @@ class RepairAgent:
                 reviewer_parts.append(
                     "ATS KEYWORD — Alignment issues:\n"
                     + "\n".join(
-                        f'- [{i.issue_type.upper()}] "{i.keyword}" — section: {i.section}. Suggestion: {i.suggestion}'
+                        f'- [{i.priority.upper()}] [{i.issue_type.upper()}] "{i.keyword}" — section: {i.section}. Suggestion: {i.suggestion}'
                         for i in ats_issues
                     )
                 )
@@ -1205,23 +1205,24 @@ class RepairAgent:
                 reviewer_parts.append(
                     "GRAMMAR & MECHANICS — Issues (verbatim from document):\n"
                     + "\n".join(
-                        f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion} (category: {i.category})'
+                        f'- [{i.severity.upper()}] "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion} (category: {i.category})'
                         for i in doc_grammar_issues
                     )
                 )
 
         # --- Narrative coherence ---
         if narrative_review:
-            if narrative_review.resume_issues:
+            coherence_issues = narrative_review.resume_issues
+            if coherence_issues:
                 logging.debug(
                     "[repair:%s] narrative-coherence: %d issue(s) — passing ALL to repair",
-                    key, len(narrative_review.resume_issues),
+                    key, len(coherence_issues),
                 )
                 reviewer_parts.append(
                     "NARRATIVE COHERENCE — Misaligned content (verbatim from document):\n"
                     + "\n".join(
-                        f'- "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
-                        for i in narrative_review.resume_issues
+                        f'- [{i.severity.upper()}] "{i.phrase}" — {i.issue}. Suggestion: {i.suggestion}'
+                        for i in coherence_issues
                     )
                 )
 
