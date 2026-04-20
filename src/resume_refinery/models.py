@@ -793,3 +793,7 @@ class Session(BaseModel):
         default_factory=lambda: list(ALL_DOC_KEYS),
         description="Which documents the user chose to generate for this session",
     )
+    last_output_dir: Optional[str] = Field(
+        default=None,
+        description="Last user-specified output directory, reused as the default for refine",
+    )

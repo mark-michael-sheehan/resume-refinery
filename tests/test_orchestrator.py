@@ -228,6 +228,41 @@ def test_orchestrator_refine_exports_to_custom_output_dir(tmp_path, monkeypatch,
     # interview_guide.docx no longer generated
 
 
+def test_refine_defaults_output_dir_from_generate(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
+    """When refine omits output_dir, it reuses the directory from generate."""
+    sessions_dir = tmp_path / "sessions"
+    monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(sessions_dir))
+    store = SessionStore()
+    orchestrator = ResumeRefineryOrchestrator(
+        store=store,
+        narrative_agent=FakeNarrativeAgent(),
+        voice_agent=FakeVoiceAgent(),
+        drafting_agent=FakeDraftingAgent(),
+        verification_agent=FakeVerificationAgent(),
+        repair_agent=FakeRepairAgent(),
+        coverage_agent=FakeNarrativeCoverageAgent(),
+    )
+
+    custom_out = tmp_path / "my_output"
+    first = orchestrator.create_session_run(
+        career_profile, voice_profile, job_description,
+        output_dir=custom_out, skip_review=True,
+    )
+    # last_output_dir recorded after generate
+    session = store.get(first.session.session_id)
+    assert session.last_output_dir == str(custom_out)
+
+    # Refine without specifying output_dir — should reuse custom_out
+    second = orchestrator.refine_session_run(
+        first.session.session_id, "Tighten the opener",
+    )
+    assert second.exported_paths
+    for path_str in second.exported_paths.values():
+        p = Path(path_str)
+        assert p.exists()
+        assert str(custom_out) in str(p)
+
+
 def test_orchestrator_create_session_run_builds_artifacts_and_exports(tmp_path, monkeypatch, career_profile, voice_profile, job_description):
     monkeypatch.setenv("RESUME_REFINERY_SESSIONS_DIR", str(tmp_path))
     store = SessionStore()

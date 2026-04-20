@@ -118,8 +118,8 @@ def new(
 @app.command()
 def refine(
     session_id: Annotated[str, typer.Argument(help="Session ID to refine")],
-    output_dir: Annotated[Path, typer.Argument(help="Directory to write generated documents to")],
     feedback: Annotated[str, typer.Option("--feedback", "-f", help="Feedback for the agent")],
+    output_dir: Annotated[Optional[Path], typer.Option("--output-dir", "-o", help="Directory to write generated documents to (defaults to last used)")] = None,
     allow_unverified: bool = typer.Option(
         False,
         "--allow-unverified",
@@ -127,7 +127,7 @@ def refine(
     ),
 ):
     """Refine the resume in a session with user instructions."""
-    validated_dir = _validate_output_dir(output_dir)
+    validated_dir = _validate_output_dir(output_dir) if output_dir is not None else None
     try:
         result = _get_orchestrator().refine_session_run(
             session_id,

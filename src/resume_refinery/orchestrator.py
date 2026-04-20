@@ -274,6 +274,9 @@ class ResumeRefineryOrchestrator:
         progress: ProgressCallback | None = None,
     ) -> OrchestrationResult:
         session = self.store.get(session_id)
+        # Default to the output directory used in the last generate/refine.
+        if output_dir is None and session.last_output_dir:
+            output_dir = Path(session.last_output_dir)
         career, voice = self.store.load_inputs(session)
         job = session.job_description
         current_docs = self.store.load_documents(session)
@@ -687,7 +690,10 @@ class ResumeRefineryOrchestrator:
         version_dir = self.store.session_dir(session.session_id) / f"v{session.current_version}"
         export_document_set(docs, version_dir)
         # If the user specified a separate output directory, also copy there
+        # and remember it for future refine defaults.
         if output_dir is not None:
+            session.last_output_dir = str(output_dir)
+            self.store._write_metadata(session)
             return export_document_set(docs, output_dir)
         return export_document_set(docs, version_dir)
 

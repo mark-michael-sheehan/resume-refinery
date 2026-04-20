@@ -29,7 +29,7 @@
 | FR-3.1 | Each run produces a **resume** in both Markdown and DOCX format. |
 | FR-3.2 | Documents are versioned (v1, v2, …) within a session directory. Each version includes Markdown source, DOCX export, and review JSON. |
 | FR-3.3 | DOCX generation uses python-docx (no external Pandoc dependency). |
-| FR-3.4 | The user must specify an **output directory** for generated DOCX files. In the CLI it is a required positional argument; in the web app it is a required text field. If the path is invalid (not a directory, parent does not exist) the system raises an error before generation begins. DOCX files are always also saved in the session version directory to preserve version history. |
+| FR-3.4 | The user must specify an **output directory** for generated DOCX files. In the CLI it is a required positional argument for `new`; in the web app it is a required text field. For `refine`, the output directory is optional — when omitted it defaults to the last output directory used for that session (stored as `last_output_dir` on the Session model). If the path is invalid (not a directory, parent does not exist) the system raises an error before generation begins. DOCX files are always also saved in the session version directory to preserve version history. |
 
 ## FR-4 Session Management
 

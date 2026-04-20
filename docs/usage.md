@@ -142,12 +142,19 @@ claims, pass `--allow-unverified`.
 ### `refine` — Apply user instructions and review
 
 ```bash
-# Refine the resume
-resume-refinery refine acme-cloud_staff-engineer_2026-03-20 ./output \
+# Refine the resume (uses the same output directory from generate/last refine)
+resume-refinery refine acme-cloud_staff-engineer_2026-03-20 \
   --feedback "The opener is too generic. Lead with the Redis cost-saving story instead."
+
+# Override the output directory for this refine
+resume-refinery refine acme-cloud_staff-engineer_2026-03-20 \
+  --feedback "Shorten the skills section." --output-dir ./new_output
 ```
 
-The second positional argument is the **output directory** (same rules as `new`).
+The `--output-dir` / `-o` option is optional. When omitted, the refine command
+reuses the output directory from the most recent generate or refine run for that
+session. If no prior output directory was recorded, documents are only saved to
+the session version directory.
 
 The repair agent applies the user's instructions as surgical edits to the resume.
 All seven reviewers then run once on the result (no repair loop). A new version (`v2`, `v3`,

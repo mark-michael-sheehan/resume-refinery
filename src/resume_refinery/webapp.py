@@ -1108,7 +1108,7 @@ def show_session(session_id: str) -> HTMLResponse:
     <textarea name=\"feedback\" rows=\"5\" required></textarea>
     <label>Output Directory</label>
     <div class="dir-picker-row">
-      <input type="text" name="output_dir" id="output_dir_refine" readonly required />
+      <input type="text" name="output_dir" id="output_dir_refine" value="{html.escape(session.last_output_dir or '')}" readonly />
       <button type="button" onclick="openDirPicker('output_dir_refine')">Browse…</button>
     </div>
     <label><input type=\"checkbox\" name=\"allow_unverified\" value=\"true\" /> Allow saving when strict truth check fails</label>
@@ -1124,10 +1124,10 @@ def show_session(session_id: str) -> HTMLResponse:
 def refine_session(
     session_id: str,
     feedback: str = Form(...),
-    output_dir: str = Form(...),
+    output_dir: Optional[str] = Form(None),
     allow_unverified: Optional[str] = Form(None),
 ):
-    output_path = _validate_output_dir(output_dir)
+    output_path = _validate_output_dir(output_dir) if output_dir else None
 
     _allow = bool(allow_unverified)
 
