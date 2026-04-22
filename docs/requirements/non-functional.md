@@ -34,6 +34,7 @@ All tuning knobs are exposed as environment variables with sensible defaults:
 | `RESUME_REFINERY_REVIEW_MODEL` | `qwen3.5:9b` | Review model |
 | `RESUME_REFINERY_NUM_CTX` | `16384` | KV-cache size (tokens) |
 | `RESUME_REFINERY_MAX_TOKENS` | `8192` | Max tokens for non-thinking generation |
+| `RESUME_REFINERY_NARRATIVE_MAX_TOKENS` | `2048` | Max tokens for narrative generation/critique/revision JSON calls |
 | `RESUME_REFINERY_REVIEW_MAX_TOKENS` | `4096` | Max tokens for review calls |
 | `RESUME_REFINERY_MAX_REPAIR_PASSES` | `3` | Max review+repair iterations |
 | `RESUME_REFINERY_RELAXED_PASS_START` | `1` | Pass index where voice/AI relax |

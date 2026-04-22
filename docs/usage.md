@@ -290,6 +290,7 @@ Copy `.env.example` to `.env` to get started — every variable has a sensible d
 
 | Variable | Default | Description |
 |---|---|---|
+| `RESUME_REFINERY_NARRATIVE_MAX_TOKENS` | `2048` | Maximum new tokens for narrative-related JSON calls (narrative generation, critique, and revision). Lower values speed up cloud-model narrative construction; raise if narrative JSON is truncated. |
 | `RESUME_REFINERY_MAX_NARRATIVE_CRITIQUE_PASSES` | `2` | Max narrative self-critique passes. After the NarrativeAgent generates a narrative, the NarrativeCriticAgent evaluates it against quality criteria and the narrative is revised if issues are found. Set to `0` to disable narrative critique. |
 
 ### Storage

@@ -54,6 +54,7 @@ _BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 _MODEL = os.environ.get("RESUME_REFINERY_MODEL", "qwen3.5:9b")
 _NUM_CTX = int(os.environ.get("RESUME_REFINERY_NUM_CTX", "16384"))
 _MAX_TOKENS = int(os.environ.get("RESUME_REFINERY_MAX_TOKENS", "8192"))
+_MAX_NARRATIVE_TOKENS = int(os.environ.get("RESUME_REFINERY_NARRATIVE_MAX_TOKENS", "2048"))
 _MAX_WORKERS = int(os.environ.get("RESUME_REFINERY_MAX_WORKERS", "1"))
 _MAX_NARRATIVE_CRITIQUE_PASSES = int(os.environ.get("RESUME_REFINERY_MAX_NARRATIVE_CRITIQUE_PASSES", "2"))
 
@@ -284,7 +285,7 @@ class NarrativeAgent:
             ],
             think=False,
             format="json",
-            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_NARRATIVE_TOKENS},
         )
         raw = response.message.content.strip()
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
@@ -353,7 +354,7 @@ class NarrativeCriticAgent:
             ],
             think=False,
             format="json",
-            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_NARRATIVE_TOKENS},
         )
         raw = response.message.content.strip()
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()
@@ -554,7 +555,7 @@ class NarrativeCoverageAgent:
             ],
             think=False,
             format="json",
-            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_TOKENS},
+            options={"num_ctx": _NUM_CTX, "num_predict": _MAX_NARRATIVE_TOKENS},
         )
         raw = response.message.content.strip()
         raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip()

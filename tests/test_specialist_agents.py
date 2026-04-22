@@ -185,6 +185,32 @@ def test_narrative_agent_critique_loop_skipped_when_zero_passes(career_profile, 
     assert mock_client.chat.call_count == 1  # build only
 
 
+def test_narrative_agent_uses_dedicated_narrative_token_cap(career_profile, job_description, monkeypatch):
+    """NarrativeAgent should use RESUME_REFINERY_NARRATIVE_MAX_TOKENS for JSON calls."""
+    narrative_json = json.dumps({
+        "thesis": "Strong distributed systems background.",
+        "pillars": [
+            {
+                "theme": "Backend",
+                "argument": "Led migrations",
+                "career_evidence": ["Cut deploy time 60%"],
+            }
+        ],
+        "gap_framing": [],
+        "raw_narrative": "Full narrative text.",
+    })
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_llm_resp(narrative_json)
+
+    monkeypatch.setattr("resume_refinery.specialist_agents._MAX_NARRATIVE_TOKENS", 1234)
+
+    agent = NarrativeAgent(client=mock_client)
+    agent.build_narrative(career_profile, job_description, max_critique_passes=0)
+
+    call_kwargs = mock_client.chat.call_args.kwargs
+    assert call_kwargs["options"]["num_predict"] == 1234
+
+
 # ---------------------------------------------------------------------------
 # NarrativeCriticAgent
 # ---------------------------------------------------------------------------
@@ -237,6 +263,29 @@ def test_narrative_critic_agent_passes_clean_narrative(career_profile, job_descr
 
     assert result["passes"] is True
     assert result["issues"] == []
+
+
+def test_narrative_critic_uses_dedicated_narrative_token_cap(career_profile, job_description, monkeypatch):
+    """NarrativeCriticAgent should use RESUME_REFINERY_NARRATIVE_MAX_TOKENS for JSON calls."""
+    from resume_refinery.specialist_agents import NarrativeCriticAgent
+
+    critique_json = json.dumps({"passes": True, "issues": []})
+    mock_client = MagicMock()
+    mock_client.chat.return_value = _make_llm_resp(critique_json)
+
+    monkeypatch.setattr("resume_refinery.specialist_agents._MAX_NARRATIVE_TOKENS", 777)
+
+    agent = NarrativeCriticAgent(client=mock_client)
+    narrative = CandidacyNarrative(
+        thesis="Strong distributed-systems engineer with 8 years experience.",
+        pillars=[NarrativePillar(theme="Backend", argument="Led migrations", career_evidence=["Cut deploy time 60%"] )],
+        gap_framing=[],
+        raw_narrative="Full narrative.",
+    )
+    agent.critique(narrative, career_profile, job_description)
+
+    call_kwargs = mock_client.chat.call_args.kwargs
+    assert call_kwargs["options"]["num_predict"] == 777
 
 
 # ---------------------------------------------------------------------------
